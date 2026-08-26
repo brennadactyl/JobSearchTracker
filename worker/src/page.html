@@ -113,7 +113,11 @@ tbody tr:hover{background:var(--surface2)}
 .grid-wrap{overflow-x:auto}
 .grid-wrap a{color:var(--accent);text-decoration:none;border-bottom:1px solid var(--line)}
 .grid-wrap a:hover{border-bottom-color:var(--accent)}
-.loc{color:var(--ink2);font-size:13px;max-width:220px}
+.loc{color:var(--ink2);font-size:13px;max-width:200px}
+.loc-txt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.loc .geo{display:inline-block;margin-top:3px}
+td.rc{max-width:260px}
+td.rc a{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 td:first-child{border-left:3px solid transparent}
 tr.p-high td:first-child{border-left-color:var(--pri-high)}
 tr.p-med td:first-child{border-left-color:var(--pri-med)}
@@ -505,8 +509,8 @@ function leadsGridHtml(rows){
     var g=geo(l.location);
     return '<tr'+(g?' class="'+g.p+'"':'')+'>'+
       '<td class="co">'+esc(l.company)+'</td>'+
-      '<td><a href="'+esc(l.url)+'" target="_blank" rel="noopener">'+esc(l.title)+'</a></td>'+
-      '<td class="loc">'+esc(l.location)+(g?' <span class="geo '+g.p+'">'+esc(g.label)+'</span>':'')+'</td>'+
+      '<td class="rc"><a href="'+esc(l.url)+'" target="_blank" rel="noopener" title="'+esc(l.title)+'">'+esc(l.title)+'</a></td>'+
+      '<td class="loc" title="'+esc(l.location)+'"><div class="loc-txt">'+esc(l.location)+'</div>'+(g?'<span class="geo '+g.p+'">'+esc(g.label)+'</span>':'')+'</td>'+
       '<td>'+selectHtml(LEAD_STATUS,l.status,'data-id="'+l.id+'" data-field="status"')+'</td>'+
       EXTRA_FIELDS.map(function(f){
         var key=f[0],type=f[2]||"text",val=l[key]||"";
