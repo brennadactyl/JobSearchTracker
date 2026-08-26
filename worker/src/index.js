@@ -22,6 +22,13 @@
  *                            removes one application row (used by the
  *                            page's "remove" control; leads are never
  *                            deleted, only re-statused)
+ *   GET  /api/config         requires Bearer token -> { tracks[], settings }
+ *                            - the per-installer config (track tabs, display
+ *                            title, priority-location rules) that page.html
+ *                            renders off instead of a baked-in TRACKS object,
+ *                            so this same code serves any installer.
+ *   POST /api/config         requires Bearer token -> body: { tracks?, display_title?, priority_locations? }
+ *                            - sets that config (see handleSetConfig in api.js)
  *
  * Schema: see ../migrations/. Handlers: see ./api.js. Page: see ./page.html
  * (imported as raw text - see the `rules` entry in ../wrangler.toml).
@@ -35,6 +42,9 @@ import {
   handleAddLeads,
   handleUpdate,
   handleDeleteApplication,
+  getTracksAndSettings,
+  handleGetConfig,
+  handleSetConfig,
 } from "./api.js";
 
 export default {
@@ -49,16 +59,29 @@ export default {
 
     if (url.pathname === "/api/data" && request.method === "GET") {
       if (!authorized(request, env)) return unauthorized();
-      const [leads, applications, meta] = await Promise.all([
+      const [leads, applications, meta, config] = await Promise.all([
         env.DB.prepare("SELECT * FROM leads ORDER BY id").all(),
         env.DB.prepare("SELECT * FROM applications ORDER BY id").all(),
         env.DB.prepare("SELECT value FROM meta WHERE key = 'updated'").first(),
+        getTracksAndSettings(env),
       ]);
       return json({
         updated: meta ? meta.value : null,
         leads: leads.results,
         applications: applications.results,
+        tracks: config.tracks,
+        settings: config.settings,
       });
+    }
+
+    if (url.pathname === "/api/config" && request.method === "GET") {
+      if (!authorized(request, env)) return unauthorized();
+      return handleGetConfig(env);
+    }
+
+    if (url.pathname === "/api/config" && request.method === "POST") {
+      if (!authorized(request, env)) return unauthorized();
+      return handleSetConfig(request, env);
     }
 
     if (url.pathname === "/api/leads" && request.method === "POST") {

@@ -40,6 +40,90 @@ export const EXTRA_FIELDS = [
   "nextAction", "nextActionDate", "resume", "referral", "comp",
 ];
 
+// Reads the per-deployment config (see migrations/0003_add_tracks_and_settings.sql):
+// the tracks a track tab exists for, plus display settings. This is what
+// lets one Worker deployment serve any installer's tracks/branding/priority
+// locations without editing page.html - the page fetches this (bundled into
+// /api/data) and renders off it instead of a baked-in TRACKS object.
+export async function getTracksAndSettings(env) {
+  const [tracksRes, settingsRows] = await Promise.all([
+    env.DB.prepare(
+      "SELECT key, label, full_description, sort_order FROM tracks ORDER BY sort_order, key"
+    ).all(),
+    env.DB.prepare(
+      "SELECT key, value FROM meta WHERE key IN ('display_title', 'priority_locations')"
+    ).all(),
+  ]);
+
+  const settings = { display_title: "Job Search Tracker", priority_locations: [] };
+  for (const row of settingsRows.results) {
+    if (row.key === "priority_locations") {
+      try {
+        settings.priority_locations = JSON.parse(row.value);
+      } catch {
+        settings.priority_locations = [];
+      }
+    } else {
+      settings[row.key] = row.value;
+    }
+  }
+
+  return { tracks: tracksRes.results, settings };
+}
+
+export async function handleGetConfig(env) {
+  return json(await getTracksAndSettings(env));
+}
+
+// Replaces the whole track list (setup writes the complete desired set at
+// once, rather than incrementally patching rows) and/or updates individual
+// settings. Existing leads/applications keep their `search` value even if
+// its track is later removed here - they just stop having a tab, they're
+// never deleted.
+export async function handleSetConfig(request, env) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "invalid JSON body" }, 400);
+  }
+
+  if (Array.isArray(body.tracks)) {
+    const valid = body.tracks.filter((t) => t && typeof t.key === "string" && t.key);
+    if (valid.length === 0) return json({ error: "tracks must be a non-empty array of {key, ...}" }, 400);
+    const stmt = env.DB.prepare(
+      `INSERT INTO tracks (key, label, full_description, sort_order) VALUES (?, ?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET label = excluded.label,
+         full_description = excluded.full_description, sort_order = excluded.sort_order`
+    );
+    const batch = [
+      env.DB.prepare("DELETE FROM tracks WHERE key NOT IN (" + valid.map(() => "?").join(", ") + ")").bind(
+        ...valid.map((t) => t.key)
+      ),
+      ...valid.map((t, i) =>
+        stmt.bind(t.key, t.label || t.key, t.full_description || "", Number.isInteger(t.sort_order) ? t.sort_order : i)
+      ),
+    ];
+    await env.DB.batch(batch);
+  }
+
+  if (typeof body.display_title === "string" && body.display_title) {
+    await env.DB.prepare(
+      `INSERT INTO meta (key, value) VALUES ('display_title', ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+    ).bind(body.display_title).run();
+  }
+
+  if (Array.isArray(body.priority_locations)) {
+    await env.DB.prepare(
+      `INSERT INTO meta (key, value) VALUES ('priority_locations', ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+    ).bind(JSON.stringify(body.priority_locations)).run();
+  }
+
+  return json(await getTracksAndSettings(env));
+}
+
 export async function handleAddLeads(request, env) {
   let body;
   try {

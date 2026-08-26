@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Brenna's Job Search</title>
+<title>Job Search Tracker</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
@@ -12,9 +12,6 @@
   --ground:#F4F5F9; --surface:#FFFFFF; --surface2:#ECEEF6; --line:#DCDFEB;
   --ink:#14172A; --ink2:#555B77; --ink3:#868CA6;
   --accent:#A96C15; --accent-soft:#F6EBD8;
-  --eng:#1B6B64; --eng-soft:#DEEFEC;
-  --tpm:#4548BC; --tpm-soft:#E4E5FA;
-  --prod:#A03A5C; --prod-soft:#F8E3EA;
   --good:#226642; --warn:#96600F; --crit:#A93A31;
   --pri-high:#0F7B6C; --pri-high-soft:#D8EEEA;
   --pri-med:#5E8A83; --pri-med-soft:#E8F0EE;
@@ -24,9 +21,6 @@
   --ground:#0E1018; --surface:#161925; --surface2:#1E2230; --line:#2A2F41;
   --ink:#E9EBF4; --ink2:#A3AAC3; --ink3:#717892;
   --accent:#E0A544; --accent-soft:#33280F;
-  --eng:#4FC1B2; --eng-soft:#13322F;
-  --tpm:#9093F2; --tpm-soft:#1E2050;
-  --prod:#E48AAA; --prod-soft:#3D1A28;
   --good:#4FBE85; --warn:#DFA63C; --crit:#E8756A;
   --pri-high:#4FD1B8; --pri-high-soft:#10322D;
   --pri-med:#7FA9A2; --pri-med-soft:#1A2A27;
@@ -238,8 +232,8 @@ td textarea{font-size:13px;min-height:32px;min-width:130px}
   <div class="wrap">
     <div class="hdr">
       <div>
-        <h1>Brenna's Job Search</h1>
-        <div class="sub">Verified openings across three tracks, refreshed daily. Edit anything &mdash; it saves for every device.</div>
+        <h1 id="appTitle">Job Search Tracker</h1>
+        <div class="sub" id="appSub">Verified openings, refreshed daily. Edit anything &mdash; it saves for every device.</div>
       </div>
       <div class="stamp"><span class="dot" id="savedot"></span><span id="savetext">Loading</span></div>
     </div>
@@ -255,14 +249,36 @@ td textarea{font-size:13px;min-height:32px;min-width:130px}
 var LEAD_STATUS=["New","Reviewing","Applied","Not a fit","Closed"];
 var APP_STATUS=["Applied","Recruiter Screen","Tech Screen","Onsite / Loop","Offer","Rejected","Withdrawn"];
 var ACTIVE=["Recruiter Screen","Tech Screen","Onsite / Loop"];
-var TRACKS={
-  SWE:{label:"Engineering",full:"Senior / Staff Software Engineer"},
-  TPM:{label:"Technical PM",full:"Senior+ Technical Program Manager"},
-  CPM:{label:"Product",full:"Consumer Product Manager"}
-};
+// Populated from state.tracks on boot (see buildTracks/applyConfig below) -
+// not baked in, so this same deployed code serves any installer's tracks.
+var TRACKS={};
 
 var TOKEN=localStorage.getItem("tracker_token")||"";
-var state={updated:null,leads:[],applications:[]};
+var state={updated:null,leads:[],applications:[],tracks:[],settings:{display_title:"Job Search Tracker",priority_locations:[]}};
+
+// Turns the API's tracks[] (rows: key/label/full_description/sort_order)
+// into the {key:{label,full}} shape the rest of the page indexes by, in
+// display order.
+function buildTracks(list){
+  var t={};
+  (list||[]).slice().sort(function(a,b){
+    return (a.sort_order-b.sort_order)||String(a.key).localeCompare(String(b.key));
+  }).forEach(function(tr){ t[tr.key]={label:tr.label,full:tr.full_description}; });
+  return t;
+}
+
+// Applies state.tracks/state.settings (from /api/data) to TRACKS and the
+// header, replacing the "Brenna's Job Search" / fixed-track defaults.
+function applyConfig(){
+  TRACKS=buildTracks(state.tracks);
+  var title=(state.settings&&state.settings.display_title)||"Job Search Tracker";
+  document.title=title;
+  var titleEl=document.getElementById("appTitle"); if(titleEl)titleEl.textContent=title;
+  var n=state.tracks.length;
+  var subEl=document.getElementById("appSub");
+  if(subEl)subEl.textContent="Verified openings across "+n+" tracked search"+(n===1?"":"es")+
+    ", refreshed daily. Edit anything — it saves for every device.";
+}
 var ui={tab:"dashboard",q:"",filter:"All",selected:{},expanded:{},view:"detail"};
 
 // Fields shown in a lead's detail panel. These are DB columns shared with
@@ -313,15 +329,21 @@ function daysSince(d){if(!d)return null;var t=Date.parse(d);if(isNaN(t))return n
 
 function today(){return new Date().toISOString().slice(0,10);}
 
+// Evaluates state.settings.priority_locations (see migrations/
+// 0003_add_tracks_and_settings.sql) - an ordered list of {tier, label, anyOf,
+// allOf} rules, first match wins. Was a hard-coded Seattle/Portland lookup;
+// now it's whatever an installer's config says, with the search-substring
+// semantics unchanged (anyOf: at least one substring present; allOf,
+// optional: every substring present).
 function geo(location){
   var loc=String(location||"").toLowerCase();
-  var sea=["seattle","bellevue","redmond","kirkland","mercer island","bothell","renton","everett","tacoma","sammamish","issaquah","puget sound"];
-  for(var i=0;i<sea.length;i++){ if(loc.indexOf(sea[i])>=0) return {p:"p-high",label:"Seattle area"}; }
-  var isRemote=loc.indexOf("remote")>=0;
-  var isUS=loc.indexOf("usa")>=0||loc.indexOf("u.s")>=0||loc.indexOf("united states")>=0;
-  if(isRemote&&isUS) return {p:"p-high",label:"Remote US"};
-  var pdx=["portland","beaverton","hillsboro","vancouver, wa","vancouver,wa","oregon"];
-  for(var j=0;j<pdx.length;j++){ if(loc.indexOf(pdx[j])>=0) return {p:"p-med",label:"Portland"}; }
+  var rules=(state.settings&&state.settings.priority_locations)||[];
+  for(var i=0;i<rules.length;i++){
+    var r=rules[i];
+    if(r.allOf&&!r.allOf.every(function(s){return loc.indexOf(s)>=0;}))continue;
+    if(r.anyOf&&!r.anyOf.some(function(s){return loc.indexOf(s)>=0;}))continue;
+    return {p:r.tier,label:r.label};
+  }
   return null;
 }
 function rank(l){var g=geo(l.location);return g?(g.p==="p-high"?0:1):2;}
@@ -363,6 +385,9 @@ function boot(){
     state=data;
     if(!state.leads)state.leads=[];
     if(!state.applications)state.applications=[];
+    if(!Array.isArray(state.tracks))state.tracks=[];
+    if(!state.settings)state.settings={display_title:"Job Search Tracker",priority_locations:[]};
+    applyConfig();
     document.getElementById("gate").classList.add("hidden");
     document.getElementById("app").classList.remove("hidden");
     setSaved("Saved",true);
@@ -408,11 +433,14 @@ function dashboard(){
   var appliedLeads=L.filter(function(l){return l.status==="Applied";}).length;
   var near=L.filter(function(l){var g=geo(l.location);
     return g&&g.p==="p-high"&&l.status!=="Not a fit"&&l.status!=="Closed";}).length;
+  var topRule=(state.settings.priority_locations||[]).filter(function(r){return r.tier==="p-high";})[0];
+  var topLabel=topRule?topRule.label:"Top locations";
+  var trackCount=state.tracks.length;
 
   var h='<div class="tiles">'+
     '<div class="tile hi"><div class="k">Untriaged</div><div class="v mono">'+fresh+'</div><div class="f">leads marked New</div></div>'+
-    '<div class="tile"><div class="k">Seattle or remote</div><div class="v mono" style="color:var(--pri-high)">'+near+'</div><div class="f">still open</div></div>'+
-    '<div class="tile"><div class="k">Tracked leads</div><div class="v mono">'+L.length+'</div><div class="f">across three tracks, US only</div></div>'+
+    '<div class="tile"><div class="k">'+esc(topLabel)+'</div><div class="v mono" style="color:var(--pri-high)">'+near+'</div><div class="f">still open</div></div>'+
+    '<div class="tile"><div class="k">Tracked leads</div><div class="v mono">'+L.length+'</div><div class="f">across '+trackCount+' tracked search'+(trackCount===1?'':'es')+'</div></div>'+
     '<div class="tile"><div class="k">Applied</div><div class="v mono">'+(appliedLeads+A.length)+'</div><div class="f">'+A.length+' in the pipeline</div></div>'+
     '<div class="tile"><div class="k">In conversation</div><div class="v mono">'+active+'</div><div class="f">screen or loop stage</div></div>'+
     '<div class="tile"><div class="k">Gone quiet</div><div class="v mono">'+stale+'</div><div class="f">applied 14+ days ago</div></div>'+
@@ -448,7 +476,8 @@ function dashboard(){
           '<td><span class="pill '+pillFor(a.status)+'">'+esc(a.status||"&mdash;")+'</span></td></tr>';
       }).join("")+'</tbody></table></div></div>';
   }
-  h+='<div class="note">Three scheduled searches add rows here every morning &mdash; engineering at 15:00 UTC, technical PM at 15:30, product at 16:00. Every posting is opened and confirmed live before it lands; nothing arrives from a search snippet alone.</div>';
+  h+='<div class="note">Scheduled searches across your '+trackCount+' tracked search'+(trackCount===1?'':'es')+
+    ' add rows here every day. Every posting is opened and confirmed live before it lands; nothing arrives from a search snippet alone.</div>';
   return h;
 }
 
@@ -463,14 +492,16 @@ function leadsTab(key){
     var d=rank(a)-rank(b); if(d)return d;
     return String(b.found).localeCompare(String(a.found));
   });
+  var tierVar={"p-high":"var(--pri-high)","p-med":"var(--pri-med)"};
+  var geoKeyHtml=(state.settings.priority_locations||[]).map(function(r){
+    return '<span><i style="background:'+(tierVar[r.tier]||"var(--ink3)")+'"></i>'+esc(r.label)+'</span>';
+  }).join("");
   var h='<div class="toolbar">'+
     '<div class="search"><input type="search" id="q" placeholder="Filter '+esc(TRACKS[key].label)+'&hellip;" value="'+esc(ui.q)+'"></div>'+
     '<div class="chips">'+["All"].concat(LEAD_STATUS).map(function(f){
       return '<button class="chip" data-filter="'+esc(f)+'" aria-pressed="'+(ui.filter===f)+'">'+esc(f)+'</button>';
     }).join("")+'</div>'+viewSwitchHtml()+'</div>'+
-    '<div class="key"><span><i style="background:var(--pri-high)"></i>Seattle area or remote in the US</span>'+
-    '<span><i style="background:var(--pri-med)"></i>Portland</span>'+
-    '<span>Closest roles sorted first</span></div>';
+    '<div class="key">'+geoKeyHtml+'<span>Closest roles sorted first</span></div>';
 
   if(!all.length){
     return h+'<div class="card empty"><strong>No postings yet</strong>The '+esc(TRACKS[key].label).toLowerCase()+
