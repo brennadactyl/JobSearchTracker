@@ -480,7 +480,7 @@ function leadsTab(key){
 
   if(ui.view==="grid"){
     h+=leadsGridHtml(rows,key);
-    h+='<div class="note">Quick-scan columns only &mdash; team, setup, source, and the rest are in Detail view. Edits save when you click away. '+rows.length+' of '+all.length+' shown.</div>';
+    h+='<div class="note">Quick-scan columns only &mdash; referral, notes, team, setup, source, and the rest are in Detail view (click a row&rsquo;s Details). Edits save when you click away. '+rows.length+' of '+all.length+' shown.</div>';
     return h;
   }
 
@@ -505,19 +505,19 @@ function leadsTab(key){
 
 // The grid is for a fast scan without scrolling, so it shows a deliberately
 // short list of columns - not the full field set (that's what Detail view
-// is for). Comp and referral earn a spot because they're the two fields
+// is for, along with referral/notes/everything else cut from here to keep
+// it scroll-free). Comp earns the one extra column because it's the field
 // most likely to change whether a posting is worth a second look.
 var LEAD_GRID_FIELDS=[
-  ["comp","Comp range"],
-  ["referral","Referral"]
+  ["comp","Comp range"]
 ];
 
 function leadsGridHtml(rows,trackKey){
-  var COLS=7+LEAD_GRID_FIELDS.length; // company/role/location/status + extras + found/notes + details btn
+  var COLS=6+LEAD_GRID_FIELDS.length; // company/role/location/status + extras + found + details btn
   var h='<div class="card grid-wrap"><table><thead><tr>'+
     '<th>Company</th><th>Role</th><th>Location</th><th>Status</th>'+
     LEAD_GRID_FIELDS.map(function(f){return '<th>'+esc(f[1])+'</th>';}).join("")+
-    '<th>Found</th><th>Notes</th><th></th>'+
+    '<th>Found</th><th></th>'+
   '</tr></thead><tbody>'+rows.map(function(l){
     var g=geo(l.location);
     var open=!!ui.expanded[l.id];
@@ -531,7 +531,6 @@ function leadsGridHtml(rows,trackKey){
         return '<td><input type="text" data-id="'+l.id+'" data-field="'+key+'" value="'+esc(val)+'"></td>';
       }).join("")+
       '<td class="dt mono">'+esc(l.found)+'</td>'+
-      '<td><textarea data-id="'+l.id+'" data-field="notes" rows="1" placeholder="Add a note">'+esc(l.notes)+'</textarea></td>'+
       '<td><button class="btn ghost" data-expand="'+l.id+'" data-scope="'+trackKey+'">'+(open?'Hide':'Details')+'</button></td>'+
     '</tr>';
     if(open){
@@ -570,7 +569,7 @@ function appsTab(){
 
   if(ui.view==="grid"){
     h+=appsGridHtml(A);
-    h+='<div class="note">Quick-scan columns only &mdash; team, setup, source, comp, and the rest are in Detail view. Edits save when you click away. Days counts from the applied date.</div>';
+    h+='<div class="note">Quick-scan columns only &mdash; referral, notes, team, setup, source, comp, and the rest are in Detail view (click a row&rsquo;s Details). Edits save when you click away. Days counts from the applied date.</div>';
     return h;
   }
 
@@ -593,21 +592,21 @@ function appsTab(){
   return h;
 }
 
-// Same "fast scan, not the full field set" philosophy as LEAD_GRID_FIELDS.
-// Next action/When surface here because chasing follow-ups is the main
-// reason to be glancing at Applications at all; the rest lives in Detail.
+// Same "fast scan, not the full field set" philosophy as LEAD_GRID_FIELDS -
+// referral and notes cut too, same as leads; they're one Details click away.
+// Next action/When stay because chasing follow-ups is the main reason to be
+// glancing at Applications at all.
 var APP_GRID_FIELDS=[
   ["nextAction","Next action"],
-  ["nextActionDate","When","date"],
-  ["referral","Referral"]
+  ["nextActionDate","When","date"]
 ];
 
 function appsGridHtml(A){
-  var COLS=8+APP_GRID_FIELDS.length; // company/role/status/applied/days + extras + notes/details/remove
+  var COLS=7+APP_GRID_FIELDS.length; // company/role/status/applied/days + extras + details/remove
   var h='<div class="card grid-wrap"><table><thead><tr>'+
     '<th>Company</th><th>Role</th><th>Status</th><th>Applied</th><th>Days</th>'+
     APP_GRID_FIELDS.map(function(f){return '<th>'+esc(f[1])+'</th>';}).join("")+
-    '<th>Notes</th><th></th><th></th>'+
+    '<th></th><th></th>'+
   '</tr></thead><tbody>'+A.map(function(a){
     var d=daysSince(a.dateApplied);
     var open=!!ui.expanded[a.id];
@@ -623,7 +622,6 @@ function appsGridHtml(A){
           ?'<input type="date" data-id="'+a.id+'" data-field="'+key+'" data-app="1" value="'+esc(val)+'">'
           :'<input type="text" data-id="'+a.id+'" data-field="'+key+'" data-app="1" value="'+esc(val)+'">')+'</td>';
       }).join("")+
-      '<td><textarea data-id="'+a.id+'" data-field="notes" data-app="1" rows="1">'+esc(a.notes)+'</textarea></td>'+
       '<td><button class="btn ghost" data-expand="'+a.id+'" data-scope="applications">'+(open?'Hide':'Details')+'</button></td>'+
       '<td><button class="btn ghost" data-del="'+a.id+'" title="Remove">&times;</button></td>'+
     '</tr>';
@@ -697,7 +695,7 @@ document.addEventListener("click",function(e){
   }
 
   if(e.target.id==="addapp"){
-    setSaved("Saving&hellip;",false);
+    setSaved("Saving…",false);
     api("/api/update",{method:"POST",body:JSON.stringify({
       type:"application",company:"",title:"",dateApplied:today(),status:"Applied",notes:"",
       team:"",setup:"",source:"",link:"",lastContact:"",nextAction:"",nextActionDate:"",
@@ -706,7 +704,7 @@ document.addEventListener("click",function(e){
       state.applications.unshift(res.application);
       render();
       setSaved("Saved",true);
-    }).catch(function(){setSaved("Couldn't save &mdash; try again","bad");});
+    }).catch(function(){setSaved("Couldn't save — try again","bad");});
     return;
   }
 
@@ -716,12 +714,12 @@ document.addEventListener("click",function(e){
     var row=state.applications.filter(function(a){return String(a.id)===String(id);})[0];
     var name=row&&(row.company||row.title)?((row.company||"")+" "+(row.title||"")).trim():"this row";
     if(confirm("Remove "+name+" from Applications?")){
-      setSaved("Saving&hellip;",false);
+      setSaved("Saving…",false);
       api("/api/delete-application",{method:"POST",body:JSON.stringify({id:id})}).then(function(){
         state.applications=state.applications.filter(function(a){return String(a.id)!==String(id);});
         render();
         setSaved("Saved",true);
-      }).catch(function(){setSaved("Couldn't save &mdash; try again","bad");});
+      }).catch(function(){setSaved("Couldn't save — try again","bad");});
     }
   }
 });
@@ -746,13 +744,13 @@ function commit(el){
   var row=list.filter(function(r){return String(r.id)===String(id);})[0];
   if(!row||row[field]===el.value)return;
   row[field]=el.value;
-  setSaved("Saving&hellip;",false);
+  setSaved("Saving…",false);
   var body=isApp?{type:"application",id:id}:{type:"lead",id:id};
   body[field]=el.value;
   api("/api/update",{method:"POST",body:JSON.stringify(body)}).then(function(){
     setSaved("Saved",true);
     if(field==="status"&&!isApp)render();
-  }).catch(function(){setSaved("Couldn't save &mdash; try again","bad");});
+  }).catch(function(){setSaved("Couldn't save — try again","bad");});
 }
 document.addEventListener("change",function(e){
   if(e.target.matches("select[data-id],input[data-id]"))commit(e.target);
