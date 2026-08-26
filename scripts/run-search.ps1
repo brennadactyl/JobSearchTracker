@@ -3,7 +3,7 @@
   Runs one of the three daily job-search prompts through the Claude Code CLI.
 
 .DESCRIPTION
-  Generic runner — contains no personal data itself. It reads a prompt file from
+  Generic runner - contains no personal data itself. It reads a prompt file from
   <DataDir>\scheduled-tasks\<Task>.md, runs it non-interactively via `claude -p`,
   and logs output to <DataDir>\logs\<Task>.log. Working directory is set to
   <DataDir> so the relative paths inside the prompt (docs/..., resumes/..., etc.)
@@ -51,7 +51,7 @@ $claude = Get-Command claude -ErrorAction SilentlyContinue
 if (-not $claude) {
     $fallback = Join-Path $env:APPDATA "npm\claude.cmd"
     if (Test-Path $fallback) { $claude = $fallback } else {
-        "$(Get-Date -Format o) — claude CLI not found on PATH or at $fallback" | Out-File -Append $logFile
+        "$(Get-Date -Format o) - claude CLI not found on PATH or at $fallback" | Out-File -Append $logFile
         Write-Error "claude CLI not found. Install it with: npm install -g @anthropic-ai/claude-code"
         exit 1
     }
@@ -61,10 +61,10 @@ $prompt = Get-Content -Raw -Path $promptFile
 
 Push-Location $DataDir
 try {
-    "$(Get-Date -Format o) — starting $Task" | Out-File -Append $logFile
+    "$(Get-Date -Format o) - starting $Task" | Out-File -Append $logFile
     & $claude -p $prompt *>> $logFile
     $exitCode = $LASTEXITCODE
-    "$(Get-Date -Format o) — finished $Task (exit $exitCode)" | Out-File -Append $logFile
+    "$(Get-Date -Format o) - finished $Task (exit $exitCode)" | Out-File -Append $logFile
     exit $exitCode
 }
 finally {

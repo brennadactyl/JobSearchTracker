@@ -3,7 +3,7 @@
   Registers the three daily job-search searches as Windows Scheduled Tasks.
 
 .DESCRIPTION
-  Generic setup script — contains no personal data. Registers three tasks that
+  Generic setup script - contains no personal data. Registers three tasks that
   each invoke run-search.ps1 for one search track, daily, at staggered local
   times so they don't race on the shared tracker artifact. Safe to re-run:
   existing tasks with the same names are replaced.
@@ -13,7 +13,7 @@
     - CLAUDE_CODE_OAUTH_TOKEN set for your account (run `claude setup-token`,
       then `setx CLAUDE_CODE_OAUTH_TOKEN "<token>"`) so headless runs authenticate
     - Your private data folder (docs/, resumes/, reference/, tracker/,
-      scheduled-tasks/) in place — see private.example/README.md in this repo
+      scheduled-tasks/) in place - see private.example/README.md in this repo
 
 .PARAMETER DataDir
   Path to the private data folder. Defaults to the JOB_SEARCH_DATA_DIR
@@ -69,7 +69,7 @@ $tasks = @(
 foreach ($t in $tasks) {
     $action = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$runScript`" -Task $($t.Task) -DataDir `"$DataDir`""
     schtasks /Create /TN $t.Name /TR $action /SC DAILY /ST $t.Time /F | Out-Null
-    Write-Host "  $($t.Name) — daily at $($t.Time)"
+    Write-Host "  $($t.Name) - daily at $($t.Time)"
 }
 
 Write-Host "`nDone. Tasks run only while you're logged in (no stored password required)." -ForegroundColor Green
