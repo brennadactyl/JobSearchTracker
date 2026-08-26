@@ -33,7 +33,7 @@ can be done on your behalf.
 
 4. **Apply the schema:**
    ```bat
-   wrangler d1 execute job-search-tracker-db --remote --file=./schema.sql
+   wrangler d1 migrations apply job-search-tracker-db --remote
    ```
 
 5. **Set the access token** (skip if you already have one from an earlier
@@ -68,14 +68,21 @@ cd worker
 wrangler deploy
 ```
 
-Schema changes need a separate `wrangler d1 execute ... --file=./schema.sql`
-run (write any migration as a new `ALTER TABLE` / `CREATE TABLE IF NOT EXISTS`
-statement rather than editing schema.sql's existing statements, since those
-won't re-run against already-created tables).
+Schema changes are tracked migrations in `worker/migrations/` (Wrangler
+records which ones have run, so `apply` is always safe to re-run - it only
+executes files it hasn't seen). To add a schema change:
+```bat
+cd worker
+wrangler d1 migrations create job-search-tracker-db <short-name>
+```
+Edit the generated file, then apply it the same way as step 4 above:
+```bat
+wrangler d1 migrations apply job-search-tracker-db --remote
+```
 
 ## API (used by the search scripts, see ../private.example/README.md)
 
 - `GET /api/data` - Bearer token required - returns `{ updated, leads[], applications[] }`
-- `POST /api/leads` - Bearer token required - body `{ "leads": [ {search, company, title, location, url, found, verified, fit} ] }` - appends only leads not already present for the same `(search, url)` pair (DB-enforced, atomic); never touches existing status/notes.
+- `POST /api/leads` - Bearer token required - body `{ "leads": [ {search, company, title, location, url, found, verified, fit, team, setup, comp} ] }` - appends only leads not already present for the same `(search, url)` pair (DB-enforced, atomic); never touches existing status/notes. `team`/`setup`/`comp` are optional (omit rather than send empty) and only meaningful when the posting states them - other Details fields (referral, resume, lastContact, nextAction*, link) are accepted too but are user-entered only, never sent by the search scripts.
 - `POST /api/update` - Bearer token required - body `{ "type": "lead", "id": ..., "status": "...", "notes": "..." }` or `{ "type": "application", ... }`
 - `POST /api/delete-application` - Bearer token required - body `{ "id": ... }` - removes one application row (leads are never deleted, only re-statused)

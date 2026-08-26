@@ -23,7 +23,7 @@
  *                            page's "remove" control; leads are never
  *                            deleted, only re-statused)
  *
- * Schema: see ../schema.sql
+ * Schema: see ../migrations/
  */
 
 function authorized(request, env) {
@@ -108,9 +108,16 @@ async function handleAddLeads(request, env) {
   if (incoming.length === 0) return json({ error: "no leads provided" }, 400);
 
   const t = today();
+  // team/setup/comp are the fields a job posting can actually state (org,
+  // remote/hybrid/onsite, a posted salary range); the rest of EXTRA_FIELDS
+  // (referral, resume, lastContact, nextAction*, link) are personal/workflow
+  // facts the search has no way to know, so they're accepted here (in case a
+  // future caller has them) but the scheduled searches never send them -
+  // they default to '' and stay for the user to fill in from Details.
   const stmt = env.DB.prepare(
-    `INSERT OR IGNORE INTO leads (search, found, company, title, location, url, verified, fit, status, notes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'New', '')`
+    `INSERT OR IGNORE INTO leads
+       (search, found, company, title, location, url, verified, fit, status, notes, ${EXTRA_FIELDS.join(", ")})
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'New', '', ${EXTRA_FIELDS.map(() => "?").join(", ")})`
   );
 
   const batch = [];
@@ -125,7 +132,8 @@ async function handleAddLeads(request, env) {
         lead.location || "",
         lead.url,
         lead.verified || t,
-        lead.fit || ""
+        lead.fit || "",
+        ...EXTRA_FIELDS.map((f) => lead[f] || "")
       )
     );
   }
@@ -138,6 +146,15 @@ async function handleAddLeads(request, env) {
   return json({ added });
 }
 
+// Extra freeform fields shared by leads and applications - same columns on
+// both tables (see migrations/), so a referral/comp/next-action can be jotted
+// down on a posting before it's ever "applied to", and it's still there
+// after it becomes an application.
+const EXTRA_FIELDS = [
+  "team", "setup", "source", "link", "lastContact",
+  "nextAction", "nextActionDate", "resume", "referral", "comp",
+];
+
 async function handleUpdate(request, env) {
   let body;
   try {
@@ -147,17 +164,11 @@ async function handleUpdate(request, env) {
   }
 
   if (body.type === "lead") {
-    const result = await env.DB.prepare(
-      `UPDATE leads SET
-         status = COALESCE(?, status),
-         notes = COALESCE(?, notes)
-       WHERE id = ?`
-    )
-      .bind(
-        typeof body.status === "string" ? body.status : null,
-        typeof body.notes === "string" ? body.notes : null,
-        body.id
-      )
+    const fields = ["status", "notes", ...EXTRA_FIELDS];
+    const setClause = fields.map((f) => `${f} = COALESCE(?, ${f})`).join(", ");
+    const values = fields.map((f) => (typeof body[f] === "string" ? body[f] : null));
+    const result = await env.DB.prepare(`UPDATE leads SET ${setClause} WHERE id = ?`)
+      .bind(...values, body.id)
       .run();
     if (result.meta.changes === 0) return json({ error: "lead not found" }, 404);
     await touchUpdated(env);
@@ -166,44 +177,28 @@ async function handleUpdate(request, env) {
   }
 
   if (body.type === "application") {
+    const fields = ["company", "title", "dateApplied", "status", "notes", "leadId", ...EXTRA_FIELDS];
     if (body.id) {
-      const result = await env.DB.prepare(
-        `UPDATE applications SET
-           company = COALESCE(?, company),
-           title = COALESCE(?, title),
-           dateApplied = COALESCE(?, dateApplied),
-           status = COALESCE(?, status),
-           notes = COALESCE(?, notes),
-           leadId = COALESCE(?, leadId)
-         WHERE id = ?`
-      )
-        .bind(
-          body.company ?? null,
-          body.title ?? null,
-          body.dateApplied ?? null,
-          body.status ?? null,
-          body.notes ?? null,
-          body.leadId ?? null,
-          body.id
-        )
+      const setClause = fields.map((f) => `${f} = COALESCE(?, ${f})`).join(", ");
+      const values = fields.map((f) => (typeof body[f] === "string" ? body[f] : null));
+      const result = await env.DB.prepare(`UPDATE applications SET ${setClause} WHERE id = ?`)
+        .bind(...values, body.id)
         .run();
       if (result.meta.changes === 0) return json({ error: "application not found" }, 404);
       await touchUpdated(env);
       const app = await env.DB.prepare("SELECT * FROM applications WHERE id = ?").bind(body.id).first();
       return json({ ok: true, application: app });
     } else {
+      const placeholders = fields.map(() => "?").join(", ");
+      const values = fields.map((f) => {
+        if (f === "dateApplied") return body.dateApplied || today();
+        if (f === "status") return body.status || "Applied";
+        return body[f] || "";
+      });
       const result = await env.DB.prepare(
-        `INSERT INTO applications (leadId, company, title, dateApplied, status, notes)
-         VALUES (?, ?, ?, ?, ?, ?)`
+        `INSERT INTO applications (${fields.join(", ")}) VALUES (${placeholders})`
       )
-        .bind(
-          body.leadId || "",
-          body.company || "",
-          body.title || "",
-          body.dateApplied || today(),
-          body.status || "Applied",
-          body.notes || ""
-        )
+        .bind(...values)
         .run();
       await touchUpdated(env);
       const app = await env.DB
@@ -390,6 +385,10 @@ tr.p-med td:first-child{border-left-color:var(--pri-med)}
 .lc .row select{min-width:0;flex:1}
 .lc .meta{font-size:12.5px;color:var(--ink3);display:flex;gap:10px;flex-wrap:wrap}
 
+.more-row td{background:var(--surface2);padding:2px 12px 14px}
+.more-grid{display:grid;gap:10px 14px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));padding:10px 2px 2px}
+.mf label{display:block;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink3);margin-bottom:4px;font-weight:600}
+.lc .more-grid{padding:4px 0 0}
 .note{font-size:12.5px;color:var(--ink3);padding:14px 0 0;line-height:1.6}
 .del{color:var(--ink3);font-size:16px;line-height:1;padding:4px 7px}
 .del:hover{color:var(--crit)}
@@ -414,8 +413,8 @@ tr.p-med td:first-child{border-left-color:var(--pri-med)}
   <div class="card">
     <h1>Job search access</h1>
     <p>Enter your access token to continue.</p>
-    <input id="tokenInput" type="password" placeholder="Token" onkeydown="if(event.key==='Enter')submitToken()">
-    <button class="btn primary" onclick="submitToken()">Enter</button>
+    <input id="tokenInput" type="password" placeholder="Token">
+    <button class="btn primary" id="tokenSubmit">Enter</button>
     <div id="gateError" class="err"></div>
   </div>
 </div>
@@ -449,7 +448,36 @@ var TRACKS={
 
 var TOKEN=localStorage.getItem("tracker_token")||"";
 var state={updated:null,leads:[],applications:[]};
-var ui={tab:"dashboard",q:"",filter:"All"};
+var ui={tab:"dashboard",q:"",filter:"All",expanded:{}};
+
+// Fields shown in leads' "Details" panel. These are DB columns shared with
+// applications (see migrations/), minus "link" - a lead already has its own
+// url (the row's title link and the verified pill both point at it), so a
+// second link input here would just duplicate it. Applications get their
+// own dedicated Link column instead (see APP_COLS below), since a
+// manually-added application has no posting URL to fall back on.
+var EXTRA_FIELDS=[
+  ["referral","Referral"],
+  ["comp","Comp range"],
+  ["source","Source"],
+  ["team","Team / product"],
+  ["setup","Setup"],
+  ["resume","Resume"],
+  ["lastContact","Last contact","date"],
+  ["nextAction","Next action"],
+  ["nextActionDate","When","date"]
+];
+function moreGridHtml(item,isApp){
+  var appAttr=isApp?' data-app="1"':'';
+  return '<div class="more-grid">'+EXTRA_FIELDS.map(function(f){
+    var key=f[0],label=f[1],type=f[2]||"text";
+    var val=item[key]||"";
+    var input=type==="date"
+      ?'<input type="date" data-id="'+item.id+'" data-field="'+key+'"'+appAttr+' value="'+esc(val)+'">'
+      :'<input type="text" data-id="'+item.id+'" data-field="'+key+'"'+appAttr+' value="'+esc(val)+'" placeholder="'+esc(label)+'">';
+    return '<div class="mf"><label>'+esc(label)+'</label>'+input+'</div>';
+  }).join("")+'</div>';
+}
 try{var s=localStorage.getItem("bjs.tab");if(s)ui.tab=s;}catch(e){}
 
 function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){
@@ -582,18 +610,17 @@ function dashboard(){
   });
   h+='</div></div>';
 
-  var followUp=A.filter(function(a){return a.status==="Applied";})
-    .map(function(a){return {a:a,d:daysSince(a.dateApplied)};})
-    .sort(function(x,y){return (y.d||0)-(x.d||0);});
-  h+='<div class="sec"><h2>Needs a follow-up</h2><p>Applications still marked &ldquo;Applied,&rdquo; oldest first</p></div>';
-  if(!followUp.length){
-    h+='<div class="card empty"><strong>Nothing waiting</strong>Everything in your pipeline has moved past the initial application, or there&rsquo;s nothing in it yet.</div>';
+  var todo=A.filter(function(a){return a.nextAction;})
+    .sort(function(x,y){return String(x.nextActionDate||"9999").localeCompare(String(y.nextActionDate||"9999"));});
+  h+='<div class="sec"><h2>What&rsquo;s next</h2><p>From your Applications tab</p></div>';
+  if(!todo.length){
+    h+='<div class="card empty"><strong>Nothing queued</strong>Add a next action to an application and it shows up here.</div>';
   }else{
-    h+='<div class="card"><div class="scroller"><table><thead><tr><th>Company</th><th>Role</th><th>Applied</th><th>Days</th><th>Status</th></tr></thead><tbody>'+
-      followUp.map(function(x){
-        return '<tr><td class="co">'+esc(x.a.company)+'</td><td>'+esc(x.a.title)+'</td>'+
-          '<td class="dt mono">'+esc(x.a.dateApplied)+'</td><td class="dt mono">'+(x.d===null?"&mdash;":x.d)+'</td>'+
-          '<td><span class="pill '+pillFor(x.a.status)+'">'+esc(x.a.status)+'</span></td></tr>';
+    h+='<div class="card"><div class="scroller"><table><thead><tr><th>Company</th><th>Role</th><th>Next action</th><th>When</th><th>Stage</th></tr></thead><tbody>'+
+      todo.map(function(a){
+        return '<tr><td class="co">'+esc(a.company)+'</td><td>'+esc(a.title)+'</td>'+
+          '<td>'+esc(a.nextAction)+'</td><td class="dt mono">'+esc(a.nextActionDate||"&mdash;")+'</td>'+
+          '<td><span class="pill '+pillFor(a.status)+'">'+esc(a.status||"&mdash;")+'</span></td></tr>';
       }).join("")+'</tbody></table></div></div>';
   }
   h+='<div class="note">Three scheduled searches add rows here every morning &mdash; engineering at 15:00 UTC, technical PM at 15:30, product at 16:00. Every posting is opened and confirmed live before it lands; nothing arrives from a search snippet alone.</div>';
@@ -627,21 +654,28 @@ function leadsTab(key){
   if(!rows.length) return h+'<div class="card empty"><strong>Nothing matches</strong>Try a different filter.</div>';
 
   h+='<div class="card scroller responsive"><table><thead><tr>'+
-    '<th>Company</th><th>Role</th><th>Location</th><th>Found</th><th>Status</th><th>Your notes</th><th></th>'+
+    '<th>Company</th><th>Role</th><th>Location</th><th>Found</th><th>Status</th><th>Your notes</th><th></th><th></th>'+
     '</tr></thead><tbody>'+rows.map(function(l){
     var g=geo(l.location);
-    return '<tr'+(g?' class="'+g.p+'"':'')+'><td class="co">'+esc(l.company)+'</td>'+
+    var open=!!ui.expanded[l.id];
+    var row='<tr'+(g?' class="'+g.p+'"':'')+'><td class="co">'+esc(l.company)+'</td>'+
       '<td><span class="ttl"><a href="'+esc(l.url)+'" target="_blank" rel="noopener">'+esc(l.title)+'</a></span>'+
         (l.fit?'<span class="fit">'+esc(l.fit)+'</span>':"")+'</td>'+
       '<td class="loc">'+esc(l.location)+(g?'<br><span class="geo '+g.p+'">'+esc(g.label)+'</span>':'')+'</td>'+
       '<td class="dt mono">'+esc(l.found)+'</td>'+
       '<td>'+selectHtml(LEAD_STATUS,l.status,'data-id="'+l.id+'" data-field="status"')+'</td>'+
       '<td><textarea data-id="'+l.id+'" data-field="notes" rows="1" placeholder="Add a note">'+esc(l.notes)+'</textarea></td>'+
-      '<td><span class="pill live" title="Confirmed live on this date">'+esc(l.verified)+'</span></td></tr>';
+      '<td><span class="pill live" title="Confirmed live on this date">'+esc(l.verified)+'</span></td>'+
+      '<td><button class="btn ghost" data-expand="'+l.id+'">'+(open?'Hide':'Details')+'</button></td></tr>';
+    if(open){
+      row+='<tr class="more-row"><td colspan="8">'+moreGridHtml(l,false)+'</td></tr>';
+    }
+    return row;
   }).join("")+'</tbody></table></div>';
 
   h+='<div class="cards">'+rows.map(function(l){
     var g=geo(l.location);
+    var open=!!ui.expanded[l.id];
     return '<div class="lc'+(g?' '+g.p:'')+'"><div class="top"><span class="co">'+esc(l.company)+'</span>'+
       '<span class="pill '+pillFor(l.status)+'">'+esc(l.status)+'</span></div>'+
       '<div class="ttl"><a href="'+esc(l.url)+'" target="_blank" rel="noopener">'+esc(l.title)+'</a></div>'+
@@ -650,11 +684,21 @@ function leadsTab(key){
       (l.fit?'<div class="fit" style="margin-top:6px">'+esc(l.fit)+'</div>':"")+
       '<div class="row">'+selectHtml(LEAD_STATUS,l.status,'data-id="'+l.id+'" data-field="status"')+'</div>'+
       '<div class="row"><textarea data-id="'+l.id+'" data-field="notes" rows="2" placeholder="Your notes&hellip;">'+esc(l.notes)+'</textarea></div>'+
+      '<div class="row"><button class="btn ghost" data-expand="'+l.id+'">'+(open?'Hide details':'+ Details')+'</button></div>'+
+      (open?moreGridHtml(l,false):'')+
       '</div>';
   }).join("")+'</div>';
-  h+='<div class="note">Status and notes save when you click away from the field. '+rows.length+' of '+all.length+' shown.</div>';
+  h+='<div class="note">Status and notes save when you click away from the field. Details &mdash; referral, comp, source, and the rest &mdash; save the same way. '+rows.length+' of '+all.length+' shown.</div>';
   return h;
 }
+
+var APP_COLS=[
+  ["company","Company","text"],["title","Role","text"],["team","Team / product","text"],
+  ["setup","Setup","text"],["source","Source","text"],["dateApplied","Applied","date"],
+  ["status","Status","status"],["lastContact","Last contact","date"],
+  ["nextAction","Next action","text"],["nextActionDate","When","date"],
+  ["resume","Resume","text"],["referral","Referral","text"],["comp","Comp range","text"],["notes","Notes","text"]
+];
 
 function appsTab(){
   var A=state.applications;
@@ -662,22 +706,24 @@ function appsTab(){
     '<span style="font-size:13px;color:var(--ink3)">Your own pipeline &mdash; the scheduled searches never touch this tab.</span></div>';
   if(!A.length){
     return h+'<div class="card empty"><strong>No applications logged</strong>'+
-      'When you apply to something, add it here to track the conversation. Days-since updates itself.</div>';
+      'When you apply to something, add it here to track the conversation. Days-since and the follow-up list update themselves.</div>';
   }
   h+='<div class="card scroller"><table><thead><tr>'+
-    '<th>Company</th><th>Role</th><th>Applied</th><th>Status</th><th>Notes</th><th>Days</th><th></th>'+
-    '</tr></thead><tbody>'+A.map(function(a){
-    var d=daysSince(a.dateApplied);
-    return '<tr>'+
-      '<td><input type="text" data-id="'+a.id+'" data-field="company" data-app="1" value="'+esc(a.company)+'"></td>'+
-      '<td><input type="text" data-id="'+a.id+'" data-field="title" data-app="1" value="'+esc(a.title)+'"></td>'+
-      '<td><input type="date" data-id="'+a.id+'" data-field="dateApplied" data-app="1" value="'+esc(a.dateApplied)+'"></td>'+
-      '<td>'+selectHtml(APP_STATUS,a.status,'data-id="'+a.id+'" data-field="status" data-app="1"')+'</td>'+
-      '<td><textarea data-id="'+a.id+'" data-field="notes" data-app="1" rows="1">'+esc(a.notes)+'</textarea></td>'+
+    APP_COLS.map(function(c){return '<th>'+esc(c[1])+'</th>';}).join("")+
+    '<th>Days</th><th>Link</th><th></th></tr></thead><tbody>'+
+    A.map(function(a){
+      var d=daysSince(a.dateApplied);
+      return '<tr>'+APP_COLS.map(function(c){
+        var f=c[0];
+        if(c[2]==="status") return '<td>'+selectHtml(APP_STATUS,a.status,'data-id="'+a.id+'" data-field="status" data-app="1"')+'</td>';
+        if(c[2]==="date") return '<td><input type="date" data-id="'+a.id+'" data-field="'+f+'" data-app="1" value="'+esc(a[f])+'"></td>';
+        return '<td><input type="text" data-id="'+a.id+'" data-field="'+f+'" data-app="1" value="'+esc(a[f])+'"></td>';
+      }).join("")+
       '<td class="dt mono">'+(d===null?"&mdash;":d)+'</td>'+
+      '<td><input type="text" data-id="'+a.id+'" data-field="link" data-app="1" value="'+esc(a.link)+'" placeholder="URL"></td>'+
       '<td><button class="btn ghost del" data-del="'+a.id+'" title="Remove">&times;</button></td></tr>';
-  }).join("")+'</tbody></table></div>'+
-  '<div class="note">Edits save when you click away. Days counts from the applied date.</div>';
+    }).join("")+'</tbody></table></div>'+
+    '<div class="note">Edits save when you click away. Days counts from the applied date.</div>';
   return h;
 }
 
@@ -690,6 +736,8 @@ function render(){
 }
 
 document.addEventListener("click",function(e){
+  if(e.target.id==="tokenSubmit"){submitToken();return;}
+
   var t=e.target.closest("[data-tab]");
   if(t){ui.tab=t.getAttribute("data-tab");ui.q="";ui.filter="All";
     try{localStorage.setItem("bjs.tab",ui.tab);}catch(err){} render(); return;}
@@ -697,10 +745,20 @@ document.addEventListener("click",function(e){
   var f=e.target.closest("[data-filter]");
   if(f){ui.filter=f.getAttribute("data-filter"); render(); return;}
 
+  var ex=e.target.closest("[data-expand]");
+  if(ex){
+    var exId=ex.getAttribute("data-expand");
+    ui.expanded[exId]=!ui.expanded[exId];
+    render();
+    return;
+  }
+
   if(e.target.id==="addapp"){
     setSaved("Saving&hellip;",false);
     api("/api/update",{method:"POST",body:JSON.stringify({
-      type:"application",company:"",title:"",dateApplied:today(),status:"Applied",notes:""
+      type:"application",company:"",title:"",dateApplied:today(),status:"Applied",notes:"",
+      team:"",setup:"",source:"",link:"",lastContact:"",nextAction:"",nextActionDate:"",
+      resume:"",referral:"",comp:""
     })}).then(function(res){
       state.applications.unshift(res.application);
       render();
@@ -723,6 +781,10 @@ document.addEventListener("click",function(e){
       }).catch(function(){setSaved("Couldn't save &mdash; try again","bad");});
     }
   }
+});
+
+document.addEventListener("keydown",function(e){
+  if(e.target.id==="tokenInput"&&e.key==="Enter"){submitToken();}
 });
 
 document.addEventListener("input",function(e){
