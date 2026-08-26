@@ -1,69 +1,32 @@
 /**
  * Job Search Tracker - Cloudflare Worker
  *
- * Serves the tracker webpage and a small JSON API, backed by a single KV key.
- * Replaces the Claude Artifact used previously - this has no dependency on
- * any particular AI tool; it's just HTTP + KV, so the headless search CLI can
- * update it with a plain `curl` call and the page can edit it with `fetch`.
+ * Serves the tracker webpage and a small JSON API, backed by D1 (SQLite).
+ * No dependency on any particular AI tool - just HTTP + D1, so the headless
+ * search CLI can update it with a plain `curl` call and the page can edit
+ * it with `fetch`.
  *
  * Routes:
- *   GET  /                unauthenticated shell; JS prompts for the token,
- *                         then calls the API routes below with it
- *   GET  /api/data        requires Bearer token -> { updated, leads[], applications[] }
- *   POST /api/leads       requires Bearer token -> body: { leads: [...] }
- *                         appends leads not already present for the same
- *                         (search, url) pair; never touches existing status/notes
- *   POST /api/update      requires Bearer token -> body: { type: "lead"|"application", ... }
- *                         updates one lead's status/notes, or upserts one
- *                         application record
+ *   GET  /                   unauthenticated shell; JS prompts for the token,
+ *                            then calls the API routes below with it
+ *   GET  /api/data           requires Bearer token -> { updated, leads[], applications[] }
+ *   POST /api/leads          requires Bearer token -> body: { leads: [...] }
+ *                            appends leads not already present for the same
+ *                            (search, url) pair (DB-enforced UNIQUE constraint
+ *                            + INSERT OR IGNORE - atomic, race-free); never
+ *                            touches existing status/notes
+ *   POST /api/update         requires Bearer token -> body: { type: "lead"|"application", ... }
+ *                            updates one lead's status/notes, or upserts one
+ *                            application record
+ *   GET  /api/migrate-from-kv  requires Bearer token - one-time: copies
+ *                            whatever's in the old KV blob (key "data") into
+ *                            D1, skipping anything already present. Safe to
+ *                            call more than once. Delete this route (and the
+ *                            KV binding in wrangler.toml) once you've
+ *                            confirmed the migration worked.
  *
- * Data shape stored under KV key "data":
- *   {
- *     "updated": "2026-08-26",
- *     "leads": [
- *       { "id":"l001", "search":"SWE"|"TPM"|"CPM", "found":"2026-08-20",
- *         "company":"", "title":"", "location":"", "url":"",
- *         "verified":"2026-08-20", "fit":"", "status":"New", "notes":"" }
- *     ],
- *     "applications": [
- *       { "id":"a001", "leadId":"l001", "company":"", "title":"",
- *         "dateApplied":"2026-08-21", "status":"Applied", "notes":"" }
- *     ]
- *   }
+ * Schema: see ../schema.sql
  */
-
-const DATA_KEY = "data";
-const EMPTY_DATA = { updated: null, leads: [], applications: [] };
-
-export default {
-  async fetch(request, env) {
-    const url = new URL(request.url);
-
-    if (url.pathname === "/" && request.method === "GET") {
-      return new Response(PAGE_HTML, {
-        headers: { "content-type": "text/html; charset=utf-8" },
-      });
-    }
-
-    if (url.pathname === "/api/data" && request.method === "GET") {
-      if (!authorized(request, env)) return unauthorized();
-      const data = await loadData(env);
-      return json(data);
-    }
-
-    if (url.pathname === "/api/leads" && request.method === "POST") {
-      if (!authorized(request, env)) return unauthorized();
-      return handleAddLeads(request, env);
-    }
-
-    if (url.pathname === "/api/update" && request.method === "POST") {
-      if (!authorized(request, env)) return unauthorized();
-      return handleUpdate(request, env);
-    }
-
-    return new Response("Not found", { status: 404 });
-  },
-};
 
 function authorized(request, env) {
   const header = request.headers.get("Authorization") || "";
@@ -82,29 +45,59 @@ function json(obj, status = 200) {
   });
 }
 
-async function loadData(env) {
-  const raw = await env.TRACKER_KV.get(DATA_KEY);
-  if (!raw) return { ...EMPTY_DATA };
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return { ...EMPTY_DATA };
-  }
+function today() {
+  return new Date().toISOString().slice(0, 10);
 }
 
-async function saveData(env, data) {
-  data.updated = new Date().toISOString().slice(0, 10);
-  await env.TRACKER_KV.put(DATA_KEY, JSON.stringify(data));
+async function touchUpdated(env) {
+  await env.DB.prepare(
+    `INSERT INTO meta (key, value) VALUES ('updated', ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+  ).bind(today()).run();
 }
 
-function nextId(items, prefix) {
-  let max = 0;
-  for (const it of items) {
-    const m = /^[a-z]+(\d+)$/.exec(it.id || "");
-    if (m) max = Math.max(max, parseInt(m[1], 10));
-  }
-  return `${prefix}${String(max + 1).padStart(3, "0")}`;
-}
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+
+    if (url.pathname === "/" && request.method === "GET") {
+      return new Response(PAGE_HTML, {
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    }
+
+    if (url.pathname === "/api/data" && request.method === "GET") {
+      if (!authorized(request, env)) return unauthorized();
+      const [leads, applications, meta] = await Promise.all([
+        env.DB.prepare("SELECT * FROM leads ORDER BY id").all(),
+        env.DB.prepare("SELECT * FROM applications ORDER BY id").all(),
+        env.DB.prepare("SELECT value FROM meta WHERE key = 'updated'").first(),
+      ]);
+      return json({
+        updated: meta ? meta.value : null,
+        leads: leads.results,
+        applications: applications.results,
+      });
+    }
+
+    if (url.pathname === "/api/leads" && request.method === "POST") {
+      if (!authorized(request, env)) return unauthorized();
+      return handleAddLeads(request, env);
+    }
+
+    if (url.pathname === "/api/update" && request.method === "POST") {
+      if (!authorized(request, env)) return unauthorized();
+      return handleUpdate(request, env);
+    }
+
+    if (url.pathname === "/api/migrate-from-kv" && request.method === "GET") {
+      if (!authorized(request, env)) return unauthorized();
+      return handleMigrateFromKv(env);
+    }
+
+    return new Response("Not found", { status: 404 });
+  },
+};
 
 async function handleAddLeads(request, env) {
   let body;
@@ -116,34 +109,35 @@ async function handleAddLeads(request, env) {
   const incoming = Array.isArray(body.leads) ? body.leads : [];
   if (incoming.length === 0) return json({ error: "no leads provided" }, 400);
 
-  const data = await loadData(env);
-  const existingKeys = new Set(data.leads.map((l) => `${l.search}::${l.url}`));
+  const t = today();
+  const stmt = env.DB.prepare(
+    `INSERT OR IGNORE INTO leads (search, found, company, title, location, url, verified, fit, status, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'New', '')`
+  );
 
-  const added = [];
+  const batch = [];
   for (const lead of incoming) {
     if (!lead.search || !lead.url || !lead.company || !lead.title) continue;
-    const key = `${lead.search}::${lead.url}`;
-    if (existingKeys.has(key)) continue;
-    const newLead = {
-      id: nextId(data.leads, "l"),
-      search: lead.search,
-      found: lead.found || new Date().toISOString().slice(0, 10),
-      company: lead.company,
-      title: lead.title,
-      location: lead.location || "",
-      url: lead.url,
-      verified: lead.verified || new Date().toISOString().slice(0, 10),
-      fit: lead.fit || "",
-      status: "New",
-      notes: "",
-    };
-    data.leads.push(newLead);
-    existingKeys.add(key);
-    added.push(newLead);
+    batch.push(
+      stmt.bind(
+        lead.search,
+        lead.found || t,
+        lead.company,
+        lead.title,
+        lead.location || "",
+        lead.url,
+        lead.verified || t,
+        lead.fit || ""
+      )
+    );
   }
+  if (batch.length === 0) return json({ error: "no valid leads in payload" }, 400);
 
-  if (added.length > 0) await saveData(env, data);
-  return json({ added: added.length, leads: added });
+  const results = await env.DB.batch(batch);
+  const added = results.reduce((n, r) => n + (r.meta.changes || 0), 0);
+  if (added > 0) await touchUpdated(env);
+
+  return json({ added });
 }
 
 async function handleUpdate(request, env) {
@@ -154,43 +148,139 @@ async function handleUpdate(request, env) {
     return json({ error: "invalid JSON body" }, 400);
   }
 
-  const data = await loadData(env);
-
   if (body.type === "lead") {
-    const lead = data.leads.find((l) => l.id === body.id);
-    if (!lead) return json({ error: "lead not found" }, 404);
-    if (typeof body.status === "string") lead.status = body.status;
-    if (typeof body.notes === "string") lead.notes = body.notes;
-    await saveData(env, data);
+    const result = await env.DB.prepare(
+      `UPDATE leads SET
+         status = COALESCE(?, status),
+         notes = COALESCE(?, notes)
+       WHERE id = ?`
+    )
+      .bind(
+        typeof body.status === "string" ? body.status : null,
+        typeof body.notes === "string" ? body.notes : null,
+        body.id
+      )
+      .run();
+    if (result.meta.changes === 0) return json({ error: "lead not found" }, 404);
+    await touchUpdated(env);
+    const lead = await env.DB.prepare("SELECT * FROM leads WHERE id = ?").bind(body.id).first();
     return json({ ok: true, lead });
   }
 
   if (body.type === "application") {
     if (body.id) {
-      const app = data.applications.find((a) => a.id === body.id);
-      if (!app) return json({ error: "application not found" }, 404);
-      for (const field of ["company", "title", "dateApplied", "status", "notes", "leadId"]) {
-        if (typeof body[field] === "string") app[field] = body[field];
-      }
-      await saveData(env, data);
+      const result = await env.DB.prepare(
+        `UPDATE applications SET
+           company = COALESCE(?, company),
+           title = COALESCE(?, title),
+           dateApplied = COALESCE(?, dateApplied),
+           status = COALESCE(?, status),
+           notes = COALESCE(?, notes),
+           leadId = COALESCE(?, leadId)
+         WHERE id = ?`
+      )
+        .bind(
+          body.company ?? null,
+          body.title ?? null,
+          body.dateApplied ?? null,
+          body.status ?? null,
+          body.notes ?? null,
+          body.leadId ?? null,
+          body.id
+        )
+        .run();
+      if (result.meta.changes === 0) return json({ error: "application not found" }, 404);
+      await touchUpdated(env);
+      const app = await env.DB.prepare("SELECT * FROM applications WHERE id = ?").bind(body.id).first();
       return json({ ok: true, application: app });
     } else {
-      const app = {
-        id: nextId(data.applications, "a"),
-        leadId: body.leadId || "",
-        company: body.company || "",
-        title: body.title || "",
-        dateApplied: body.dateApplied || new Date().toISOString().slice(0, 10),
-        status: body.status || "Applied",
-        notes: body.notes || "",
-      };
-      data.applications.push(app);
-      await saveData(env, data);
+      const result = await env.DB.prepare(
+        `INSERT INTO applications (leadId, company, title, dateApplied, status, notes)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      )
+        .bind(
+          body.leadId || "",
+          body.company || "",
+          body.title || "",
+          body.dateApplied || today(),
+          body.status || "Applied",
+          body.notes || ""
+        )
+        .run();
+      await touchUpdated(env);
+      const app = await env.DB
+        .prepare("SELECT * FROM applications WHERE id = ?")
+        .bind(result.meta.last_row_id)
+        .first();
       return json({ ok: true, application: app });
     }
   }
 
   return json({ error: "unknown update type" }, 400);
+}
+
+async function handleMigrateFromKv(env) {
+  if (!env.TRACKER_KV) return json({ error: "no KV binding present - already cleaned up?" }, 400);
+  const raw = await env.TRACKER_KV.get("data");
+  if (!raw) return json({ migrated: { leads: 0, applications: 0 }, note: "no KV data found" });
+
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return json({ error: "KV data isn't valid JSON" }, 500);
+  }
+
+  let leadsAdded = 0;
+  if (Array.isArray(data.leads) && data.leads.length > 0) {
+    const stmt = env.DB.prepare(
+      `INSERT OR IGNORE INTO leads (search, found, company, title, location, url, verified, fit, status, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    const batch = data.leads.map((l) =>
+      stmt.bind(
+        l.search || "",
+        l.found || today(),
+        l.company || "",
+        l.title || "",
+        l.location || "",
+        l.url || "",
+        l.verified || today(),
+        l.fit || "",
+        l.status || "New",
+        l.notes || ""
+      )
+    );
+    const results = await env.DB.batch(batch);
+    leadsAdded = results.reduce((n, r) => n + (r.meta.changes || 0), 0);
+  }
+
+  let appsAdded = 0;
+  if (Array.isArray(data.applications) && data.applications.length > 0) {
+    const stmt = env.DB.prepare(
+      `INSERT INTO applications (leadId, company, title, dateApplied, status, notes)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    );
+    const batch = data.applications.map((a) =>
+      stmt.bind(
+        a.leadId || "",
+        a.company || "",
+        a.title || "",
+        a.dateApplied || today(),
+        a.status || "Applied",
+        a.notes || ""
+      )
+    );
+    const results = await env.DB.batch(batch);
+    appsAdded = results.reduce((n, r) => n + (r.meta.changes || 0), 0);
+  }
+
+  if (leadsAdded > 0 || appsAdded > 0) await touchUpdated(env);
+
+  return json({
+    migrated: { leads: leadsAdded, applications: appsAdded },
+    sourceHad: { leads: (data.leads || []).length, applications: (data.applications || []).length },
+  });
 }
 
 const PAGE_HTML = `<!doctype html>

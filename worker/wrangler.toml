@@ -2,8 +2,15 @@ name = "job-search-tracker"
 main = "src/index.js"
 compatibility_date = "2025-01-01"
 
-# Created by: wrangler kv namespace create TRACKER_KV
-# Paste the id it prints below.
+# Created by: wrangler d1 create job-search-tracker-db
+# Paste the database_id it prints below.
+[[d1_databases]]
+binding = "DB"
+database_name = "job-search-tracker-db"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+# Kept temporarily so /api/migrate-from-kv can read your existing data once.
+# Safe to delete this whole block (and the migrate endpoint) after migrating.
 [[kv_namespaces]]
 binding = "TRACKER_KV"
 id = "0616f92a5d524f0bb26621b160ec3f93"
