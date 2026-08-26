@@ -93,28 +93,58 @@ td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
 tr:last-child td{border-bottom:0}
 tbody tr:hover{background:var(--surface2)}
 .co{font-weight:600;white-space:nowrap}
-.ttl{display:block;max-width:360px}
-.ttl a{color:var(--ink);text-decoration:none;border-bottom:1px solid var(--line)}
-.ttl a:hover{border-bottom-color:var(--accent);color:var(--accent)}
-.loc{color:var(--ink2);font-size:13px;max-width:190px}
 .dt{color:var(--ink3);font-size:12.5px;white-space:nowrap}
-.fit{color:var(--ink2);font-size:12.5px;max-width:260px;display:block}
-td select{padding:5px 7px;font-size:13px;min-width:118px}
-td textarea{font-size:13px;min-height:32px;min-width:150px}
-
-td:first-child{border-left:3px solid transparent}
-tr.p-high td:first-child{border-left-color:var(--pri-high)}
-tr.p-med td:first-child{border-left-color:var(--pri-med)}
-.lc{border-left:3px solid transparent}
-.lc.p-high{border-left-color:var(--pri-high)}
-.lc.p-med{border-left-color:var(--pri-med)}
-.geo{display:inline-block;margin-top:4px;font-size:11px;font-weight:600;letter-spacing:.03em;
+.geo{display:inline-block;font-size:11px;font-weight:600;letter-spacing:.03em;
   padding:2px 8px;border-radius:99px;white-space:nowrap}
 .geo.p-high{background:var(--pri-high-soft);color:var(--pri-high)}
 .geo.p-med{background:var(--pri-med-soft);color:var(--pri-med)}
 .key{display:flex;gap:15px;flex-wrap:wrap;align-items:center;font-size:12.5px;
   color:var(--ink3);padding:0 0 11px}
 .key i{display:inline-block;width:3px;height:12px;border-radius:2px;margin-right:6px;vertical-align:-2px}
+
+/* Master-detail: a compact list on the left, the full record on the right -
+   no expand/collapse, every field is one click away. Used by both the
+   per-track leads tabs and Applications. */
+.md{display:flex;border:1px solid var(--line);border-radius:12px;overflow:hidden;
+  background:var(--surface);box-shadow:var(--shadow)}
+.md-list{width:320px;flex:0 0 320px;border-right:1px solid var(--line);
+  overflow-y:auto;max-height:min(720px,calc(100vh - 260px))}
+.md-row{padding:11px 16px;border-bottom:1px solid var(--line);border-left:3px solid transparent;
+  cursor:pointer}
+.md-row:last-child{border-bottom:0}
+.md-row:hover{background:var(--surface2)}
+.md-row.sel{background:var(--accent-soft)}
+.md-row.sel:hover{background:var(--accent-soft)}
+.md-row.p-high{border-left-color:var(--pri-high)}
+.md-row.p-med{border-left-color:var(--pri-med)}
+.md-row-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.md-row-ttl{font-size:13px;color:var(--ink2);margin-top:2px;line-height:1.35}
+.md-row-loc{font-size:11.5px;color:var(--ink3);margin-top:6px}
+.md-row-loc .geo{margin-left:6px;padding:1px 7px}
+.md-detail{flex:1;min-width:0;padding:22px 28px;overflow-y:auto;
+  max-height:min(720px,calc(100vh - 260px))}
+.md-empty{padding:70px 20px;text-align:center;color:var(--ink3)}
+.dh-track{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink3)}
+.dh-head h1{font-size:21px;margin-top:6px}
+.dh-sub{font-size:14.5px;color:var(--ink2);margin-top:2px}
+.dh-meta{font-size:12.5px;color:var(--ink3);margin-top:7px}
+.dh-meta a{color:var(--accent)}
+.dh-fit{font-size:13px;color:var(--ink2);margin-top:10px;line-height:1.5}
+.dh-app-head{display:flex;gap:14px;flex-wrap:wrap}
+.dh-app-head .mf{flex:1;min-width:180px}
+.dh-status{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:18px}
+.dh-status select{width:auto;min-width:150px}
+.dh-status input[type=date]{width:auto}
+.dh-dates{font-size:12px;color:var(--ink3);display:flex;align-items:center;gap:6px}
+.dh-notes{margin-top:18px}
+.mf-label{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ink3);margin-bottom:6px}
+.facts-card{margin-top:20px;padding:16px 18px;background:var(--surface2);border:1px solid var(--line);border-radius:10px}
+.facts-card .more-grid{padding:0}
+@media (max-width:900px){
+  .md{flex-direction:column}
+  .md-list{width:100%;flex:none;border-right:0;border-bottom:1px solid var(--line);max-height:280px}
+  .md-detail{max-height:none}
+}
 
 .pill{display:inline-block;font-size:11.5px;font-weight:600;padding:3px 9px;border-radius:99px;
   border:1px solid transparent;white-space:nowrap}
@@ -148,26 +178,11 @@ tr.p-med td:first-child{border-left-color:var(--pri-med)}
 .empty{padding:44px 22px;text-align:center;color:var(--ink3)}
 .empty strong{display:block;color:var(--ink2);font-weight:600;margin-bottom:5px;font-size:15px}
 
-.cards{display:none;flex-direction:column;gap:10px}
-.lc{padding:14px;border-radius:12px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow)}
-.lc .top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:7px}
-.lc .co{font-size:14px}
-.lc .ttl{margin:2px 0 8px;font-size:14.5px;line-height:1.35}
-.lc .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:9px}
-.lc .row select{min-width:0;flex:1}
-.lc .meta{font-size:12.5px;color:var(--ink3);display:flex;gap:10px;flex-wrap:wrap}
-
-.more-row td{background:var(--surface2);padding:2px 12px 14px}
-.more-grid{display:grid;gap:10px 14px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));padding:10px 2px 2px}
+.more-grid{display:grid;gap:10px 14px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
 .mf label{display:block;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink3);margin-bottom:4px;font-weight:600}
-.lc .more-grid{padding:4px 0 0}
 .note{font-size:12.5px;color:var(--ink3);padding:14px 0 0;line-height:1.6}
-.del{color:var(--ink3);font-size:16px;line-height:1;padding:4px 7px}
-.del:hover{color:var(--crit)}
 @media (max-width:900px){
   .wrap{padding:0 13px 60px}
-  .scroller.responsive{display:none}
-  .cards{display:flex}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 
@@ -220,14 +235,14 @@ var TRACKS={
 
 var TOKEN=localStorage.getItem("tracker_token")||"";
 var state={updated:null,leads:[],applications:[]};
-var ui={tab:"dashboard",q:"",filter:"All",expanded:{}};
+var ui={tab:"dashboard",q:"",filter:"All",selected:{}};
 
-// Fields shown in leads' "Details" panel. These are DB columns shared with
+// Fields shown in a lead's detail panel. These are DB columns shared with
 // applications (see migrations/), minus "link" - a lead already has its own
-// url (the row's title link and the verified pill both point at it), so a
-// second link input here would just duplicate it. Applications get their
-// own dedicated Link column instead (see APP_COLS below), since a
-// manually-added application has no posting URL to fall back on.
+// url (the header link points at it), so a second link input here would
+// just duplicate it. Applications get a dedicated Link field instead
+// (APP_EXTRA_FIELDS below), since a manually-added application has no
+// posting URL to fall back on.
 var EXTRA_FIELDS=[
   ["referral","Referral"],
   ["comp","Comp range"],
@@ -239,9 +254,11 @@ var EXTRA_FIELDS=[
   ["nextAction","Next action"],
   ["nextActionDate","When","date"]
 ];
-function moreGridHtml(item,isApp){
+var APP_EXTRA_FIELDS=EXTRA_FIELDS.slice(0,5).concat([["link","Link"]]).concat(EXTRA_FIELDS.slice(5));
+
+function factsGridHtml(item,fields,isApp){
   var appAttr=isApp?' data-app="1"':'';
-  return '<div class="more-grid">'+EXTRA_FIELDS.map(function(f){
+  return '<div class="more-grid">'+fields.map(function(f){
     var key=f[0],label=f[1],type=f[2]||"text";
     var val=item[key]||"";
     var input=type==="date"
@@ -425,52 +442,40 @@ function leadsTab(key){
   }
   if(!rows.length) return h+'<div class="card empty"><strong>Nothing matches</strong>Try a different filter.</div>';
 
-  h+='<div class="card scroller responsive"><table><thead><tr>'+
-    '<th>Company</th><th>Role</th><th>Location</th><th>Found</th><th>Status</th><th>Your notes</th><th></th><th></th>'+
-    '</tr></thead><tbody>'+rows.map(function(l){
-    var g=geo(l.location);
-    var open=!!ui.expanded[l.id];
-    var row='<tr'+(g?' class="'+g.p+'"':'')+'><td class="co">'+esc(l.company)+'</td>'+
-      '<td><span class="ttl"><a href="'+esc(l.url)+'" target="_blank" rel="noopener">'+esc(l.title)+'</a></span>'+
-        (l.fit?'<span class="fit">'+esc(l.fit)+'</span>':"")+'</td>'+
-      '<td class="loc">'+esc(l.location)+(g?'<br><span class="geo '+g.p+'">'+esc(g.label)+'</span>':'')+'</td>'+
-      '<td class="dt mono">'+esc(l.found)+'</td>'+
-      '<td>'+selectHtml(LEAD_STATUS,l.status,'data-id="'+l.id+'" data-field="status"')+'</td>'+
-      '<td><textarea data-id="'+l.id+'" data-field="notes" rows="1" placeholder="Add a note">'+esc(l.notes)+'</textarea></td>'+
-      '<td><span class="pill live" title="Confirmed live on this date">'+esc(l.verified)+'</span></td>'+
-      '<td><button class="btn ghost" data-expand="'+l.id+'">'+(open?'Hide':'Details')+'</button></td></tr>';
-    if(open){
-      row+='<tr class="more-row"><td colspan="8">'+moreGridHtml(l,false)+'</td></tr>';
-    }
-    return row;
-  }).join("")+'</tbody></table></div>';
+  var sel=rows.filter(function(l){return String(l.id)===String(ui.selected[key]);})[0]||rows[0];
+  ui.selected[key]=sel.id;
 
-  h+='<div class="cards">'+rows.map(function(l){
+  var listHtml=rows.map(function(l){
     var g=geo(l.location);
-    var open=!!ui.expanded[l.id];
-    return '<div class="lc'+(g?' '+g.p:'')+'"><div class="top"><span class="co">'+esc(l.company)+'</span>'+
-      '<span class="pill '+pillFor(l.status)+'">'+esc(l.status)+'</span></div>'+
-      '<div class="ttl"><a href="'+esc(l.url)+'" target="_blank" rel="noopener">'+esc(l.title)+'</a></div>'+
-      '<div class="meta"><span>'+esc(l.location)+'</span><span class="mono">Found '+esc(l.found)+'</span>'+
-      (g?'<span class="geo '+g.p+'">'+esc(g.label)+'</span>':'')+'</div>'+
-      (l.fit?'<div class="fit" style="margin-top:6px">'+esc(l.fit)+'</div>':"")+
-      '<div class="row">'+selectHtml(LEAD_STATUS,l.status,'data-id="'+l.id+'" data-field="status"')+'</div>'+
-      '<div class="row"><textarea data-id="'+l.id+'" data-field="notes" rows="2" placeholder="Your notes&hellip;">'+esc(l.notes)+'</textarea></div>'+
-      '<div class="row"><button class="btn ghost" data-expand="'+l.id+'">'+(open?'Hide details':'+ Details')+'</button></div>'+
-      (open?moreGridHtml(l,false):'')+
-      '</div>';
-  }).join("")+'</div>';
-  h+='<div class="note">Status and notes save when you click away from the field. Details &mdash; referral, comp, source, and the rest &mdash; save the same way. '+rows.length+' of '+all.length+' shown.</div>';
+    var cls="md-row"+(l.id===sel.id?" sel":"")+(g?" "+g.p:"");
+    return '<div class="'+cls+'" data-select="'+l.id+'" data-scope="'+key+'">'+
+      '<div class="md-row-top"><span class="co">'+esc(l.company)+'</span>'+
+        '<span class="pill '+pillFor(l.status)+'">'+esc(l.status)+'</span></div>'+
+      '<div class="md-row-ttl">'+esc(l.title)+'</div>'+
+      '<div class="md-row-loc">'+esc(l.location)+(g?'<span class="geo '+g.p+'">'+esc(g.label)+'</span>':'')+'</div>'+
+    '</div>';
+  }).join("");
+
+  h+='<div class="md"><div class="md-list">'+listHtml+'</div><div class="md-detail">'+leadDetailHtml(sel,key)+'</div></div>';
+  h+='<div class="note">Status, notes, and details save when you click away from the field. '+rows.length+' of '+all.length+' shown.</div>';
   return h;
 }
 
-var APP_COLS=[
-  ["company","Company","text"],["title","Role","text"],["team","Team / product","text"],
-  ["setup","Setup","text"],["source","Source","text"],["dateApplied","Applied","date"],
-  ["status","Status","status"],["lastContact","Last contact","date"],
-  ["nextAction","Next action","text"],["nextActionDate","When","date"],
-  ["resume","Resume","text"],["referral","Referral","text"],["comp","Comp range","text"],["notes","Notes","text"]
-];
+function leadDetailHtml(l,key){
+  var g=geo(l.location);
+  var h='<div class="dh-track">'+esc(TRACKS[key].label)+'</div>'+
+    '<div class="dh-head"><h1>'+esc(l.company)+'</h1>'+
+    '<div class="dh-sub">'+esc(l.title)+'</div>'+
+    '<div class="dh-meta">'+esc(l.location)+(g?' &middot; <span class="geo '+g.p+'">'+esc(g.label)+'</span>':'')+
+      ' &middot; <a href="'+esc(l.url)+'" target="_blank" rel="noopener">View posting &#8599;</a></div></div>';
+  if(l.fit)h+='<div class="dh-fit">'+esc(l.fit)+'</div>';
+  h+='<div class="dh-status">'+selectHtml(LEAD_STATUS,l.status,'data-id="'+l.id+'" data-field="status"')+
+    '<span class="dh-dates">Found '+esc(l.found)+' &middot; Confirmed live '+esc(l.verified)+'</span></div>';
+  h+='<div class="facts-card">'+factsGridHtml(l,EXTRA_FIELDS,false)+'</div>';
+  h+='<div class="dh-notes"><div class="mf-label">Notes</div>'+
+    '<textarea data-id="'+l.id+'" data-field="notes" rows="3" placeholder="Add a note">'+esc(l.notes)+'</textarea></div>';
+  return h;
+}
 
 function appsTab(){
   var A=state.applications;
@@ -480,22 +485,39 @@ function appsTab(){
     return h+'<div class="card empty"><strong>No applications logged</strong>'+
       'When you apply to something, add it here to track the conversation. Days-since and the follow-up list update themselves.</div>';
   }
-  h+='<div class="card scroller"><table><thead><tr>'+
-    APP_COLS.map(function(c){return '<th>'+esc(c[1])+'</th>';}).join("")+
-    '<th>Days</th><th>Link</th><th></th></tr></thead><tbody>'+
-    A.map(function(a){
-      var d=daysSince(a.dateApplied);
-      return '<tr>'+APP_COLS.map(function(c){
-        var f=c[0];
-        if(c[2]==="status") return '<td>'+selectHtml(APP_STATUS,a.status,'data-id="'+a.id+'" data-field="status" data-app="1"')+'</td>';
-        if(c[2]==="date") return '<td><input type="date" data-id="'+a.id+'" data-field="'+f+'" data-app="1" value="'+esc(a[f])+'"></td>';
-        return '<td><input type="text" data-id="'+a.id+'" data-field="'+f+'" data-app="1" value="'+esc(a[f])+'"></td>';
-      }).join("")+
-      '<td class="dt mono">'+(d===null?"&mdash;":d)+'</td>'+
-      '<td><input type="text" data-id="'+a.id+'" data-field="link" data-app="1" value="'+esc(a.link)+'" placeholder="URL"></td>'+
-      '<td><button class="btn ghost del" data-del="'+a.id+'" title="Remove">&times;</button></td></tr>';
-    }).join("")+'</tbody></table></div>'+
-    '<div class="note">Edits save when you click away. Days counts from the applied date.</div>';
+
+  var sel=A.filter(function(a){return String(a.id)===String(ui.selected.applications);})[0]||A[0];
+  ui.selected.applications=sel.id;
+
+  var listHtml=A.map(function(a){
+    var d=daysSince(a.dateApplied);
+    var cls="md-row"+(a.id===sel.id?" sel":"");
+    return '<div class="'+cls+'" data-select="'+a.id+'" data-scope="applications">'+
+      '<div class="md-row-top"><span class="co">'+esc(a.company||"Untitled")+'</span>'+
+        '<span class="pill '+pillFor(a.status)+'">'+esc(a.status)+'</span></div>'+
+      '<div class="md-row-ttl">'+esc(a.title||"&mdash;")+'</div>'+
+      '<div class="md-row-loc">Applied '+esc(a.dateApplied)+(d!==null?' &middot; '+d+'d':'')+'</div>'+
+    '</div>';
+  }).join("");
+
+  h+='<div class="md"><div class="md-list">'+listHtml+'</div><div class="md-detail">'+appDetailHtml(sel)+'</div></div>';
+  h+='<div class="note">Edits save when you click away. Days counts from the applied date.</div>';
+  return h;
+}
+
+function appDetailHtml(a){
+  var d=daysSince(a.dateApplied);
+  var h='<div class="dh-app-head">'+
+    '<div class="mf"><label>Company</label><input type="text" data-id="'+a.id+'" data-field="company" data-app="1" value="'+esc(a.company)+'" placeholder="Company"></div>'+
+    '<div class="mf"><label>Role</label><input type="text" data-id="'+a.id+'" data-field="title" data-app="1" value="'+esc(a.title)+'" placeholder="Role"></div>'+
+  '</div>';
+  h+='<div class="dh-status">'+selectHtml(APP_STATUS,a.status,'data-id="'+a.id+'" data-field="status" data-app="1"')+
+    '<span class="dh-dates">Applied <input type="date" data-id="'+a.id+'" data-field="dateApplied" data-app="1" value="'+esc(a.dateApplied)+'">'+
+      (d!==null?' &middot; '+d+' days':'')+'</span>'+
+    '<button class="btn ghost" data-del="'+a.id+'" style="margin-left:auto">Remove</button></div>';
+  h+='<div class="facts-card">'+factsGridHtml(a,APP_EXTRA_FIELDS,true)+'</div>';
+  h+='<div class="dh-notes"><div class="mf-label">Notes</div>'+
+    '<textarea data-id="'+a.id+'" data-field="notes" data-app="1" rows="3">'+esc(a.notes)+'</textarea></div>';
   return h;
 }
 
@@ -517,10 +539,10 @@ document.addEventListener("click",function(e){
   var f=e.target.closest("[data-filter]");
   if(f){ui.filter=f.getAttribute("data-filter"); render(); return;}
 
-  var ex=e.target.closest("[data-expand]");
-  if(ex){
-    var exId=ex.getAttribute("data-expand");
-    ui.expanded[exId]=!ui.expanded[exId];
+  var sr=e.target.closest("[data-select]");
+  if(sr){
+    var scope=sr.getAttribute("data-scope");
+    ui.selected[scope]=sr.getAttribute("data-select");
     render();
     return;
   }
