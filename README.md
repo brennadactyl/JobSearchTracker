@@ -11,24 +11,39 @@ see [private.example/README.md](private.example/README.md) for the expected
 layout. That separation is what makes this repo safe to keep on GitHub (public
 or private) and to reuse across machines.
 
-**The tracker is a plain webpage** (a Cloudflare Worker + KV, see
+**The tracker is a plain webpage** (a Cloudflare Worker + D1, see
 [worker/README.md](worker/README.md)), not a Claude-specific artifact - so the
 whole pipeline runs through the standalone `claude` CLI with no desktop app or
 special tooling required. Search results reach the page via a `curl` POST to
-a small API; that's it.
+a small API; every edit is one D1 row write, not a shared blob, so a headless
+sync and a browser edit landing at the same moment can't clobber each other.
+
+## Architecture
+
+![Architecture diagram: Task Scheduler fires the headless Claude CLI three times daily, which reads and writes the local private/ folder, searches and verifies career sites, and posts new leads to a Cloudflare Worker. The Worker reads and writes a D1 database and serves the same data to the browser. Tooling code syncs separately with GitHub, never touching the private data.](docs/architecture.svg)
+
+Full write-up with a reference table of routes and schedules:
+[docs/architecture.html](docs/architecture.html) (open locally in a browser -
+GitHub shows source for `.html` files rather than rendering them).
 
 ## Contents
 
 ```
+docs/
+  architecture.svg           the diagram above
+  architecture.html           full architecture write-up (open in a browser)
 scripts/
-  run-search.ps1          runs one search (engineering | technical-pm | product)
-  setup-scheduler.ps1      registers all three as daily Windows Scheduled Tasks
+  run-search.ps1              runs one search (engineering | technical-pm | product)
+  setup-scheduler.ps1          registers all three as daily Windows Scheduled Tasks
 worker/
-  src/index.js              the tracker webpage + API (Cloudflare Worker)
-  wrangler.toml               deploy config
-  README.md                   one-time deploy instructions
+  src/index.js                  routing
+  src/api.js                    D1-backed API handlers
+  src/page.html                 the tracker webpage itself
+  migrations/                   D1 schema, applied via `wrangler d1 migrations apply`
+  wrangler.toml                  deploy config
+  README.md                      one-time deploy instructions
 private.example/
-  README.md                  expected layout for your own private data folder
+  README.md                    expected layout for your own private data folder
 ```
 
 ## Setup on any machine
@@ -81,9 +96,10 @@ finding. Watch especially for URLs that resolve to a company's *listing
 index* rather than the individual posting - the title text matches, so it
 looks right, and it isn't.
 
-**Fetch reliability varies by company and drifts week to week.** Your private
-`docs/` files keep per-company notes; re-verify rather than trusting them
-blindly.
+**Fetch reliability varies by company and drifts week to week.** Your
+`private/docs/` files (not this repo's top-level `docs/`, which is just the
+architecture write-up) keep per-company notes; re-verify rather than trusting
+them blindly.
 
 **Scheduled tasks only run while you're logged in.** For true run-when-closed
 scheduling you'd need the machine to stay logged in (Task Scheduler can be

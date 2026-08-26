@@ -1,0 +1,320 @@
+<title>Job Search Tracker Architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=Source+Sans+3:wght@400;500;600&family=Space+Mono:wght@400;700&display=swap">
+<style>
+  :root {
+    --bg: #FAFAF7;
+    --surface: #FFFFFF;
+    --surface2: #F1F1EC;
+    --ink: #1D2027;
+    --ink2: #62697A;
+    --ink3: #9297A3;
+    --line: #DBDCE1;
+    --line-strong: #C3C5CE;
+    --accent: #4548D6;
+    --accent-soft: #E9E9FB;
+    --private: #A9660E;
+    --private-soft: #F7ECDA;
+    --shadow: 0 1px 2px rgba(29,32,39,.05), 0 10px 28px -16px rgba(29,32,39,.16);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14161C;
+      --surface: #1C1F27;
+      --surface2: #23262F;
+      --ink: #E9EAEF;
+      --ink2: #A2A8B5;
+      --ink3: #6E7481;
+      --line: #2B2F3A;
+      --line-strong: #3A3F4C;
+      --accent: #8A8FF5;
+      --accent-soft: #262A4A;
+      --private: #E0A544;
+      --private-soft: #372A11;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 28px -16px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14161C;
+    --surface: #1C1F27;
+    --surface2: #23262F;
+    --ink: #E9EAEF;
+    --ink2: #A2A8B5;
+    --ink3: #6E7481;
+    --line: #2B2F3A;
+    --line-strong: #3A3F4C;
+    --accent: #8A8FF5;
+    --accent-soft: #262A4A;
+    --private: #E0A544;
+    --private-soft: #372A11;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 28px -16px rgba(0,0,0,.6);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Source Sans 3", system-ui, -apple-system, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+  }
+  .wrap { max-width: 1160px; margin: 0 auto; padding: 56px 24px 96px; }
+
+  h1, h2 { font-family: "Archivo", system-ui, sans-serif; letter-spacing: -0.01em; text-wrap: balance; }
+  .mono { font-family: "Space Mono", ui-monospace, "SF Mono", monospace; }
+
+  header { margin-bottom: 44px; max-width: 720px; }
+  .eyebrow {
+    font-family: "Space Mono", monospace; font-size: 12px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 10px;
+  }
+  h1 { font-size: clamp(28px, 4vw, 38px); font-weight: 800; margin: 0 0 12px; color: var(--ink); }
+  header p { color: var(--ink2); font-size: 17px; margin: 0; }
+
+  figure { margin: 0 0 56px; }
+  .diagram-frame {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: var(--shadow);
+    overflow-x: auto;
+  }
+  svg { display: block; width: 100%; height: auto; min-width: 760px; }
+  figcaption {
+    margin-top: 14px; color: var(--ink2); font-size: 14px; max-width: 760px;
+  }
+
+  section { margin-bottom: 48px; }
+  section h2 { font-size: 20px; font-weight: 700; margin: 0 0 16px; }
+  .cols {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px;
+  }
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    padding: 18px 20px;
+  }
+  .card .k {
+    font-family: "Space Mono", monospace; font-size: 11px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--ink3); margin: 0 0 8px;
+  }
+  .card p { margin: 0; color: var(--ink); font-size: 14.5px; line-height: 1.55; }
+  .card p + p { margin-top: 8px; }
+  .card.private { border-color: color-mix(in srgb, var(--private) 35%, var(--line)); background: var(--private-soft); }
+  .card.private .k { color: var(--private); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .table-frame { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; overflow-x: auto; }
+  th, td { text-align: left; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+  thead th {
+    background: var(--surface2); font-family: "Space Mono", monospace; font-size: 11px;
+    letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink2); font-weight: 700;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody td.mono { color: var(--ink); font-size: 13px; }
+  tbody td:first-child { color: var(--ink2); white-space: nowrap; }
+
+  footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--line); color: var(--ink3); font-size: 13px; }
+
+  @media (max-width: 760px) {
+    .cols { grid-template-columns: 1fr; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">System architecture</p>
+    <h1>Job Search Tracker</h1>
+    <p>Three headless searches run daily on a schedule, verify postings against real career pages, and sync new results to a small hosted webpage — with no AI-specific tooling anywhere past the search step itself.</p>
+  </header>
+
+  <figure>
+    <div class="diagram-frame">
+      <svg viewBox="0 0 1440 530" role="img" aria-label="Windows Task Scheduler fires the claude CLI three times daily; it reads and writes private local data, searches and verifies career sites, and posts new leads to a Cloudflare Worker. The Worker reads and writes a D1 database and serves the same data to the browser for live editing. Tooling code syncs separately with GitHub, never touching the private data.">
+
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="currentColor" />
+          </marker>
+          <marker id="arrowAccent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)" />
+          </marker>
+        </defs>
+
+        <!-- ===== connectors (drawn first, under boxes) ===== -->
+        <g fill="none" stroke="currentColor" stroke-width="1.6" opacity="0.85">
+          <!-- GitHub <-> Task Scheduler (dashed, code sync) -->
+          <line x1="170" y1="90" x2="170" y2="140" stroke-dasharray="5 5" marker-end="url(#arrow)" marker-start="url(#arrow)" />
+          <!-- Task Scheduler -> Claude CLI -->
+          <line x1="170" y1="210" x2="170" y2="260" marker-end="url(#arrow)" />
+          <!-- Claude CLI <-> private/ -->
+          <line x1="170" y1="350" x2="170" y2="400" marker-end="url(#arrow)" marker-start="url(#arrow)" />
+          <!-- Claude CLI -> Career sites (elbow) -->
+          <polyline points="300,275 520,275 520,55 590,55" marker-end="url(#arrow)" />
+          <!-- Worker -> D1 -->
+          <line x1="720" y1="350" x2="720" y2="400" marker-end="url(#arrow)" />
+        </g>
+        <g fill="none" stroke="var(--accent)" stroke-width="2">
+          <!-- Claude CLI -> Worker (sync new leads) -->
+          <line x1="300" y1="315" x2="590" y2="315" marker-end="url(#arrowAccent)" />
+          <!-- Worker <-> Browser -->
+          <line x1="850" y1="305" x2="1140" y2="305" marker-end="url(#arrowAccent)" marker-start="url(#arrowAccent)" />
+        </g>
+
+        <!-- ===== connector labels ===== -->
+        <g font-family="Space Mono, monospace" font-size="11.5" fill="currentColor">
+          <text x="184" y="118" opacity="0.75">git pull / push</text>
+          <text x="184" y="238">fires 3x daily</text>
+          <text x="82" y="380" text-anchor="end" opacity="0.75">read docs</text>
+          <text x="184" y="380">write doc</text>
+          <text x="330" y="80">WebSearch + WebFetch</text>
+          <text x="330" y="96" opacity="0.7">verify every URL</text>
+        </g>
+        <g font-family="Space Mono, monospace" font-size="11.5" fill="var(--accent)">
+          <text x="330" y="308">POST /api/leads</text>
+          <text x="330" y="324" opacity="0.75">curl + Bearer token</text>
+          <text x="878" y="296">GET / · fetch /api/data</text>
+          <text x="878" y="312" opacity="0.75">/api/update, Bearer token</text>
+        </g>
+        <g font-family="Space Mono, monospace" font-size="11.5" fill="currentColor">
+          <text x="734" y="380">SQL</text>
+          <text x="734" y="396" opacity="0.7">UNIQUE(search,url)</text>
+        </g>
+
+        <!-- ===== boxes ===== -->
+        <!-- GitHub -->
+        <g>
+          <rect x="40" y="20" width="260" height="70" rx="9" fill="var(--surface2)" stroke="var(--line-strong)" stroke-width="1.3" />
+          <text x="60" y="48" font-family="Archivo, sans-serif" font-weight="700" font-size="15" fill="currentColor">GitHub</text>
+          <text x="60" y="68" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">JobSearchTracker — scripts, worker code</text>
+          <text x="60" y="83" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">no personal data, ever</text>
+        </g>
+
+        <!-- Task Scheduler -->
+        <g>
+          <rect x="40" y="140" width="260" height="70" rx="9" fill="var(--surface)" stroke="var(--line-strong)" stroke-width="1.3" />
+          <text x="60" y="168" font-family="Archivo, sans-serif" font-weight="700" font-size="15" fill="currentColor">Windows Task Scheduler</text>
+          <text x="60" y="188" font-family="Space Mono, monospace" font-size="11.5" fill="currentColor" opacity="0.7">run-search.ps1</text>
+          <text x="60" y="203" font-family="Space Mono, monospace" font-size="11.5" fill="currentColor" opacity="0.7">08:00 · 08:30 · 09:00</text>
+        </g>
+
+        <!-- Claude CLI -->
+        <g>
+          <rect x="40" y="260" width="260" height="90" rx="9" fill="var(--surface)" stroke="var(--line-strong)" stroke-width="1.3" />
+          <text x="60" y="288" font-family="Archivo, sans-serif" font-weight="700" font-size="15" fill="currentColor">Claude CLI — headless</text>
+          <text x="60" y="308" font-family="Space Mono, monospace" font-size="11" fill="currentColor" opacity="0.7">claude -p --allowedTools</text>
+          <text x="60" y="323" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">Read Write Edit WebSearch</text>
+          <text x="60" y="338" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">WebFetch Bash — scoped, no gate</text>
+        </g>
+
+        <!-- private/ -->
+        <g>
+          <rect x="40" y="400" width="260" height="90" rx="9" fill="var(--private-soft)" stroke="var(--private)" stroke-width="1.4" opacity="0.95" />
+          <text x="60" y="428" font-family="Archivo, sans-serif" font-weight="700" font-size="15" fill="var(--private)">private/ — local only</text>
+          <text x="60" y="448" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.75">docs, resumes, prompts</text>
+          <text x="60" y="463" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.75">gitignored — never committed</text>
+          <text x="60" y="478" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.75">candidate profile, target cos.</text>
+        </g>
+
+        <!-- Career sites -->
+        <g>
+          <rect x="590" y="20" width="260" height="70" rx="9" fill="var(--surface)" stroke="var(--line-strong)" stroke-width="1.3" />
+          <text x="610" y="48" font-family="Archivo, sans-serif" font-weight="700" font-size="15" fill="currentColor">Career sites</text>
+          <text x="610" y="68" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">Riot, Amazon, Discord,</text>
+          <text x="610" y="83" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">Rockstar, 2K, Roblox, …</text>
+        </g>
+
+        <!-- Worker -->
+        <g>
+          <rect x="590" y="260" width="260" height="90" rx="9" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.6" />
+          <text x="610" y="288" font-family="Archivo, sans-serif" font-weight="700" font-size="15" fill="var(--accent)">Cloudflare Worker</text>
+          <text x="610" y="308" font-family="Space Mono, monospace" font-size="11" fill="currentColor" opacity="0.75">job-search-tracker</text>
+          <text x="610" y="323" font-family="Space Mono, monospace" font-size="11" fill="currentColor" opacity="0.75">.workers.dev</text>
+          <text x="610" y="341" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">serves page + JSON API</text>
+        </g>
+
+        <!-- D1 -->
+        <g>
+          <rect x="590" y="400" width="260" height="90" rx="9" fill="var(--surface)" stroke="var(--line-strong)" stroke-width="1.3" />
+          <text x="610" y="428" font-family="Archivo, sans-serif" font-weight="700" font-size="15" fill="currentColor">D1 database</text>
+          <text x="610" y="448" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">leads, applications — SQLite</text>
+          <text x="610" y="463" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">one row per posting, atomic</text>
+          <text x="610" y="478" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">writes — no shared blob to race</text>
+        </g>
+
+        <!-- Browser -->
+        <g>
+          <rect x="1140" y="260" width="260" height="90" rx="9" fill="var(--surface)" stroke="var(--line-strong)" stroke-width="1.3" />
+          <text x="1160" y="288" font-family="Archivo, sans-serif" font-weight="700" font-size="15" fill="currentColor">Browser</text>
+          <text x="1160" y="308" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">view + edit status, notes</text>
+          <text x="1160" y="323" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">mark applied, add details</text>
+          <text x="1160" y="341" font-family="Space Mono, monospace" font-size="11" fill="currentColor" opacity="0.65">token in localStorage</text>
+        </g>
+
+      </svg>
+    </div>
+    <figcaption>Three daily headless runs write to a local, private doc and push only new verified postings to the Worker; the same Worker backs the live webpage, so what you see in the browser and what the search wrote are the same D1 rows. Tooling (scripts, Worker code) syncs with GitHub on its own — the private-data box never does.</figcaption>
+  </figure>
+
+  <section>
+    <h2>How it works</h2>
+    <div class="cols">
+      <div class="card">
+        <p class="k">01 · Pipeline</p>
+        <p>Task Scheduler fires <code class="mono">run-search.ps1</code> three times a day, once per track (SWE, TPM, CPM). Each run invokes the Claude CLI non-interactively with a fixed, scoped tool list — no permission prompt sits waiting for a person who isn't there.</p>
+        <p>The CLI reads that track's baseline doc and resume, searches and verifies real job postings, rewrites the doc, then <code class="mono">curl</code>s any genuinely new ones to the Worker.</p>
+      </div>
+      <div class="card">
+        <p class="k">02 · Live page</p>
+        <p>The same Worker serves the tracker webpage and answers its <code class="mono">fetch</code> calls. Every edit — a status change, a note — is one D1 row update, so a browser edit and a headless sync landing at the same moment can't silently overwrite each other.</p>
+        <p>A single bearer token gates every route; the browser stores it in <code class="mono">localStorage</code> after first entry.</p>
+      </div>
+      <div class="card private">
+        <p class="k">03 · Data boundary</p>
+        <p>Everything that names Brenna — resumes, target companies, candidate profile, the prompts themselves — lives in a local <code class="mono">private/</code> folder, gitignored from day one.</p>
+        <p>Only the mechanism (scripts, Worker source, schema) lives in the public GitHub repo, which is what makes it safe to clone onto another machine.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Reference</h2>
+    <div class="table-frame">
+      <table>
+        <thead>
+          <tr><th>Track</th><th>Trigger</th><th>Baseline doc</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Engineering</td><td class="mono">08:00 daily</td><td class="mono">private/docs/tracked_job_postings.md</td></tr>
+          <tr><td>Technical PM</td><td class="mono">08:30 daily</td><td class="mono">private/docs/tracked_pm_postings.md</td></tr>
+          <tr><td>Product</td><td class="mono">09:00 daily</td><td class="mono">private/docs/tracked_cpm_postings.md</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="table-frame">
+      <table>
+        <thead>
+          <tr><th>Route</th><th>Method</th><th>Purpose</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="mono">/</td><td class="mono">GET</td><td>tracker webpage</td></tr>
+          <tr><td class="mono">/api/data</td><td class="mono">GET</td><td>current leads + applications</td></tr>
+          <tr><td class="mono">/api/leads</td><td class="mono">POST</td><td>add new postings, deduped on (search, url)</td></tr>
+          <tr><td class="mono">/api/update</td><td class="mono">POST</td><td>edit a lead's status/notes, or add/edit an application</td></tr>
+          <tr><td class="mono">/api/delete-application</td><td class="mono">POST</td><td>remove one application row</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    Repo: github.com/brennadactyl/JobSearchTracker — tooling only, no personal data.
+  </footer>
+
+</div>
