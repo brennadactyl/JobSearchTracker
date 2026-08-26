@@ -9,12 +9,16 @@
   <DataDir> so the relative paths inside the prompt (docs/..., resumes/..., etc.)
   resolve correctly.
 
-  Runs with a scoped tool allowlist (Read/Write/Edit/Glob/Grep/WebSearch/WebFetch
-  plus `curl` via Bash) so it doesn't stall on a permission prompt with nobody
-  there to answer it. The prompt syncs new postings to the tracker webpage via
-  `curl`, which needs TRACKER_URL and TRACKER_API_TOKEN set as environment
-  variables (see ../worker/README.md) - if they're missing, the search and doc
-  update still run, the sync step is just skipped.
+  Runs with a scoped tool allowlist (Read/Write/Edit/Glob/Grep/WebSearch/WebFetch/
+  Bash) so it doesn't stall on a permission prompt with nobody there to answer
+  it. Bash is unscoped rather than limited to e.g. "Bash(curl:*)" - a narrower
+  pattern blocked the model from even checking whether TRACKER_URL/
+  TRACKER_API_TOKEN were set before attempting curl, since env-checking
+  commands (printenv etc.) didn't match the pattern. The prompt syncs new
+  postings to the tracker webpage via `curl`, which needs TRACKER_URL and
+  TRACKER_API_TOKEN set as environment variables (see ../worker/README.md) -
+  if they're missing, the search and doc update still run, the sync step is
+  just skipped.
 
   Logs a config summary at the start, a heartbeat line every 20s while the
   search is running (searches take several minutes - without this the log
@@ -75,7 +79,7 @@ if (-not $claude) {
 $claudePath = if ($claude -is [System.Management.Automation.CommandInfo]) { $claude.Source } else { $claude }
 
 $prompt = Get-Content -Raw -Path $promptFile
-$allowedTools = "Read Write Edit Glob Grep WebSearch WebFetch Bash(curl:*)"
+$allowedTools = "Read Write Edit Glob Grep WebSearch WebFetch Bash"
 
 Log "===== starting $Task ====="
 Log "data dir:        $DataDir"
