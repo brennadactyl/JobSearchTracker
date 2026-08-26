@@ -120,6 +120,7 @@ tr.more-row td{padding:4px 12px 14px}
 .loc .geo{display:inline-block;margin-top:3px}
 td.rc{max-width:260px}
 td.rc a{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+td.cc{max-width:170px;overflow:hidden;text-overflow:ellipsis}
 td:first-child{border-left:3px solid transparent}
 tr.p-high td:first-child{border-left-color:var(--pri-high)}
 tr.p-med td:first-child{border-left-color:var(--pri-med)}
@@ -521,7 +522,7 @@ function leadsGridHtml(rows,trackKey){
     var g=geo(l.location);
     var open=!!ui.expanded[l.id];
     var row='<tr'+(g?' class="'+g.p+'"':'')+'>'+
-      '<td class="co">'+esc(l.company)+'</td>'+
+      '<td class="co cc" title="'+esc(l.company)+'">'+esc(l.company)+'</td>'+
       '<td class="rc"><a href="'+esc(l.url)+'" target="_blank" rel="noopener" title="'+esc(l.title)+'">'+esc(l.title)+'</a></td>'+
       '<td class="loc" title="'+esc(l.location)+'"><div class="loc-txt">'+esc(l.location)+'</div>'+(g?'<span class="geo '+g.p+'">'+esc(g.label)+'</span>':'')+'</td>'+
       '<td>'+selectHtml(LEAD_STATUS,l.status,'data-id="'+l.id+'" data-field="status"')+'</td>'+
@@ -544,7 +545,7 @@ function leadsGridHtml(rows,trackKey){
 function leadDetailHtml(l,key){
   var g=geo(l.location);
   var h='<div class="dh-track">'+esc(TRACKS[key].label)+'</div>'+
-    '<div class="dh-head"><h1>'+esc(l.company)+'</h1>'+
+    '<div class="dh-head"><h1 title="'+esc(l.company)+'">'+esc(l.company)+'</h1>'+
     '<div class="dh-sub">'+esc(l.title)+'</div>'+
     '<div class="dh-meta">'+esc(l.location)+(g?' &middot; <span class="geo '+g.p+'">'+esc(g.label)+'</span>':'')+
       ' &middot; <a href="'+esc(l.url)+'" target="_blank" rel="noopener">View posting &#8599;</a></div></div>';
