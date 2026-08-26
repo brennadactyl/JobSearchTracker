@@ -102,6 +102,25 @@ tbody tr:hover{background:var(--surface2)}
   color:var(--ink3);padding:0 0 11px}
 .key i{display:inline-block;width:3px;height:12px;border-radius:2px;margin-right:6px;vertical-align:-2px}
 
+.viewsw{display:flex;gap:2px;margin-left:auto;background:var(--surface2);padding:3px;border-radius:8px}
+.vbtn{appearance:none;border:0;background:none;font:inherit;font-size:12.5px;font-weight:600;
+  color:var(--ink2);padding:5px 12px;border-radius:6px;cursor:pointer}
+.vbtn[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
+.vbtn:hover{color:var(--ink)}
+
+/* Dense grid: the same records as one wide, fully-editable table -
+   maximum information density, everything visible without a click. */
+.grid-wrap{overflow-x:auto}
+.grid-wrap a{color:var(--accent);text-decoration:none;border-bottom:1px solid var(--line)}
+.grid-wrap a:hover{border-bottom-color:var(--accent)}
+.loc{color:var(--ink2);font-size:13px;max-width:220px}
+td:first-child{border-left:3px solid transparent}
+tr.p-high td:first-child{border-left-color:var(--pri-high)}
+tr.p-med td:first-child{border-left-color:var(--pri-med)}
+td select{padding:5px 7px;font-size:13px;min-width:112px}
+td input[type=text],td input[type=date]{font-size:13px;min-width:104px}
+td textarea{font-size:13px;min-height:32px;min-width:130px}
+
 /* Master-detail: a compact list on the left, the full record on the right -
    no expand/collapse, every field is one click away. Used by both the
    per-track leads tabs and Applications. */
@@ -237,7 +256,7 @@ var TRACKS={
 
 var TOKEN=localStorage.getItem("tracker_token")||"";
 var state={updated:null,leads:[],applications:[]};
-var ui={tab:"dashboard",q:"",filter:"All",selected:{}};
+var ui={tab:"dashboard",q:"",filter:"All",selected:{},view:"detail"};
 
 // Fields shown in a lead's detail panel. These are DB columns shared with
 // applications (see migrations/), minus "link" - a lead already has its own
@@ -270,6 +289,14 @@ function factsGridHtml(item,fields,isApp){
   }).join("")+'</div>';
 }
 try{var s=localStorage.getItem("bjs.tab");if(s)ui.tab=s;}catch(e){}
+try{var vw0=localStorage.getItem("bjs.view");if(vw0)ui.view=vw0;}catch(e){}
+
+function viewSwitchHtml(){
+  return '<div class="viewsw">'+
+    '<button class="vbtn" data-view="detail" aria-pressed="'+(ui.view!=="grid")+'">Detail</button>'+
+    '<button class="vbtn" data-view="grid" aria-pressed="'+(ui.view==="grid")+'">Grid</button>'+
+  '</div>';
+}
 
 function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){
   return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
@@ -433,7 +460,7 @@ function leadsTab(key){
     '<div class="search"><input type="search" id="q" placeholder="Filter '+esc(TRACKS[key].label)+'&hellip;" value="'+esc(ui.q)+'"></div>'+
     '<div class="chips">'+["All"].concat(LEAD_STATUS).map(function(f){
       return '<button class="chip" data-filter="'+esc(f)+'" aria-pressed="'+(ui.filter===f)+'">'+esc(f)+'</button>';
-    }).join("")+'</div></div>'+
+    }).join("")+'</div>'+viewSwitchHtml()+'</div>'+
     '<div class="key"><span><i style="background:var(--pri-high)"></i>Seattle area or remote in the US</span>'+
     '<span><i style="background:var(--pri-med)"></i>Portland</span>'+
     '<span>Closest roles sorted first</span></div>';
@@ -443,6 +470,12 @@ function leadsTab(key){
       ' search hasn&rsquo;t turned up a verified opening yet. An empty day is a real result &mdash; nothing gets padded in here.</div>';
   }
   if(!rows.length) return h+'<div class="card empty"><strong>Nothing matches</strong>Try a different filter.</div>';
+
+  if(ui.view==="grid"){
+    h+=leadsGridHtml(rows);
+    h+='<div class="note">Every field saves when you click away. '+rows.length+' of '+all.length+' shown.</div>';
+    return h;
+  }
 
   var sel=rows.filter(function(l){return String(l.id)===String(ui.selected[key]);})[0]||rows[0];
   ui.selected[key]=sel.id;
@@ -460,6 +493,32 @@ function leadsTab(key){
 
   h+='<div class="md"><div class="md-list">'+listHtml+'</div><div class="md-detail">'+leadDetailHtml(sel,key)+'</div></div>';
   h+='<div class="note">Status, notes, and details save when you click away from the field. '+rows.length+' of '+all.length+' shown.</div>';
+  return h;
+}
+
+function leadsGridHtml(rows){
+  var h='<div class="card grid-wrap"><table><thead><tr>'+
+    '<th>Company</th><th>Role</th><th>Location</th><th>Status</th>'+
+    EXTRA_FIELDS.map(function(f){return '<th>'+esc(f[1])+'</th>';}).join("")+
+    '<th>Found</th><th>Verified</th><th>Notes</th>'+
+  '</tr></thead><tbody>'+rows.map(function(l){
+    var g=geo(l.location);
+    return '<tr'+(g?' class="'+g.p+'"':'')+'>'+
+      '<td class="co">'+esc(l.company)+'</td>'+
+      '<td><a href="'+esc(l.url)+'" target="_blank" rel="noopener">'+esc(l.title)+'</a></td>'+
+      '<td class="loc">'+esc(l.location)+(g?' <span class="geo '+g.p+'">'+esc(g.label)+'</span>':'')+'</td>'+
+      '<td>'+selectHtml(LEAD_STATUS,l.status,'data-id="'+l.id+'" data-field="status"')+'</td>'+
+      EXTRA_FIELDS.map(function(f){
+        var key=f[0],type=f[2]||"text",val=l[key]||"";
+        return '<td>'+(type==="date"
+          ?'<input type="date" data-id="'+l.id+'" data-field="'+key+'" value="'+esc(val)+'">'
+          :'<input type="text" data-id="'+l.id+'" data-field="'+key+'" value="'+esc(val)+'">')+'</td>';
+      }).join("")+
+      '<td class="dt mono">'+esc(l.found)+'</td>'+
+      '<td><span class="pill live" title="Confirmed live on this date">'+esc(l.verified)+'</span></td>'+
+      '<td><textarea data-id="'+l.id+'" data-field="notes" rows="1" placeholder="Add a note">'+esc(l.notes)+'</textarea></td>'+
+    '</tr>';
+  }).join("")+'</tbody></table></div>';
   return h;
 }
 
@@ -482,10 +541,17 @@ function leadDetailHtml(l,key){
 function appsTab(){
   var A=state.applications;
   var h='<div class="toolbar"><button class="btn primary" id="addapp">Add application</button>'+
-    '<span style="font-size:13px;color:var(--ink3)">Your own pipeline &mdash; the scheduled searches never touch this tab.</span></div>';
+    '<span style="font-size:13px;color:var(--ink3)">Your own pipeline &mdash; the scheduled searches never touch this tab.</span>'+
+    viewSwitchHtml()+'</div>';
   if(!A.length){
     return h+'<div class="card empty"><strong>No applications logged</strong>'+
       'When you apply to something, add it here to track the conversation. Days-since and the follow-up list update themselves.</div>';
+  }
+
+  if(ui.view==="grid"){
+    h+=appsGridHtml(A);
+    h+='<div class="note">Edits save when you click away. Days counts from the applied date.</div>';
+    return h;
   }
 
   var sel=A.filter(function(a){return String(a.id)===String(ui.selected.applications);})[0]||A[0];
@@ -504,6 +570,32 @@ function appsTab(){
 
   h+='<div class="md"><div class="md-list">'+listHtml+'</div><div class="md-detail">'+appDetailHtml(sel)+'</div></div>';
   h+='<div class="note">Edits save when you click away. Days counts from the applied date.</div>';
+  return h;
+}
+
+function appsGridHtml(A){
+  var h='<div class="card grid-wrap"><table><thead><tr>'+
+    '<th>Company</th><th>Role</th><th>Status</th><th>Applied</th>'+
+    APP_EXTRA_FIELDS.map(function(f){return '<th>'+esc(f[1])+'</th>';}).join("")+
+    '<th>Notes</th><th>Days</th><th></th>'+
+  '</tr></thead><tbody>'+A.map(function(a){
+    var d=daysSince(a.dateApplied);
+    return '<tr>'+
+      '<td><input type="text" data-id="'+a.id+'" data-field="company" data-app="1" value="'+esc(a.company)+'" placeholder="Company"></td>'+
+      '<td><input type="text" data-id="'+a.id+'" data-field="title" data-app="1" value="'+esc(a.title)+'" placeholder="Role"></td>'+
+      '<td>'+selectHtml(APP_STATUS,a.status,'data-id="'+a.id+'" data-field="status" data-app="1"')+'</td>'+
+      '<td><input type="date" data-id="'+a.id+'" data-field="dateApplied" data-app="1" value="'+esc(a.dateApplied)+'"></td>'+
+      APP_EXTRA_FIELDS.map(function(f){
+        var key=f[0],type=f[2]||"text",val=a[key]||"";
+        return '<td>'+(type==="date"
+          ?'<input type="date" data-id="'+a.id+'" data-field="'+key+'" data-app="1" value="'+esc(val)+'">'
+          :'<input type="text" data-id="'+a.id+'" data-field="'+key+'" data-app="1" value="'+esc(val)+'">')+'</td>';
+      }).join("")+
+      '<td><textarea data-id="'+a.id+'" data-field="notes" data-app="1" rows="1">'+esc(a.notes)+'</textarea></td>'+
+      '<td class="dt mono">'+(d===null?"&mdash;":d)+'</td>'+
+      '<td><button class="btn ghost" data-del="'+a.id+'" title="Remove">&times;</button></td>'+
+    '</tr>';
+  }).join("")+'</tbody></table></div>';
   return h;
 }
 
@@ -540,6 +632,14 @@ document.addEventListener("click",function(e){
 
   var f=e.target.closest("[data-filter]");
   if(f){ui.filter=f.getAttribute("data-filter"); render(); return;}
+
+  var vw=e.target.closest("[data-view]");
+  if(vw){
+    ui.view=vw.getAttribute("data-view");
+    try{localStorage.setItem("bjs.view",ui.view);}catch(err){}
+    render();
+    return;
+  }
 
   var sr=e.target.closest("[data-select]");
   if(sr){
