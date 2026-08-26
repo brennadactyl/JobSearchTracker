@@ -92,6 +92,8 @@ th{text-align:left;font-weight:600;font-size:11px;letter-spacing:.07em;text-tran
 td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
 tr:last-child td{border-bottom:0}
 tbody tr:hover{background:var(--surface2)}
+tr.more-row:hover{background:none}
+tr.more-row td{padding:4px 12px 14px}
 .co{font-weight:600;white-space:nowrap}
 .dt{color:var(--ink3);font-size:12.5px;white-space:nowrap}
 .geo{display:inline-block;font-size:11px;font-weight:600;letter-spacing:.03em;
@@ -260,7 +262,7 @@ var TRACKS={
 
 var TOKEN=localStorage.getItem("tracker_token")||"";
 var state={updated:null,leads:[],applications:[]};
-var ui={tab:"dashboard",q:"",filter:"All",selected:{},view:"detail"};
+var ui={tab:"dashboard",q:"",filter:"All",selected:{},expanded:{},view:"detail"};
 
 // Fields shown in a lead's detail panel. These are DB columns shared with
 // applications (see migrations/), minus "link" - a lead already has its own
@@ -476,8 +478,8 @@ function leadsTab(key){
   if(!rows.length) return h+'<div class="card empty"><strong>Nothing matches</strong>Try a different filter.</div>';
 
   if(ui.view==="grid"){
-    h+=leadsGridHtml(rows);
-    h+='<div class="note">Every field saves when you click away. '+rows.length+' of '+all.length+' shown.</div>';
+    h+=leadsGridHtml(rows,key);
+    h+='<div class="note">Quick-scan columns only &mdash; team, setup, source, and the rest are in Detail view. Edits save when you click away. '+rows.length+' of '+all.length+' shown.</div>';
     return h;
   }
 
@@ -500,28 +502,41 @@ function leadsTab(key){
   return h;
 }
 
-function leadsGridHtml(rows){
+// The grid is for a fast scan without scrolling, so it shows a deliberately
+// short list of columns - not the full field set (that's what Detail view
+// is for). Comp and referral earn a spot because they're the two fields
+// most likely to change whether a posting is worth a second look.
+var LEAD_GRID_FIELDS=[
+  ["comp","Comp range"],
+  ["referral","Referral"]
+];
+
+function leadsGridHtml(rows,trackKey){
+  var COLS=7+LEAD_GRID_FIELDS.length; // company/role/location/status + extras + found/notes + details btn
   var h='<div class="card grid-wrap"><table><thead><tr>'+
     '<th>Company</th><th>Role</th><th>Location</th><th>Status</th>'+
-    EXTRA_FIELDS.map(function(f){return '<th>'+esc(f[1])+'</th>';}).join("")+
-    '<th>Found</th><th>Verified</th><th>Notes</th>'+
+    LEAD_GRID_FIELDS.map(function(f){return '<th>'+esc(f[1])+'</th>';}).join("")+
+    '<th>Found</th><th>Notes</th><th></th>'+
   '</tr></thead><tbody>'+rows.map(function(l){
     var g=geo(l.location);
-    return '<tr'+(g?' class="'+g.p+'"':'')+'>'+
+    var open=!!ui.expanded[l.id];
+    var row='<tr'+(g?' class="'+g.p+'"':'')+'>'+
       '<td class="co">'+esc(l.company)+'</td>'+
       '<td class="rc"><a href="'+esc(l.url)+'" target="_blank" rel="noopener" title="'+esc(l.title)+'">'+esc(l.title)+'</a></td>'+
       '<td class="loc" title="'+esc(l.location)+'"><div class="loc-txt">'+esc(l.location)+'</div>'+(g?'<span class="geo '+g.p+'">'+esc(g.label)+'</span>':'')+'</td>'+
       '<td>'+selectHtml(LEAD_STATUS,l.status,'data-id="'+l.id+'" data-field="status"')+'</td>'+
-      EXTRA_FIELDS.map(function(f){
-        var key=f[0],type=f[2]||"text",val=l[key]||"";
-        return '<td>'+(type==="date"
-          ?'<input type="date" data-id="'+l.id+'" data-field="'+key+'" value="'+esc(val)+'">'
-          :'<input type="text" data-id="'+l.id+'" data-field="'+key+'" value="'+esc(val)+'">')+'</td>';
+      LEAD_GRID_FIELDS.map(function(f){
+        var key=f[0],val=l[key]||"";
+        return '<td><input type="text" data-id="'+l.id+'" data-field="'+key+'" value="'+esc(val)+'"></td>';
       }).join("")+
       '<td class="dt mono">'+esc(l.found)+'</td>'+
-      '<td><span class="pill live" title="Confirmed live on this date">'+esc(l.verified)+'</span></td>'+
       '<td><textarea data-id="'+l.id+'" data-field="notes" rows="1" placeholder="Add a note">'+esc(l.notes)+'</textarea></td>'+
+      '<td><button class="btn ghost" data-expand="'+l.id+'" data-scope="'+trackKey+'">'+(open?'Hide':'Details')+'</button></td>'+
     '</tr>';
+    if(open){
+      row+='<tr class="more-row"><td colspan="'+COLS+'"><div class="facts-card" style="margin-top:0">'+factsGridHtml(l,EXTRA_FIELDS,false)+'</div></td></tr>';
+    }
+    return row;
   }).join("")+'</tbody></table></div>';
   return h;
 }
@@ -554,7 +569,7 @@ function appsTab(){
 
   if(ui.view==="grid"){
     h+=appsGridHtml(A);
-    h+='<div class="note">Edits save when you click away. Days counts from the applied date.</div>';
+    h+='<div class="note">Quick-scan columns only &mdash; team, setup, source, comp, and the rest are in Detail view. Edits save when you click away. Days counts from the applied date.</div>';
     return h;
   }
 
@@ -577,28 +592,44 @@ function appsTab(){
   return h;
 }
 
+// Same "fast scan, not the full field set" philosophy as LEAD_GRID_FIELDS.
+// Next action/When surface here because chasing follow-ups is the main
+// reason to be glancing at Applications at all; the rest lives in Detail.
+var APP_GRID_FIELDS=[
+  ["nextAction","Next action"],
+  ["nextActionDate","When","date"],
+  ["referral","Referral"]
+];
+
 function appsGridHtml(A){
+  var COLS=8+APP_GRID_FIELDS.length; // company/role/status/applied/days + extras + notes/details/remove
   var h='<div class="card grid-wrap"><table><thead><tr>'+
-    '<th>Company</th><th>Role</th><th>Status</th><th>Applied</th>'+
-    APP_EXTRA_FIELDS.map(function(f){return '<th>'+esc(f[1])+'</th>';}).join("")+
-    '<th>Notes</th><th>Days</th><th></th>'+
+    '<th>Company</th><th>Role</th><th>Status</th><th>Applied</th><th>Days</th>'+
+    APP_GRID_FIELDS.map(function(f){return '<th>'+esc(f[1])+'</th>';}).join("")+
+    '<th>Notes</th><th></th><th></th>'+
   '</tr></thead><tbody>'+A.map(function(a){
     var d=daysSince(a.dateApplied);
-    return '<tr>'+
+    var open=!!ui.expanded[a.id];
+    var row='<tr>'+
       '<td><input type="text" data-id="'+a.id+'" data-field="company" data-app="1" value="'+esc(a.company)+'" placeholder="Company"></td>'+
       '<td><input type="text" data-id="'+a.id+'" data-field="title" data-app="1" value="'+esc(a.title)+'" placeholder="Role"></td>'+
       '<td>'+selectHtml(APP_STATUS,a.status,'data-id="'+a.id+'" data-field="status" data-app="1"')+'</td>'+
       '<td><input type="date" data-id="'+a.id+'" data-field="dateApplied" data-app="1" value="'+esc(a.dateApplied)+'"></td>'+
-      APP_EXTRA_FIELDS.map(function(f){
+      '<td class="dt mono">'+(d===null?"&mdash;":d)+'</td>'+
+      APP_GRID_FIELDS.map(function(f){
         var key=f[0],type=f[2]||"text",val=a[key]||"";
         return '<td>'+(type==="date"
           ?'<input type="date" data-id="'+a.id+'" data-field="'+key+'" data-app="1" value="'+esc(val)+'">'
           :'<input type="text" data-id="'+a.id+'" data-field="'+key+'" data-app="1" value="'+esc(val)+'">')+'</td>';
       }).join("")+
       '<td><textarea data-id="'+a.id+'" data-field="notes" data-app="1" rows="1">'+esc(a.notes)+'</textarea></td>'+
-      '<td class="dt mono">'+(d===null?"&mdash;":d)+'</td>'+
+      '<td><button class="btn ghost" data-expand="'+a.id+'" data-scope="applications">'+(open?'Hide':'Details')+'</button></td>'+
       '<td><button class="btn ghost" data-del="'+a.id+'" title="Remove">&times;</button></td>'+
     '</tr>';
+    if(open){
+      row+='<tr class="more-row"><td colspan="'+COLS+'"><div class="facts-card" style="margin-top:0">'+factsGridHtml(a,APP_EXTRA_FIELDS,true)+'</div></td></tr>';
+    }
+    return row;
   }).join("")+'</tbody></table></div>';
   return h;
 }
@@ -649,6 +680,17 @@ document.addEventListener("click",function(e){
   if(sr){
     var scope=sr.getAttribute("data-scope");
     ui.selected[scope]=sr.getAttribute("data-select");
+    render();
+    return;
+  }
+
+  var ex=e.target.closest("[data-expand]");
+  if(ex){
+    var exId=ex.getAttribute("data-expand"), exScope=ex.getAttribute("data-scope");
+    ui.expanded[exId]=!ui.expanded[exId];
+    // Expanding a row's Details in grid view also "selects" it, so
+    // switching to Detail view lands on the same record.
+    if(ui.expanded[exId])ui.selected[exScope]=exId;
     render();
     return;
   }
