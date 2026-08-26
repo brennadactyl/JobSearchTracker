@@ -18,12 +18,10 @@
  *   POST /api/update         requires Bearer token -> body: { type: "lead"|"application", ... }
  *                            updates one lead's status/notes, or upserts one
  *                            application record
- *   GET  /api/migrate-from-kv  requires Bearer token - one-time: copies
- *                            whatever's in the old KV blob (key "data") into
- *                            D1, skipping anything already present. Safe to
- *                            call more than once. Delete this route (and the
- *                            KV binding in wrangler.toml) once you've
- *                            confirmed the migration worked.
+ *   POST /api/delete-application  requires Bearer token -> body: { id } ->
+ *                            removes one application row (used by the
+ *                            page's "remove" control; leads are never
+ *                            deleted, only re-statused)
  *
  * Schema: see ../schema.sql
  */
@@ -90,9 +88,9 @@ export default {
       return handleUpdate(request, env);
     }
 
-    if (url.pathname === "/api/migrate-from-kv" && request.method === "GET") {
+    if (url.pathname === "/api/delete-application" && request.method === "POST") {
       if (!authorized(request, env)) return unauthorized();
-      return handleMigrateFromKv(env);
+      return handleDeleteApplication(request, env);
     }
 
     return new Response("Not found", { status: 404 });
@@ -219,68 +217,18 @@ async function handleUpdate(request, env) {
   return json({ error: "unknown update type" }, 400);
 }
 
-async function handleMigrateFromKv(env) {
-  if (!env.TRACKER_KV) return json({ error: "no KV binding present - already cleaned up?" }, 400);
-  const raw = await env.TRACKER_KV.get("data");
-  if (!raw) return json({ migrated: { leads: 0, applications: 0 }, note: "no KV data found" });
-
-  let data;
+async function handleDeleteApplication(request, env) {
+  let body;
   try {
-    data = JSON.parse(raw);
+    body = await request.json();
   } catch {
-    return json({ error: "KV data isn't valid JSON" }, 500);
+    return json({ error: "invalid JSON body" }, 400);
   }
-
-  let leadsAdded = 0;
-  if (Array.isArray(data.leads) && data.leads.length > 0) {
-    const stmt = env.DB.prepare(
-      `INSERT OR IGNORE INTO leads (search, found, company, title, location, url, verified, fit, status, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    );
-    const batch = data.leads.map((l) =>
-      stmt.bind(
-        l.search || "",
-        l.found || today(),
-        l.company || "",
-        l.title || "",
-        l.location || "",
-        l.url || "",
-        l.verified || today(),
-        l.fit || "",
-        l.status || "New",
-        l.notes || ""
-      )
-    );
-    const results = await env.DB.batch(batch);
-    leadsAdded = results.reduce((n, r) => n + (r.meta.changes || 0), 0);
-  }
-
-  let appsAdded = 0;
-  if (Array.isArray(data.applications) && data.applications.length > 0) {
-    const stmt = env.DB.prepare(
-      `INSERT INTO applications (leadId, company, title, dateApplied, status, notes)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    );
-    const batch = data.applications.map((a) =>
-      stmt.bind(
-        a.leadId || "",
-        a.company || "",
-        a.title || "",
-        a.dateApplied || today(),
-        a.status || "Applied",
-        a.notes || ""
-      )
-    );
-    const results = await env.DB.batch(batch);
-    appsAdded = results.reduce((n, r) => n + (r.meta.changes || 0), 0);
-  }
-
-  if (leadsAdded > 0 || appsAdded > 0) await touchUpdated(env);
-
-  return json({
-    migrated: { leads: leadsAdded, applications: appsAdded },
-    sourceHad: { leads: (data.leads || []).length, applications: (data.applications || []).length },
-  });
+  if (!body.id) return json({ error: "missing id" }, 400);
+  const result = await env.DB.prepare("DELETE FROM applications WHERE id = ?").bind(body.id).run();
+  if (result.meta.changes === 0) return json({ error: "application not found" }, 404);
+  await touchUpdated(env);
+  return json({ ok: true });
 }
 
 const PAGE_HTML = `<!doctype html>

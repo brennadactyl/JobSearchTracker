@@ -61,29 +61,6 @@ can be done on your behalf.
    ```
    Open a new terminal afterward.
 
-## Migrating from the earlier KV version
-
-If you deployed the original KV-backed version first, your data is sitting
-in KV, not D1, until you migrate it:
-
-```bat
-curl -s "%TRACKER_URL%/api/migrate-from-kv" -H "Authorization: Bearer %TRACKER_API_TOKEN%"
-```
-
-Prints something like `{"migrated":{"leads":41,"applications":0},"sourceHad":{...}}`.
-Safe to call more than once (it skips leads already present by `(search, url)`,
-though re-running would duplicate `applications` rows since those don't have
-a natural unique key - only call it again if you're sure it didn't fully run
-the first time).
-
-Once you've confirmed the tracker webpage shows everything correctly, clean
-up the now-unused KV binding:
-1. Delete the `[[kv_namespaces]]` block from `wrangler.toml`
-2. Delete the `handleMigrateFromKv` function and its route in `src/index.js`
-3. `wrangler deploy` again
-
-(Not done automatically here so you can verify the migration first.)
-
 ## Updating the page after code changes
 
 ```bat
@@ -101,3 +78,4 @@ won't re-run against already-created tables).
 - `GET /api/data` - Bearer token required - returns `{ updated, leads[], applications[] }`
 - `POST /api/leads` - Bearer token required - body `{ "leads": [ {search, company, title, location, url, found, verified, fit} ] }` - appends only leads not already present for the same `(search, url)` pair (DB-enforced, atomic); never touches existing status/notes.
 - `POST /api/update` - Bearer token required - body `{ "type": "lead", "id": ..., "status": "...", "notes": "..." }` or `{ "type": "application", ... }`
+- `POST /api/delete-application` - Bearer token required - body `{ "id": ... }` - removes one application row (leads are never deleted, only re-statused)
