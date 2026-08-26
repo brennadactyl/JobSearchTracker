@@ -9,6 +9,18 @@ record with its own atomic writes, not one big JSON blob.
 No personal data lives in this repo - the actual data (company names, URLs,
 your notes) lives only in D1 once deployed.
 
+## Code layout
+
+- `src/index.js` - Worker entry point: routing only (which path/method maps
+  to which handler), no logic of its own.
+- `src/api.js` - the D1-backed API handlers (`/api/data`, `/api/leads`,
+  `/api/update`, `/api/delete-application`) and their shared helpers.
+- `src/page.html` - the tracker webpage: a real, standalone HTML file (open
+  it directly in a browser to preview/edit it) with its CSS and client-side
+  JS inline. `index.js` imports it as plain text (see the `[[rules]]` entry
+  in `wrangler.toml`) and serves it verbatim for `GET /`.
+- `migrations/` - D1 schema, see below.
+
 ## One-time setup
 
 You need to do the account creation and login yourself - not something that
