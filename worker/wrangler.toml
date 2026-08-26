@@ -7,7 +7,7 @@ compatibility_date = "2025-01-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "job-search-tracker-db"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_id = "104f139f-bc84-4e72-8034-8541ef563ae4"
 
 # Kept temporarily so /api/migrate-from-kv can read your existing data once.
 # Safe to delete this whole block (and the migrate endpoint) after migrating.
