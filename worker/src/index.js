@@ -241,7 +241,7 @@ const PAGE_HTML = `<!doctype html>
   }
   #gate input { width: 280px; }
   #gate button { background: var(--accent); color: #05201d; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; }
-  .hidden { display: none; }
+  .hidden { display: none !important; }
   .muted { color: var(--muted); }
   .row-actions { white-space: nowrap; }
   .row-actions button {
@@ -254,7 +254,7 @@ const PAGE_HTML = `<!doctype html>
 
 <div id="gate">
   <div>Enter access token</div>
-  <input id="tokenInput" type="password" placeholder="token">
+  <input id="tokenInput" type="password" placeholder="token" onkeydown="if(event.key==='Enter')submitToken()">
   <button onclick="submitToken()">Enter</button>
   <div id="gateError" class="muted"></div>
 </div>
@@ -305,7 +305,9 @@ async function api(path, opts) {
 async function boot() {
   try {
     DATA = await api("/api/data");
-  } catch {
+  } catch (err) {
+    const el = document.getElementById("gateError");
+    if (el && err.message !== "unauthorized") el.textContent = "Couldn't load: " + err.message;
     return;
   }
   document.getElementById("gate").classList.add("hidden");

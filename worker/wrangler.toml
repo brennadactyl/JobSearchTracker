@@ -6,4 +6,4 @@ compatibility_date = "2025-01-01"
 # Paste the id it prints below.
 [[kv_namespaces]]
 binding = "TRACKER_KV"
-id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+id = "0616f92a5d524f0bb26621b160ec3f93"
