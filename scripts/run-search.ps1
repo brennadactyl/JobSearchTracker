@@ -9,6 +9,13 @@
   <DataDir> so the relative paths inside the prompt (docs/..., resumes/..., etc.)
   resolve correctly.
 
+  Runs with a scoped tool allowlist (Read/Write/Edit/Glob/Grep/WebSearch/WebFetch
+  plus `curl` via Bash) so it doesn't stall on a permission prompt with nobody
+  there to answer it. The prompt syncs new postings to the tracker webpage via
+  `curl`, which needs TRACKER_URL and TRACKER_API_TOKEN set as environment
+  variables (see ../worker/README.md) - if they're missing, the search and doc
+  update still run, the sync step is just skipped.
+
 .PARAMETER Task
   Which search to run: engineering | technical-pm | product
 
@@ -58,11 +65,12 @@ if (-not $claude) {
 }
 
 $prompt = Get-Content -Raw -Path $promptFile
+$allowedTools = "Read Write Edit Glob Grep WebSearch WebFetch Bash(curl:*)"
 
 Push-Location $DataDir
 try {
     "$(Get-Date -Format o) - starting $Task" | Out-File -Append $logFile
-    & $claude -p $prompt *>> $logFile
+    & $claude -p $prompt --allowedTools $allowedTools *>> $logFile
     $exitCode = $LASTEXITCODE
     "$(Get-Date -Format o) - finished $Task (exit $exitCode)" | Out-File -Append $logFile
     exit $exitCode

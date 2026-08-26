@@ -12,8 +12,10 @@
     - Node.js + the claude CLI (npm install -g @anthropic-ai/claude-code)
     - CLAUDE_CODE_OAUTH_TOKEN set for your account (run `claude setup-token`,
       then `setx CLAUDE_CODE_OAUTH_TOKEN "<token>"`) so headless runs authenticate
-    - Your private data folder (docs/, resumes/, reference/, tracker/,
-      scheduled-tasks/) in place - see private.example/README.md in this repo
+    - TRACKER_URL and TRACKER_API_TOKEN set (see ../worker/README.md) so runs
+      can sync new postings to the tracker webpage
+    - Your private data folder (docs/, resumes/, reference/, scheduled-tasks/)
+      in place - see private.example/README.md in this repo
 
 .PARAMETER DataDir
   Path to the private data folder. Defaults to the JOB_SEARCH_DATA_DIR
@@ -49,6 +51,13 @@ if (-not $env:CLAUDE_CODE_OAUTH_TOKEN) {
     Write-Warning 'Run `claude setup-token`, then `setx CLAUDE_CODE_OAUTH_TOKEN "<token>"`, then open a new terminal.'
 } else {
     Write-Host "CLAUDE_CODE_OAUTH_TOKEN is set."
+}
+
+if (-not $env:TRACKER_URL -or -not $env:TRACKER_API_TOKEN) {
+    Write-Warning "TRACKER_URL and/or TRACKER_API_TOKEN are not set. Runs will still search and update the local docs, but won't sync new postings to the tracker webpage."
+    Write-Warning "See ..\worker\README.md to deploy the webpage and get these values, then: setx TRACKER_URL `"...`" and setx TRACKER_API_TOKEN `"...`""
+} else {
+    Write-Host "TRACKER_URL and TRACKER_API_TOKEN are set."
 }
 
 if (-not (Test-Path $DataDir)) {

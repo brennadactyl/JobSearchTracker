@@ -1,0 +1,9 @@
+name = "job-search-tracker"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+# Created by: wrangler kv namespace create TRACKER_KV
+# Paste the id it prints below.
+[[kv_namespaces]]
+binding = "TRACKER_KV"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
