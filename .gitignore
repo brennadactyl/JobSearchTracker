@@ -4,3 +4,6 @@ Thumbs.db
 
 # Personal data silo — never committed. See private.example/README.md.
 /private/
+
+# Wrangler local cache/build output - never commit
+worker/.wrangler/
