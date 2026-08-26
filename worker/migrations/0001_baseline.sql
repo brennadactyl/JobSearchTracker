@@ -1,14 +1,16 @@
--- Baseline migration: the complete current schema. Every statement is
--- idempotent (CREATE TABLE IF NOT EXISTS), so this is safe to run both
--- against a brand-new database (creates everything at once) and against
--- the already-migrated live database (a pure no-op, since the tables and
--- columns below already exist there from earlier hand-run schema.sql
--- changes) - `wrangler d1 migrations apply` just records it as applied
--- either way and moves on.
+-- Baseline migration: the schema as it stood when the migrations/ workflow
+-- was introduced. CREATE TABLE IF NOT EXISTS makes this safe to run against
+-- a brand-new database (creates everything at once). CORRECTION: it does
+-- NOT retroactively add these columns to an already-existing table with an
+-- older shape - that turned out to be false when this comment originally
+-- claimed it (see 0002_add_extra_fields.sql, which had to add for real the
+-- columns this file's CREATE TABLE IF NOT EXISTS silently skipped against
+-- the live table created by the original hand-run schema.sql).
 --
 -- Going forward, schema changes are new numbered files in this folder
--- (`wrangler d1 migrations create job-search-tracker-db <name>`), not edits
--- to this one.
+-- (`wrangler d1 migrations create job-search-tracker-db <name>`), using real
+-- ALTER TABLE statements when the table already exists - not edits to this
+-- one.
 
 CREATE TABLE IF NOT EXISTS leads (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
