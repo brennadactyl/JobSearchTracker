@@ -13,6 +13,12 @@ Each run should:
 8. If a previously-listed posting is confirmed dead on a later check, move it to the "Removed / went dead" list below instead of silently dropping it. If a posting couldn't be re-verified due to a fetch/tooling problem (timeout, blocked domain, truncated content) rather than a confirmed 404/closed page, leave it in the found table and note the tooling issue instead - don't treat "couldn't check" as "dead."
 
 
+## Fetch efficiency (apply on every run)
+
+Don't re-spend a full verification attempt rediscovering a **domain-wide fetch block** that's already confirmed - that's different from a specific posting closing, which is real signal and always worth checking. The distinction: if *every* URL tried at a domain fails the *same way* regardless of which posting (robots.txt block, blanket 403/429, a JS-rendered shell with no static content ever, metadata-only, or systematic truncation), that's a tooling wall, not news. If specific postings turn out closed/404 while others at the same domain verify fine, that's normal churn - keep checking those in full.
+
+Once a domain-wide block has shown up on 2+ separate run-dates (track it in the Reliability notes below as it happens), stop spending a fresh attempt confirming it: use a known working fallback if one exists (a different subdomain, an ATS mirror), or skip that domain for the run entirely if none exists, noting in the addendum that it was skipped on cadence grounds rather than re-tested. Re-attempt a skipped domain at most about once a week, or immediately if a specific new posting surfaces there via search that looks like a strong fit - a concrete new lead always earns one verification attempt even at an otherwise-blocked domain.
+
 ## Scope rules (apply on every run)
 
 {{GEO_SCOPE_PARAGRAPH}}
@@ -31,6 +37,8 @@ Each run should:
 {{CANDIDATE_PROFILE_PARAGRAPH}}
 
 Best-fit roles: {{BEST_FIT_SENTENCE}}
+
+**Fit philosophy (apply when filtering):** it's fine - expected, even - for a posting to state a qualification not literally met on paper. Treat a stated requirement as a signal to weigh against the demonstrated background above, not an automatic bar: if there's a credible substitute case for what the role actually needs, it's a finding, not a screen-out. This applies as much to a *category of role* as to a specific requirement line - don't let "my resume doesn't document this" quietly become "exclude this whole role type," even if that exclusion started out written down somewhere as a caveat. A resume is written for a specific audience and routinely omits adjacent experience that would make a real stretch case; a gap on paper is not the same claim as a gap in ability. Reserve exclusion for an actual, verifiable mismatch - a skill, language, location, or level the posting requires and the candidate genuinely doesn't have - not a role category the resume happens not to emphasize. When in doubt, list it and let the person searching decide, rather than pre-filtering it out of view.
 
 ## Target Companies
 **Core:** {{TARGET_COMPANIES_CORE}}.

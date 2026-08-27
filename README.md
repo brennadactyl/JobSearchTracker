@@ -160,3 +160,17 @@ Windows password in the task - a bigger tradeoff, not set up here by default).
 **Headless runs use a scoped tool allowlist**, not full permission bypass -
 see `scripts/run-search.ps1`. If a search prompt ever needs a new capability,
 add it there deliberately rather than reaching for `--dangerously-skip-permissions`.
+
+**A cross-cutting convention changed in one track's doc silently drifts out
+of sync in the others.** Each `private/docs/tracked_<key>_postings.md` is
+self-contained - nothing at runtime cross-checks it against its siblings.
+If you change something that's supposed to apply to every track (how leads
+sync to the tracker, the fetch-efficiency rule, the fit-filter philosophy),
+update every existing track's doc to match, not just the one you're actively
+iterating on. This has actually happened: one track's doc got updated when
+the tracker migrated off an old hosting mechanism, its siblings didn't, and
+a later scheduled run confidently tried to publish through the retired
+mechanism - it had no way to know the convention had moved on. The
+`job-search-setup` skill's templates are the shared source of truth for a
+*new* track; there's nothing equivalent that reconciles existing tracks
+against each other, so that's on whoever makes the cross-cutting change.

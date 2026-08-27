@@ -76,7 +76,20 @@ the resume where reasonable, then confirm):
 - **Target companies**: a starter list is fine - the doc's "Expanded net"
   section is where the daily search grows the list over time.
 - Any **track-specific fit caveat** worth calling out (e.g. a PM track that
-  should exclude non-technical PM roles) - optional.
+  should exclude non-technical PM roles) - optional. Keep this scoped to an
+  actual, verifiable mismatch (a skill, language, location, or level the
+  installer genuinely doesn't have), not a list of qualifications or role
+  categories to require verbatim - the template already defaults every track
+  to weighing a stated requirement against the candidate profile rather than
+  auto-disqualifying on it (see its "Fit philosophy" section). Watch for this
+  same mistake at the category level, not just the requirement level: "the
+  resume doesn't document experimentation ownership" is not the same claim as
+  "exclude experimentation-flavored roles," and it's an easy one to write
+  down as a caveat without noticing the substitution. This matters most for a
+  track that's a real stretch from the installer's resume (a title/domain
+  pivot, not a lateral match) - that's exactly where an overly literal fit
+  caveat quietly screens out real, well-fitting opportunities before the
+  installer ever sees them.
 
 Once per setup (applies to every track, new and existing):
 - **Geographic scope** - the hard filter on what's in-scope at all (e.g. "US
