@@ -310,7 +310,7 @@ function toggleTheme(){
 }
 paintThemeToggle();
 
-var LEAD_STATUS=["New","Reviewing","Applied","Not a fit","Closed"];
+var LEAD_STATUS=["New","Reviewing","Applied","Not a fit"];
 var APP_STATUS=["Applied","Recruiter Screen","Tech Screen","Onsite / Loop","Offer","Rejected","Withdrawn"];
 var ACTIVE=["Recruiter Screen","Tech Screen","Onsite / Loop"];
 // Populated from state.tracks on boot (see buildTracks/applyConfig below) -
@@ -467,9 +467,9 @@ function tabsHtml(){
          {id:"applications",label:"Applications",n:state.applications.length}];
   Object.keys(TRACKS).forEach(function(k){
     // The tab badge is a "what hasn't been triaged yet" count, so it only
-    // counts New leads - not the whole track (Reviewing/Not a fit/Closed
-    // are all things you've already looked at, and Applied leads have
-    // moved to the Applications tab entirely, see moveToApplications()).
+    // counts New leads - not the whole track (Reviewing/Not a fit are
+    // things you've already looked at, and Applied leads have moved to
+    // the Applications tab entirely, see moveToApplications()).
     t.push({id:k,label:TRACKS[k].label,n:state.leads.filter(function(l){return l.search===k&&l.status==="New";}).length});
   });
   return t.map(function(x){
@@ -487,7 +487,7 @@ function delistedBadge(l){
 }
 
 function pillFor(st){
-  var m={"New":"new","Reviewing":"hot","Applied":"go","Not a fit":"no","Closed":"no",
+  var m={"New":"new","Reviewing":"hot","Applied":"go","Not a fit":"no",
          "Recruiter Screen":"hot","Tech Screen":"hot","Onsite / Loop":"hot","Offer":"go",
          "Rejected":"bad","Withdrawn":"no"};
   return m[st]||"live";
@@ -507,7 +507,7 @@ function dashboard(){
   var stale=A.filter(function(a){var d=daysSince(a.dateApplied);
     return a.status==="Applied"&&d!==null&&d>14;}).length;
   var near=L.filter(function(l){var g=geo(l.location);
-    return g&&g.p==="p-high"&&l.status!=="Not a fit"&&l.status!=="Closed"&&l.status!=="Applied";}).length;
+    return g&&g.p==="p-high"&&l.status!=="Not a fit"&&l.status!=="Applied";}).length;
   var topRule=(state.settings.priority_locations||[]).filter(function(r){return r.tier==="p-high";})[0];
   var topLabel=topRule?topRule.label:"Top locations";
   var trackCount=state.tracks.length;
@@ -528,7 +528,7 @@ function dashboard(){
       return {s:st,n:rows.filter(function(r){return r.status===st;}).length};});
     var tot=rows.length||1;
     var cols={"New":"var(--accent)","Reviewing":"var(--warn)","Applied":"var(--good)",
-              "Not a fit":"var(--line)","Closed":"var(--line)"};
+              "Not a fit":"var(--line)"};
     h+='<div class="bar"><h3>'+esc(TRACKS[k].label)+' <span>'+esc(TRACKS[k].full)+' &middot; '+rows.length+'</span></h3>'+
       '<div class="meter">'+byStatus.map(function(b){
         return b.n?'<i style="width:'+(b.n/tot*100)+'%;background:'+cols[b.s]+'"></i>':"";}).join("")+'</div>'+
