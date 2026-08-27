@@ -64,7 +64,7 @@ private.example/
 No Node.js, no git, and no `wrangler` CLI required for any of this - see the
 note after each step if you'd rather do it the traditional way instead.
 
-1. **Install Claude Code** - a native installer, no Node.js needed:
+1. **Install Claude Code**:
    ```powershell
    irm https://claude.ai/install.ps1 | iex
    ```
