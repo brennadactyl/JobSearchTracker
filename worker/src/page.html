@@ -11,10 +11,10 @@
 :root{
   --ground:#F4F5F9; --surface:#FFFFFF; --surface2:#ECEEF6; --line:#DCDFEB;
   --ink:#14172A; --ink2:#555B77; --ink3:#868CA6;
-  --accent:#A96C15; --accent-soft:#F6EBD8;
+  --accent:#0F766E; --accent-soft:#D8F3F0;
   --good:#226642; --warn:#96600F; --crit:#A93A31;
-  --pri-high:#166534; --pri-high-soft:#D8EEEA;
-  --pri-med:#7E22CE; --pri-med-soft:#F0E3F9;
+  --pri-high:#1D4ED8; --pri-high-soft:#DBEAFE;
+  --pri-med:#BE185D; --pri-med-soft:#FCE7F3;
   --shadow:0 1px 2px rgba(20,23,42,.06),0 8px 24px -12px rgba(20,23,42,.18);
 }
 /* Dark palette applies by OS/browser preference (prefers-color-scheme),
@@ -26,19 +26,19 @@
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
   --ground:#0E1018; --surface:#161925; --surface2:#1E2230; --line:#2A2F41;
   --ink:#E9EBF4; --ink2:#A3AAC3; --ink3:#717892;
-  --accent:#E0A544; --accent-soft:#33280F;
+  --accent:#2DD4BF; --accent-soft:#0F2E2A;
   --good:#4FBE85; --warn:#DFA63C; --crit:#E8756A;
-  --pri-high:#4FD1B8; --pri-high-soft:#10322D;
-  --pri-med:#C994EE; --pri-med-soft:#2B1E38;
+  --pri-high:#60A5FA; --pri-high-soft:#14243F;
+  --pri-med:#F472B6; --pri-med-soft:#3A1830;
   --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
 }}
 :root[data-theme="dark"]{
   --ground:#0E1018; --surface:#161925; --surface2:#1E2230; --line:#2A2F41;
   --ink:#E9EBF4; --ink2:#A3AAC3; --ink3:#717892;
-  --accent:#E0A544; --accent-soft:#33280F;
+  --accent:#2DD4BF; --accent-soft:#0F2E2A;
   --good:#4FBE85; --warn:#DFA63C; --crit:#E8756A;
-  --pri-high:#4FD1B8; --pri-high-soft:#10322D;
-  --pri-med:#C994EE; --pri-med-soft:#2B1E38;
+  --pri-high:#60A5FA; --pri-high-soft:#14243F;
+  --pri-med:#F472B6; --pri-med-soft:#3A1830;
   --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
 }
 *{box-sizing:border-box}
@@ -84,7 +84,12 @@ textarea{resize:vertical;min-height:34px}
   border:1px solid var(--line);background:var(--surface);color:var(--ink);padding:7px 13px}
 .btn:hover{border-color:var(--ink3)}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
-@media (prefers-color-scheme:dark){.btn.primary{color:#241B08}}
+/* Dark-mode accent (#2DD4BF) is bright enough that white button text fails
+   contrast - needs the same OS-preference-or-explicit-toggle guard as the
+   :root custom-property blocks above, not just the bare media query, or
+   toggling to dark while the OS is light leaves this rule un-applied. */
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .btn.primary{color:#241B08}}
+:root[data-theme="dark"] .btn.primary{color:#241B08}
 .btn.primary:hover{filter:brightness(1.07)}
 .btn.ghost{border-color:transparent;background:none;color:var(--ink2);padding:6px 9px}
 .btn.ghost:hover{background:var(--surface2);color:var(--ink)}
