@@ -354,15 +354,13 @@ var ui={tab:"dashboard",q:"",filter:"All",selected:{},expanded:{},view:"detail"}
 var EXTRA_FIELDS=[
   ["referral","Referral"],
   ["comp","Comp range"],
-  ["source","Source"],
   ["team","Team / product"],
   ["setup","Setup"],
-  ["resume","Resume"],
   ["lastContact","Last contact","date"],
   ["nextAction","Next action"],
   ["nextActionDate","When","date"]
 ];
-var APP_EXTRA_FIELDS=EXTRA_FIELDS.slice(0,5).concat([["link","Link"]]).concat(EXTRA_FIELDS.slice(5));
+var APP_EXTRA_FIELDS=EXTRA_FIELDS.slice(0,4).concat([["link","Link"]]).concat(EXTRA_FIELDS.slice(4));
 
 function factsGridHtml(item,fields,isApp){
   var appAttr=isApp?' data-app="1"':'';
