@@ -712,12 +712,24 @@ function render(){
   // Re-rendering replaces the master-detail list wholesale, which would
   // otherwise reset its scroll position to the top on every click -
   // including just selecting a different row. Preserve it across the swap.
-  var oldList=p.querySelector(".md-list"), scrollTop=oldList?oldList.scrollTop:0;
+  var oldList=p.querySelector(".md-list"), scrollTop=oldList?oldList.scrollTop:null;
   if(ui.tab==="dashboard")p.innerHTML=dashboard();
   else if(ui.tab==="applications")p.innerHTML=appsTab();
   else p.innerHTML=leadsTab(ui.tab);
   var newList=p.querySelector(".md-list");
-  if(newList)newList.scrollTop=scrollTop;
+  if(newList){
+    if(scrollTop!==null){
+      newList.scrollTop=scrollTop;
+    }else{
+      // No previous list to carry a scroll position over from - e.g.
+      // switching in from Grid view, where the selected row (highlighted
+      // via a grid click, see the data-expand handler below) can be far
+      // down the list. Scroll it into view instead of defaulting to the
+      // top, so Detail view doesn't hide the very row you just picked.
+      var selRow=newList.querySelector(".md-row.sel");
+      if(selRow)selRow.scrollIntoView({block:"nearest"});
+    }
+  }
 }
 
 document.addEventListener("click",function(e){
