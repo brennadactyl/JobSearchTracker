@@ -466,9 +466,11 @@ function tabsHtml(){
   var t=[{id:"dashboard",label:"Overview",n:null},
          {id:"applications",label:"Applications",n:state.applications.length}];
   Object.keys(TRACKS).forEach(function(k){
-    // Applied leads have moved to the Applications tab (see moveToApplications())
-    // and don't show in this track's list, so they don't count toward its badge.
-    t.push({id:k,label:TRACKS[k].label,n:state.leads.filter(function(l){return l.search===k&&l.status!=="Applied";}).length});
+    // The tab badge is a "what hasn't been triaged yet" count, so it only
+    // counts New leads - not the whole track (Reviewing/Not a fit/Closed
+    // are all things you've already looked at, and Applied leads have
+    // moved to the Applications tab entirely, see moveToApplications()).
+    t.push({id:k,label:TRACKS[k].label,n:state.leads.filter(function(l){return l.search===k&&l.status==="New";}).length});
   });
   return t.map(function(x){
     return '<button class="tab" role="tab" data-tab="'+x.id+'" aria-selected="'+(ui.tab===x.id)+'">'+
