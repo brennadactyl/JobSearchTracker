@@ -355,7 +355,7 @@ var EXTRA_FIELDS=[
   ["referral","Referral"],
   ["comp","Comp range"],
   ["team","Team / product"],
-  ["setup","Setup"],
+  ["setup","Work setup"],
   ["lastContact","Last contact","date"],
   ["nextAction","Next action"],
   ["nextActionDate","When","date"]
@@ -592,7 +592,7 @@ function leadsTab(key){
 
   if(ui.view==="grid"){
     h+=leadsGridHtml(rows,key);
-    h+='<div class="note">Quick-scan columns only &mdash; referral, notes, team, setup, source, and the rest are in Detail view (click a row to open them). Edits save when you click away. '+rows.length+' of '+all.length+' shown.</div>';
+    h+='<div class="note">Quick-scan columns only &mdash; referral, notes, team, setup, and the rest are in Detail view (click a row to open them). Edits save when you click away. '+rows.length+' of '+all.length+' shown.</div>';
     return h;
   }
 
@@ -686,7 +686,7 @@ function appsTab(){
 
   if(ui.view==="grid"){
     h+=appsGridHtml(A);
-    h+='<div class="note">Quick-scan columns only &mdash; referral, notes, team, setup, source, comp, and the rest are in Detail view (click a row to open them). Edits save when you click away. Days counts from the applied date.</div>';
+    h+='<div class="note">Quick-scan columns only &mdash; referral, notes, team, setup, comp, and the rest are in Detail view (click a row to open them). Edits save when you click away. Days counts from the applied date.</div>';
     return h;
   }
 
