@@ -345,22 +345,29 @@ function applyConfig(){
 }
 var ui={tab:"dashboard",q:"",filter:"All",selected:{},expanded:{},view:"detail"};
 
-// Fields shown in a lead's detail panel. These are DB columns shared with
-// applications (see migrations/), minus "link" - a lead already has its own
-// url (the header link points at it), so a second link input here would
-// just duplicate it. Applications get a dedicated Link field instead
-// (APP_EXTRA_FIELDS below), since a manually-added application has no
-// posting URL to fall back on.
-var EXTRA_FIELDS=[
+// Fields shown in leads' and applications' facts cards. ROLE_FIELDS is
+// facts about the opportunity itself (stable once entered - comp doesn't
+// change because you looked at it again yesterday) and is all a lead
+// shows: follow-up tracking isn't a meaningful concept until you've
+// actually applied, so TRACKING_FIELDS only appears on applications (see
+// factsCardsHtml/appDetailHtml/appsGridHtml) - a lead never renders it.
+// "link" is omitted from ROLE_FIELDS for leads - a lead already has its
+// own url (the header link points at it), so a second link input here
+// would just duplicate it; applications get it via APP_ROLE_FIELDS
+// instead, since a manually-added application has no posting URL to fall
+// back on.
+var ROLE_FIELDS=[
   ["referral","Referral"],
   ["comp","Comp range"],
   ["team","Team / product"],
-  ["setup","Work setup"],
+  ["setup","Work setup"]
+];
+var TRACKING_FIELDS=[
   ["lastContact","Last contact","date"],
   ["nextAction","Next action"],
   ["nextActionDate","When","date"]
 ];
-var APP_EXTRA_FIELDS=EXTRA_FIELDS.slice(0,4).concat([["link","Link"]]).concat(EXTRA_FIELDS.slice(4));
+var APP_ROLE_FIELDS=ROLE_FIELDS.concat([["link","Link"]]);
 
 function factsGridHtml(item,fields,isApp){
   var appAttr=isApp?' data-app="1"':'';
@@ -372,6 +379,18 @@ function factsGridHtml(item,fields,isApp){
       :'<input type="text" data-id="'+item.id+'" data-field="'+key+'"'+appAttr+' value="'+esc(val)+'" placeholder="'+esc(label)+'">';
     return '<div class="mf"><label>'+esc(label)+'</label>'+input+'</div>';
   }).join("")+'</div>';
+}
+
+// Renders the two facts boxes (role details, then follow-up tracking) for
+// either a lead or an application. `compact` drops the first box's default
+// top margin - used in Grid view's expanded row, which is already padded
+// by its containing cell and doesn't want the extra gap Detail view does.
+function factsCardsHtml(item,isApp,compact){
+  var roleFields=isApp?APP_ROLE_FIELDS:ROLE_FIELDS;
+  return '<div class="facts-card"'+(compact?' style="margin-top:0"':'')+'><div class="mf-label">Role details</div>'+
+      factsGridHtml(item,roleFields,isApp)+'</div>'+
+    '<div class="facts-card"><div class="mf-label">Follow-up</div>'+
+      factsGridHtml(item,TRACKING_FIELDS,isApp)+'</div>';
 }
 try{var s=localStorage.getItem("bjs.tab");if(s)ui.tab=s;}catch(e){}
 try{var vw0=localStorage.getItem("bjs.view");if(vw0)ui.view=vw0;}catch(e){}
@@ -651,7 +670,7 @@ function leadsGridHtml(rows,trackKey){
       '<td class="exp-ind">'+(open?'Hide':'Details')+'</td>'+
     '</tr>';
     if(open){
-      row+='<tr class="more-row"><td colspan="'+COLS+'"><div class="facts-card" style="margin-top:0">'+factsGridHtml(l,EXTRA_FIELDS,false)+'</div></td></tr>';
+      row+='<tr class="more-row"><td colspan="'+COLS+'"><div class="facts-card" style="margin-top:0">'+factsGridHtml(l,ROLE_FIELDS,false)+'</div></td></tr>';
     }
     return row;
   }).join("")+'</tbody></table></div>';
@@ -668,7 +687,7 @@ function leadDetailHtml(l,key){
   if(l.fit)h+='<div class="dh-fit">'+esc(l.fit)+'</div>';
   h+='<div class="dh-status">'+selectHtml(LEAD_STATUS,l.status,'data-id="'+l.id+'" data-field="status"')+delistedBadge(l)+
     '<span class="dh-dates">Found '+esc(l.found)+' &middot; Confirmed live '+esc(l.verified)+'</span></div>';
-  h+='<div class="facts-card">'+factsGridHtml(l,EXTRA_FIELDS,false)+'</div>';
+  h+='<div class="facts-card">'+factsGridHtml(l,ROLE_FIELDS,false)+'</div>';
   h+='<div class="dh-notes"><div class="mf-label">Notes</div>'+
     '<textarea data-id="'+l.id+'" data-field="notes" rows="3" placeholder="Add a note">'+esc(l.notes)+'</textarea></div>';
   return h;
@@ -748,7 +767,7 @@ function appsGridHtml(A){
       '<td><button class="btn ghost" data-del="'+a.id+'" title="Remove">&times;</button></td>'+
     '</tr>';
     if(open){
-      row+='<tr class="more-row"><td colspan="'+COLS+'"><div class="facts-card" style="margin-top:0">'+factsGridHtml(a,APP_EXTRA_FIELDS,true)+'</div></td></tr>';
+      row+='<tr class="more-row"><td colspan="'+COLS+'">'+factsCardsHtml(a,true,true)+'</td></tr>';
     }
     return row;
   }).join("")+'</tbody></table></div>';
@@ -765,7 +784,7 @@ function appDetailHtml(a){
     '<span class="dh-dates">Applied <input type="date" data-id="'+a.id+'" data-field="dateApplied" data-app="1" value="'+esc(a.dateApplied)+'">'+
       (d!==null?' &middot; '+d+' days':'')+'</span>'+
     '<button class="btn ghost" data-del="'+a.id+'" style="margin-left:auto">Remove</button></div>';
-  h+='<div class="facts-card">'+factsGridHtml(a,APP_EXTRA_FIELDS,true)+'</div>';
+  h+=factsCardsHtml(a,true,false);
   h+='<div class="dh-notes"><div class="mf-label">Notes</div>'+
     '<textarea data-id="'+a.id+'" data-field="notes" data-app="1" rows="3">'+esc(a.notes)+'</textarea></div>';
   return h;
@@ -912,7 +931,7 @@ function moveToApplications(lead){
   if(state.applications.some(function(a){return String(a.leadId)===String(lead.id);}))return; // already moved once
   var body={type:"application",company:lead.company,title:lead.title,dateApplied:today(),
     status:"Applied",notes:lead.notes||"",leadId:String(lead.id),link:lead.url||""};
-  EXTRA_FIELDS.forEach(function(f){body[f[0]]=lead[f[0]]||"";});
+  ROLE_FIELDS.forEach(function(f){body[f[0]]=lead[f[0]]||"";});
   api("/api/update",{method:"POST",body:JSON.stringify(body)}).then(function(res){
     state.applications.unshift(res.application);
     render();
