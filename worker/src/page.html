@@ -121,6 +121,10 @@ tr.p-med td:first-child{border-left-color:var(--pri-med)}
 td select{padding:5px 7px;font-size:13px;min-width:112px}
 td input[type=text],td input[type=date]{font-size:13px;min-width:104px}
 td textarea{font-size:13px;min-height:32px;min-width:130px}
+.grid-wrap tbody tr[data-expand]{cursor:pointer}
+.grid-wrap tbody tr.gr-sel{background:var(--accent-soft)}
+.grid-wrap tbody tr.gr-sel:hover{background:var(--accent-soft)}
+.exp-ind{color:var(--ink3);font-size:12.5px;white-space:nowrap}
 
 /* Master-detail: a compact list on the left, the full record on the right -
    no expand/collapse, every field is one click away. Used by both the
@@ -523,7 +527,7 @@ function leadsTab(key){
 
   if(ui.view==="grid"){
     h+=leadsGridHtml(rows,key);
-    h+='<div class="note">Quick-scan columns only &mdash; referral, notes, team, setup, source, and the rest are in Detail view (click a row&rsquo;s Details). Edits save when you click away. '+rows.length+' of '+all.length+' shown.</div>';
+    h+='<div class="note">Quick-scan columns only &mdash; referral, notes, team, setup, source, and the rest are in Detail view (click a row to open them). Edits save when you click away. '+rows.length+' of '+all.length+' shown.</div>';
     return h;
   }
 
@@ -556,7 +560,7 @@ var LEAD_GRID_FIELDS=[
 ];
 
 function leadsGridHtml(rows,trackKey){
-  var COLS=6+LEAD_GRID_FIELDS.length; // company/role/location/status + extras + found + details btn
+  var COLS=6+LEAD_GRID_FIELDS.length; // company/role/location/status + extras + found + details indicator
   var h='<div class="card grid-wrap"><table><thead><tr>'+
     '<th>Company</th><th>Role</th><th>Location</th><th>Status</th>'+
     LEAD_GRID_FIELDS.map(function(f){return '<th>'+esc(f[1])+'</th>';}).join("")+
@@ -564,7 +568,12 @@ function leadsGridHtml(rows,trackKey){
   '</tr></thead><tbody>'+rows.map(function(l){
     var g=geo(l.location);
     var open=!!ui.expanded[l.id];
-    var row='<tr'+(g?' class="'+g.p+'"':'')+'>'+
+    // The row itself is the click target for expand/select (see the
+    // document click handler's data-expand case) - clicking anywhere on
+    // it except an actual form control opens its Details and highlights
+    // it, rather than requiring a precise click on a button.
+    var cls=(g?[g.p]:[]).concat(String(ui.selected[trackKey])===String(l.id)?["gr-sel"]:[]).join(" ");
+    var row='<tr data-expand="'+l.id+'" data-scope="'+trackKey+'"'+(cls?' class="'+cls+'"':'')+'>'+
       '<td class="co cc" title="'+esc(l.company)+'">'+esc(l.company)+'</td>'+
       '<td class="rc"><a href="'+esc(l.url)+'" target="_blank" rel="noopener" title="'+esc(l.title)+'">'+esc(l.title)+'</a></td>'+
       '<td class="loc" title="'+esc(l.location)+'"><div class="loc-txt">'+esc(l.location)+'</div>'+(g?'<span class="geo '+g.p+'">'+esc(g.label)+'</span>':'')+'</td>'+
@@ -574,7 +583,7 @@ function leadsGridHtml(rows,trackKey){
         return '<td><input type="text" data-id="'+l.id+'" data-field="'+key+'" value="'+esc(val)+'"></td>';
       }).join("")+
       '<td class="dt mono">'+esc(l.found)+'</td>'+
-      '<td><button class="btn ghost" data-expand="'+l.id+'" data-scope="'+trackKey+'">'+(open?'Hide':'Details')+'</button></td>'+
+      '<td class="exp-ind">'+(open?'Hide':'Details')+'</td>'+
     '</tr>';
     if(open){
       row+='<tr class="more-row"><td colspan="'+COLS+'"><div class="facts-card" style="margin-top:0">'+factsGridHtml(l,EXTRA_FIELDS,false)+'</div></td></tr>';
@@ -612,7 +621,7 @@ function appsTab(){
 
   if(ui.view==="grid"){
     h+=appsGridHtml(A);
-    h+='<div class="note">Quick-scan columns only &mdash; referral, notes, team, setup, source, comp, and the rest are in Detail view (click a row&rsquo;s Details). Edits save when you click away. Days counts from the applied date.</div>';
+    h+='<div class="note">Quick-scan columns only &mdash; referral, notes, team, setup, source, comp, and the rest are in Detail view (click a row to open them). Edits save when you click away. Days counts from the applied date.</div>';
     return h;
   }
 
@@ -653,7 +662,12 @@ function appsGridHtml(A){
   '</tr></thead><tbody>'+A.map(function(a){
     var d=daysSince(a.dateApplied);
     var open=!!ui.expanded[a.id];
-    var row='<tr>'+
+    // Row is the expand/select click target (see leadsGridHtml above for
+    // why); most of an application row is form fields though, so the
+    // document click handler excludes clicks on those and only the row's
+    // non-input area (Days, the indicator cell, empty padding) toggles it.
+    var cls=String(ui.selected.applications)===String(a.id)?' class="gr-sel"':'';
+    var row='<tr data-expand="'+a.id+'" data-scope="applications"'+cls+'>'+
       '<td><input type="text" data-id="'+a.id+'" data-field="company" data-app="1" value="'+esc(a.company)+'" placeholder="Company"></td>'+
       '<td><input type="text" data-id="'+a.id+'" data-field="title" data-app="1" value="'+esc(a.title)+'" placeholder="Role"></td>'+
       '<td>'+selectHtml(APP_STATUS,a.status,'data-id="'+a.id+'" data-field="status" data-app="1"')+'</td>'+
@@ -665,7 +679,7 @@ function appsGridHtml(A){
           ?'<input type="date" data-id="'+a.id+'" data-field="'+key+'" data-app="1" value="'+esc(val)+'">'
           :'<input type="text" data-id="'+a.id+'" data-field="'+key+'" data-app="1" value="'+esc(val)+'">')+'</td>';
       }).join("")+
-      '<td><button class="btn ghost" data-expand="'+a.id+'" data-scope="applications">'+(open?'Hide':'Details')+'</button></td>'+
+      '<td class="exp-ind">'+(open?'Hide':'Details')+'</td>'+
       '<td><button class="btn ghost" data-del="'+a.id+'" title="Remove">&times;</button></td>'+
     '</tr>';
     if(open){
@@ -732,13 +746,17 @@ document.addEventListener("click",function(e){
     return;
   }
 
+  // data-expand lives on the grid <tr> itself, so any click on the row
+  // toggles it - except clicks on an actual form control (editing a
+  // field, opening the status select, following the posting link,
+  // clicking Remove), which fall through to their own handling below.
   var ex=e.target.closest("[data-expand]");
-  if(ex){
+  if(ex&&!e.target.closest("input,select,textarea,a,button")){
     var exId=ex.getAttribute("data-expand"), exScope=ex.getAttribute("data-scope");
     ui.expanded[exId]=!ui.expanded[exId];
-    // Expanding a row's Details in grid view also "selects" it, so
-    // switching to Detail view lands on the same record.
-    if(ui.expanded[exId])ui.selected[exScope]=exId;
+    // Clicking a row - opening or closing it - is what "highlights" it:
+    // it's the row Detail view lands on when you switch there.
+    ui.selected[exScope]=exId;
     render();
     return;
   }
