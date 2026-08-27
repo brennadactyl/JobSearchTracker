@@ -1,9 +1,15 @@
 # Job Search Tracker
 
-Tooling for running a daily, verified job search entirely headless: three
-tracked searches (software engineering, technical program management,
-consumer product management), each updating a durable baseline doc and
-syncing new postings to a live tracker webpage.
+Tooling for running a daily, verified job search entirely headless: any
+number of tracked searches you define (e.g. software engineering, product
+management, data science - whatever roles you're after), each updating a
+durable baseline doc and syncing new postings to a live tracker webpage.
+
+**Set up your own copy with an AI's help, not by hand-authoring config
+files.** See [Setup](#setup-on-any-machine) below - the
+[job-search-setup](.claude/skills/job-search-setup/) Claude Code skill reads
+your resume(s), asks what roles/companies/locations you're after, and
+generates everything else.
 
 **This repo contains no personal data.** Resumes, candidate profile, target
 companies, and search results live in a separate local "private" folder -
@@ -17,10 +23,13 @@ whole pipeline runs through the standalone `claude` CLI with no desktop app or
 special tooling required. Search results reach the page via a `curl` POST to
 a small API; every edit is one D1 row write, not a shared blob, so a headless
 sync and a browser edit landing at the same moment can't clobber each other.
+Track labels, the page title, and which locations count as top-priority are
+config the webpage stores itself (`/api/config`), not anything baked into the
+code - one deployed Worker works for anyone's tracks.
 
 ## Architecture
 
-![Architecture diagram: Task Scheduler fires the headless Claude CLI three times daily, which reads and writes the local private/ folder, searches and verifies career sites, and posts new leads to a Cloudflare Worker. The Worker reads and writes a D1 database and serves the same data to the browser. Tooling code syncs separately with GitHub, never touching the private data.](docs/architecture.svg)
+![Architecture diagram: Task Scheduler fires the headless Claude CLI daily, once per configured track, which reads and writes the local private/ folder, searches and verifies career sites, and posts new leads to a Cloudflare Worker. The Worker reads and writes a D1 database and serves the same data to the browser. Tooling code syncs separately with GitHub, never touching the private data.](docs/architecture.svg)
 
 Full write-up with a reference table of routes and schedules:
 [docs/architecture.html](docs/architecture.html) (open locally in a browser -
@@ -29,12 +38,14 @@ GitHub shows source for `.html` files rather than rendering them).
 ## Contents
 
 ```
+.claude/skills/
+  job-search-setup/           AI-assisted onboarding - see Setup below
 docs/
   architecture.svg           the diagram above
   architecture.html           full architecture write-up (open in a browser)
 scripts/
-  run-search.ps1              runs one search (engineering | technical-pm | product)
-  setup-scheduler.ps1          registers all three as daily Windows Scheduled Tasks
+  run-search.ps1              runs one track (any key with a matching scheduled-tasks/<key>.md)
+  setup-scheduler.ps1          registers every track it finds as a daily Windows Scheduled Task
 worker/
   src/index.js                  routing
   src/api.js                    D1-backed API handlers
@@ -62,19 +73,31 @@ private.example/
    setx TRACKER_URL "https://job-search-tracker.<your-subdomain>.workers.dev"
    setx TRACKER_API_TOKEN "<the token you chose during worker setup>"
    ```
-4. **Get your private data folder onto the machine** - see
-   [private.example/README.md](private.example/README.md). Point at it with
+4. **Set up your private data folder** - either:
+   - **With Claude's help (recommended):** put your resume(s) somewhere
+     Claude can read them, then ask it to run the
+     [job-search-setup](.claude/skills/job-search-setup/) skill. It'll ask
+     what tracks/companies/locations you want and generate everything in
+     step 5 below for you, then continue on to steps 6-7 itself.
+   - **By hand:** see [private.example/README.md](private.example/README.md)
+     for the exact files to author yourself.
+
+   Either way, point at the resulting folder with
    `setx JOB_SEARCH_DATA_DIR "C:\path\to\private"`, or just place it at
    `private\` next to this repo (already gitignored).
-5. **Register the scheduled tasks:**
+5. **Register the scheduled tasks** (the setup skill does this for you; run
+   it yourself if you set up by hand or are adding a track):
    ```powershell
    .\scripts\setup-scheduler.ps1
    ```
-6. **Test one run before trusting the schedule:**
+   It discovers every track from `private\scheduled-tasks\*.md` itself -
+   nothing to tell it about how many you have.
+6. **Test one run before trusting the schedule** - the previous step prints
+   the exact command for whichever tracks it just registered, e.g.:
    ```bat
    schtasks /Run /TN JobSearch-Engineering
    ```
-   Check `private\logs\engineering.log` for what happened.
+   Check `private\logs\<track>.log` for what happened.
 
 Tasks run daily while you're logged in - no stored Windows password required.
 If the machine is off or you're logged out at the scheduled time, that run is
@@ -84,8 +107,11 @@ up - it's hosted on Cloudflare, independent of any machine being on.
 ## Running a search manually
 
 ```powershell
-.\scripts\run-search.ps1 -Task engineering
+.\scripts\run-search.ps1 -Task <track key>
 ```
+
+`<track key>` is whatever you named a track when setting it up (matches a
+`private\scheduled-tasks\<key>.md` file) - e.g. `engineering`.
 
 ## Things worth not relearning
 

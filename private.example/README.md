@@ -3,11 +3,18 @@
 This repo (the "tooling") never contains personal data. Everything specific to
 you - resumes, candidate profile, target companies, search results - lives in
 a separate folder that is **not** part of this git repo (see `.gitignore` ->
-`/private/`). The live tracker webpage's data lives in Cloudflare KV once you
-deploy `../worker/` - not in this folder either.
+`/private/`). The live tracker webpage's own data (leads, applications, track
+config) lives in its Cloudflare D1 database once you deploy `../worker/` -
+not in this folder either.
 
-Point the scripts at it via `-DataDir`, or set it once as an environment
-variable:
+**Recommended: let Claude fill this folder in for you.** Point it at
+`../.claude/skills/job-search-setup/` with your resume(s) in hand - it reads
+them, asks what tracks/companies/locations you want, and generates everything
+below. The rest of this doc describes the result, for reference or for
+authoring it by hand instead.
+
+Point the scripts at this folder via `-DataDir`, or set it once as an
+environment variable:
 
 ```bat
 setx JOB_SEARCH_DATA_DIR "C:\path\to\your\private\data"
@@ -19,22 +26,30 @@ there if you'd rather not manage a separate location).
 
 ## Required structure
 
+One track = one `scheduled-tasks/<key>.md` + one `docs/tracked_<key>_postings.md`,
+where `<key>` is a lowercase-hyphenated slug you pick (e.g. `engineering`,
+`data-science`) - it's also the value used as the tracker's `search` field and
+the `-Task` argument to `run-search.ps1`. Have as many tracks as you want, not
+a fixed number:
+
 ```
 private/
   docs/
-    tracked_job_postings.md    candidate profile, target companies, found postings - SWE
-    tracked_pm_postings.md     same, for technical PM roles
-    tracked_cpm_postings.md    same, for consumer PM roles
+    tracked_<key>_postings.md   candidate profile, target companies, found postings - one per track
   resumes/
     <your resume files>.docx
   reference/
     <resume text extract, historical tracker xlsx, etc.>
   scheduled-tasks/
-    engineering.md              the filled-in daily prompt for the SWE search
-    technical-pm.md             same, for technical PM
-    product.md                  same, for consumer PM
+    <key>.md                    the filled-in daily prompt for that track - one per track
   logs/                         created automatically by run-search.ps1
 ```
+
+(This repo's own example tracks use `engineering` / `technical-pm` / `product`
+as keys, with `docs/tracked_job_postings.md` / `tracked_pm_postings.md` /
+`tracked_cpm_postings.md` as their doc filenames - those doc names predate the
+one-key-for-everything convention above; a fresh track's doc should just be
+`tracked_<key>_postings.md`, matching its scheduled-task file.)
 
 `scheduled-tasks/*.md` are the actual prompts run each day - they're personal
 (they reference your name, resume paths, and target companies), which is why

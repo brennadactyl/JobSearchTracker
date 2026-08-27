@@ -128,12 +128,12 @@
   <header>
     <p class="eyebrow">System architecture</p>
     <h1>Job Search Tracker</h1>
-    <p>Three headless searches run daily on a schedule, verify postings against real career pages, and sync new results to a small hosted webpage — with no AI-specific tooling anywhere past the search step itself.</p>
+    <p>Headless searches run daily on a schedule, one per track you've configured, verify postings against real career pages, and sync new results to a small hosted webpage — with no AI-specific tooling anywhere past the search step itself.</p>
   </header>
 
   <figure>
     <div class="diagram-frame">
-      <svg viewBox="0 0 1440 530" role="img" aria-label="Windows Task Scheduler fires the claude CLI three times daily; it reads and writes private local data, searches and verifies career sites, and posts new leads to a Cloudflare Worker. The Worker reads and writes a D1 database and serves the same data to the browser for live editing. Tooling code syncs separately with GitHub, never touching the private data.">
+      <svg viewBox="0 0 1440 530" role="img" aria-label="Windows Task Scheduler fires the claude CLI daily, once per configured track; it reads and writes private local data, searches and verifies career sites, and posts new leads to a Cloudflare Worker. The Worker reads and writes a D1 database and serves the same data to the browser for live editing. Tooling code syncs separately with GitHub, never touching the private data.">
 
         <defs>
           <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -167,7 +167,7 @@
         <!-- ===== connector labels ===== -->
         <g font-family="Space Mono, monospace" font-size="11.5" fill="currentColor">
           <text x="184" y="118" opacity="0.75">git pull / push</text>
-          <text x="184" y="238">fires 3x daily</text>
+          <text x="184" y="238">fires daily, per track</text>
           <text x="82" y="380" text-anchor="end" opacity="0.75">read docs</text>
           <text x="184" y="380">write doc</text>
           <text x="330" y="80">WebSearch + WebFetch</text>
@@ -198,7 +198,7 @@
           <rect x="40" y="140" width="260" height="70" rx="9" fill="var(--surface)" stroke="var(--line-strong)" stroke-width="1.3" />
           <text x="60" y="168" font-family="Archivo, sans-serif" font-weight="700" font-size="15" fill="currentColor">Windows Task Scheduler</text>
           <text x="60" y="188" font-family="Space Mono, monospace" font-size="11.5" fill="currentColor" opacity="0.7">run-search.ps1</text>
-          <text x="60" y="203" font-family="Space Mono, monospace" font-size="11.5" fill="currentColor" opacity="0.7">08:00 · 08:30 · 09:00</text>
+          <text x="60" y="203" font-family="Space Mono, monospace" font-size="11.5" fill="currentColor" opacity="0.7">staggered, one per track</text>
         </g>
 
         <!-- Claude CLI -->
@@ -256,7 +256,7 @@
 
       </svg>
     </div>
-    <figcaption>Three daily headless runs write to a local, private doc and push only new verified postings to the Worker; the same Worker backs the live webpage, so what you see in the browser and what the search wrote are the same D1 rows. Tooling (scripts, Worker code) syncs with GitHub on its own — the private-data box never does.</figcaption>
+    <figcaption>Each track's daily headless run writes to its own local, private doc and pushes only new verified postings to the Worker; the same Worker backs the live webpage, so what you see in the browser and what the search wrote are the same D1 rows. Tooling (scripts, Worker code) syncs with GitHub on its own — the private-data box never does.</figcaption>
   </figure>
 
   <section>
@@ -264,7 +264,7 @@
     <div class="cols">
       <div class="card">
         <p class="k">01 · Pipeline</p>
-        <p>Task Scheduler fires <code class="mono">run-search.ps1</code> three times a day, once per track (SWE, TPM, CPM). Each run invokes the Claude CLI non-interactively with a fixed, scoped tool list — no permission prompt sits waiting for a person who isn't there.</p>
+        <p>Task Scheduler fires <code class="mono">run-search.ps1</code> once daily per track — however many you've set up (<code class="mono">scripts/setup-scheduler.ps1</code> discovers them and registers one task each). Each run invokes the Claude CLI non-interactively with a fixed, scoped tool list — no permission prompt sits waiting for a person who isn't there.</p>
         <p>The CLI reads that track's baseline doc and resume, searches and verifies real job postings, rewrites the doc, then <code class="mono">curl</code>s any genuinely new ones to the Worker.</p>
       </div>
       <div class="card">
@@ -274,7 +274,7 @@
       </div>
       <div class="card private">
         <p class="k">03 · Data boundary</p>
-        <p>Everything that names Brenna — resumes, target companies, candidate profile, the prompts themselves — lives in a local <code class="mono">private/</code> folder, gitignored from day one.</p>
+        <p>Everything personal — resumes, target companies, candidate profile, the prompts themselves — lives in a local <code class="mono">private/</code> folder, gitignored from day one. The <code class="mono">.claude/skills/job-search-setup/</code> skill generates it from a resume and a conversation, rather than anyone hand-authoring it.</p>
         <p>Only the mechanism (scripts, Worker source, schema) lives in the public GitHub repo, which is what makes it safe to clone onto another machine.</p>
       </div>
     </div>
@@ -288,12 +288,11 @@
           <tr><th>Track</th><th>Trigger</th><th>Baseline doc</th></tr>
         </thead>
         <tbody>
-          <tr><td>Engineering</td><td class="mono">08:00 daily</td><td class="mono">private/docs/tracked_job_postings.md</td></tr>
-          <tr><td>Technical PM</td><td class="mono">08:30 daily</td><td class="mono">private/docs/tracked_pm_postings.md</td></tr>
-          <tr><td>Product</td><td class="mono">09:00 daily</td><td class="mono">private/docs/tracked_cpm_postings.md</td></tr>
+          <tr><td>&lt;your track key&gt;</td><td class="mono">staggered daily</td><td class="mono">private/docs/tracked_&lt;key&gt;_postings.md</td></tr>
         </tbody>
       </table>
     </div>
+    <p style="color:var(--ink3);font-size:13px;margin-top:10px">One row per track you've set up — <code class="mono">scripts/setup-scheduler.ps1</code> registers them, staggered 30 minutes apart by default. This project's own deployment currently runs three: <code class="mono">engineering</code> (08:00), <code class="mono">technical-pm</code> (08:30), <code class="mono">product</code> (09:00) — an example, not a fixed set.</p>
   </section>
 
   <section>
@@ -304,10 +303,11 @@
         </thead>
         <tbody>
           <tr><td class="mono">/</td><td class="mono">GET</td><td>tracker webpage</td></tr>
-          <tr><td class="mono">/api/data</td><td class="mono">GET</td><td>current leads + applications</td></tr>
+          <tr><td class="mono">/api/data</td><td class="mono">GET</td><td>current leads + applications + track/display config</td></tr>
           <tr><td class="mono">/api/leads</td><td class="mono">POST</td><td>add new postings, deduped on (search, url)</td></tr>
           <tr><td class="mono">/api/update</td><td class="mono">POST</td><td>edit a lead's status/notes, or add/edit an application</td></tr>
           <tr><td class="mono">/api/delete-application</td><td class="mono">POST</td><td>remove one application row</td></tr>
+          <tr><td class="mono">/api/config</td><td class="mono">GET/POST</td><td>read/set track labels, display title, priority-location rules</td></tr>
         </tbody>
       </table>
     </div>
