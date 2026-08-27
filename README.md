@@ -38,6 +38,7 @@ GitHub shows source for `.html` files rather than rendering them).
 ## Contents
 
 ```
+.claude-plugin/plugin.json    lets this repo be installed as a Claude Code plugin (see Setup)
 .claude/skills/
   job-search-setup/           AI-assisted onboarding - see Setup below
 docs/
@@ -52,6 +53,7 @@ worker/
   src/page.html                 the tracker webpage itself
   migrations/                   D1 schema, applied via `wrangler d1 migrations apply`
   wrangler.toml                  deploy config
+  package.json                   lets the Deploy to Cloudflare button chain migrations + deploy
   README.md                      one-time deploy instructions
 private.example/
   README.md                    expected layout for your own private data folder
@@ -59,26 +61,49 @@ private.example/
 
 ## Setup on any machine
 
-1. **Clone this repo.**
-2. **Install prerequisites:**
-   - [Node.js](https://nodejs.org) (LTS)
-   - `npm install -g @anthropic-ai/claude-code`
-   - Authenticate for headless use: `claude setup-token`, then
-     `setx CLAUDE_CODE_OAUTH_TOKEN "<token it gives you>"` (open a new
-     terminal afterward so the variable takes effect)
-3. **Deploy the tracker webpage** (once - not per machine): follow
-   [worker/README.md](worker/README.md). You'll end up with a URL and a
-   token; set them on every machine that runs searches:
+No Node.js, no git, and no `wrangler` CLI required for any of this - see the
+note after each step if you'd rather do it the traditional way instead.
+
+1. **Install Claude Code** - a native installer, no Node.js needed:
+   ```powershell
+   irm https://claude.ai/install.ps1 | iex
+   ```
+   Then authenticate for headless use: `claude setup-token`, then
+   `setx CLAUDE_CODE_OAUTH_TOKEN "<token it gives you>"` (open a new
+   terminal afterward so the variable takes effect).
+2. **Get this tooling onto your machine** - inside a Claude Code session:
+   ```
+   /plugin marketplace add brennadactyl/JobSearchTracker
+   /plugin install job-search-tracker@JobSearchTracker
+   ```
+   Claude Code fetches everything itself - no `git clone` needed. (If you'd
+   rather have an editable local copy - e.g. to change the code - `git clone`
+   still works exactly as before; everything below is the same either way.)
+3. **Deploy the tracker webpage** (once - not per machine):
+
+   [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/brennadactyl/JobSearchTracker/tree/main/worker)
+
+   Click it, sign in to Cloudflare (creates a free account if you don't have
+   one), and accept the defaults - it forks the Worker code into your own
+   GitHub, provisions the D1 database, and deploys, all in Cloudflare's own
+   build environment. You'll land on your new Worker's dashboard; from
+   **Settings → Variables and Secrets**, add a secret named `API_TOKEN` with
+   any long random value you pick (this is the token the searches and the
+   webpage both authenticate with - no CLI needed to set it). Then set it,
+   plus your Worker's URL, on every machine that runs searches:
    ```bat
    setx TRACKER_URL "https://job-search-tracker.<your-subdomain>.workers.dev"
-   setx TRACKER_API_TOKEN "<the token you chose during worker setup>"
+   setx TRACKER_API_TOKEN "<the secret value you just picked>"
    ```
+   (Prefer the CLI, or need to re-run migrations after a schema change later?
+   [worker/README.md](worker/README.md) documents the manual `wrangler`-based
+   path too - same end result.)
 4. **Set up your private data folder** - either:
    - **With Claude's help (recommended):** put your resume(s) somewhere
      Claude can read them, then ask it to run the
      [job-search-setup](.claude/skills/job-search-setup/) skill. It'll ask
      what tracks/companies/locations you want and generate everything in
-     step 5 below for you, then continue on to steps 6-7 itself.
+     step 5 below for you, then run that step itself.
    - **By hand:** see [private.example/README.md](private.example/README.md)
      for the exact files to author yourself.
 

@@ -7,3 +7,7 @@ Thumbs.db
 
 # Wrangler local cache/build output - never commit
 worker/.wrangler/
+
+# npm install output, if anyone runs it locally (worker/package.json is
+# mainly for the Deploy to Cloudflare button, which installs its own copy)
+node_modules/

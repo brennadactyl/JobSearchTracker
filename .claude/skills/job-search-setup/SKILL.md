@@ -15,7 +15,10 @@ instead of the installer hand-authoring prompt files and JSON.
 
 Runs the same way for a brand-new install (no `scheduled-tasks/` yet) and for
 adding one more track to an existing install - check what's already there
-(step 1) and only ask about what's missing.
+(step 1) and only ask about what's missing. Also runs the same way whether
+this repo got here via `git clone` or via `/plugin install` - the one place
+that differs is step 7 (registering scheduled tasks), which needs to know
+which one it is.
 
 ## One identifier per track
 
@@ -160,12 +163,36 @@ environment variables.
 
 ### 7. Register the scheduled tasks
 
-Run `scripts/setup-scheduler.ps1` (from the repo root, or with `-DataDir`
-pointing at a non-default data dir). It discovers every `scheduled-tasks/
-*.md` file itself - nothing to pass it about which tracks exist. It will
-warn about any prerequisite that's still missing (the `claude` CLI,
+**If this repo was installed as a Claude Code plugin** (`$env:CLAUDE_PLUGIN_ROOT`
+is set), copy its `scripts/` folder to `<data dir>\scripts\` first (overwrite
+- keep it current with the plugin's version), and run
+`setup-scheduler.ps1` from *that* copy, not from `$env:CLAUDE_PLUGIN_ROOT`
+directly:
+
+```powershell
+Copy-Item "$env:CLAUDE_PLUGIN_ROOT\scripts" "<data dir>\scripts" -Recurse -Force
+& "<data dir>\scripts\setup-scheduler.ps1" -DataDir "<data dir>"
+```
+
+This matters because `${CLAUDE_PLUGIN_ROOT}` points at a cache directory that
+gets replaced (old versions cleaned up after ~14 days) whenever the plugin
+updates. A scheduled task registered against that path directly would break
+silently on the next plugin update; one registered against the stable copy
+in the data dir doesn't.
+
+**If this repo was `git clone`d instead** (`$env:CLAUDE_PLUGIN_ROOT` is
+unset), just run `scripts/setup-scheduler.ps1` from the repo root (or with
+`-DataDir` pointing at a non-default data dir) - no copy needed, the clone
+itself is already a stable location.
+
+Either way, `setup-scheduler.ps1` discovers every `scheduled-tasks/*.md`
+file itself - nothing to pass it about which tracks exist. It will warn
+about any prerequisite that's still missing (the `claude` CLI,
 `CLAUDE_CODE_OAUTH_TOKEN`, `TRACKER_URL`/`TRACKER_API_TOKEN`) rather than
 fail outright, so it's safe to run even mid-setup.
+
+Re-run this step (the copy + `setup-scheduler.ps1`) any time after a plugin
+update, so the stable copy and the registered tasks stay current.
 
 ### 8. Offer a test run
 

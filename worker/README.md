@@ -26,6 +26,37 @@ your notes) lives only in D1 once deployed.
 You need to do the account creation and login yourself - not something that
 can be done on your behalf.
 
+### Quick deploy (recommended)
+
+No Node.js or `wrangler` CLI required locally - the build/deploy happens in
+Cloudflare's own environment.
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/brennadactyl/JobSearchTracker/tree/main/worker)
+
+1. Click the button, sign in to Cloudflare (creates a free account if you
+   don't have one), and accept the defaults on the setup page it shows you.
+2. It forks this `worker/` directory into a new repo in your own GitHub, and
+   reads `wrangler.toml` to auto-provision a D1 database for you (filling in
+   the `database_id` for you - nothing to paste in by hand). `package.json`'s
+   `deploy` script (`wrangler d1 migrations apply DB --remote && wrangler
+   deploy`) runs the schema migrations and deploys in one step.
+3. It lands you on your new Worker's dashboard. Go to **Settings → Variables
+   and Secrets** and add a secret named `API_TOKEN` - any long random value
+   you pick (a password generator, or `-join ((48..57)+(97..122)|Get-Random
+   -Count 40|%{[char]$_})` in PowerShell, works fine). This is done through
+   the dashboard UI, no CLI needed.
+4. Your Worker's URL is shown on that same dashboard page (something like
+   `https://job-search-tracker.<your-subdomain>.workers.dev`). Set it and the
+   token you just picked as environment variables on every machine that runs
+   searches:
+   ```bat
+   setx TRACKER_API_TOKEN "the-secret-value-you-picked"
+   setx TRACKER_URL "https://job-search-tracker.<your-subdomain>.workers.dev"
+   ```
+   Open a new terminal afterward.
+
+### Manual setup (alternative, or for updating an existing deployment)
+
 1. **Create a free Cloudflare account** at https://dash.cloudflare.com/sign-up
    (if you don't have one already).
 
