@@ -567,6 +567,11 @@ function leadsTab(key){
     if(!q)return true;
     return (l.company+" "+l.title+" "+l.location).toLowerCase().indexOf(q)>=0;
   }).sort(function(a,b){
+    // Not a fit sinks to the bottom regardless of location tier - it's
+    // been screened out, so it shouldn't compete with active leads for
+    // the top-of-list spots the geo ranking below is trying to surface.
+    var na=a.status==="Not a fit"?1:0, nb=b.status==="Not a fit"?1:0;
+    if(na!==nb)return na-nb;
     var d=rank(a)-rank(b); if(d)return d;
     return String(b.found).localeCompare(String(a.found));
   });
