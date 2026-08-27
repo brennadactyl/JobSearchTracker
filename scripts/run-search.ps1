@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Runs one of the three daily job-search prompts through the Claude Code CLI.
+  Runs one daily job-search prompt through the Claude Code CLI.
 
 .DESCRIPTION
   Generic runner - contains no personal data itself. It reads a prompt file from
@@ -26,7 +26,10 @@
   exit status at the end.
 
 .PARAMETER Task
-  Which search to run: engineering | technical-pm | product
+  Which search to run - any name with a matching <DataDir>\scheduled-tasks\<Task>.md
+  file (e.g. "engineering", "data-science", whatever tracks you've set up).
+  Not a fixed list: this runner has no opinion on how many tracks you have or
+  what they're called, only that a prompt file exists for the one you name.
 
 .PARAMETER DataDir
   Path to the private data folder (the "silo") holding docs/, resumes/,
@@ -39,7 +42,6 @@
 #>
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("engineering", "technical-pm", "product")]
     [string]$Task,
 
     [string]$DataDir = $(if ($env:JOB_SEARCH_DATA_DIR) { $env:JOB_SEARCH_DATA_DIR } else { Join-Path $PSScriptRoot "..\private" })
@@ -55,7 +57,12 @@ $DataDir = (Resolve-Path $DataDir).Path
 
 $promptFile = Join-Path $DataDir "scheduled-tasks\$Task.md"
 if (-not (Test-Path $promptFile)) {
-    Write-Error "Prompt file not found: $promptFile"
+    $tasksDir = Join-Path $DataDir "scheduled-tasks"
+    $available = if (Test-Path $tasksDir) {
+        (Get-ChildItem $tasksDir -Filter "*.md" | ForEach-Object { $_.BaseName }) -join ", "
+    } else { $null }
+    $hint = if ($available) { "Available tasks: $available" } else { "No .md files found in $tasksDir either." }
+    Write-Error "Prompt file not found: $promptFile`n$hint"
     exit 1
 }
 
