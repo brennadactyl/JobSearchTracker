@@ -182,7 +182,10 @@ export async function handleUpdate(request, env) {
   }
 
   if (body.type === "lead") {
-    const fields = ["status", "notes", ...EXTRA_FIELDS];
+    // delistedOn is set/cleared by the scheduled searches (see
+    // migrations/0004_add_lead_delisted.sql) - kept separate from `status`
+    // so it never overwrites the installer's own application-progress field.
+    const fields = ["status", "notes", "delistedOn", ...EXTRA_FIELDS];
     const setClause = fields.map((f) => `${f} = COALESCE(?, ${f})`).join(", ");
     const values = fields.map((f) => (typeof body[f] === "string" ? body[f] : null));
     const result = await env.DB.prepare(`UPDATE leads SET ${setClause} WHERE id = ?`)

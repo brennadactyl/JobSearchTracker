@@ -410,6 +410,14 @@ function tabsHtml(){
   }).join("");
 }
 
+// A lead's original posting can be confirmed taken down independent of
+// `status` (which is the installer's own application-progress field) - so
+// an "Applied" lead can still show as delisted without status being touched
+// or overwritten. See migrations/0004_add_lead_delisted.sql.
+function delistedBadge(l){
+  return l.delistedOn?' <span class="pill bad" title="Original posting confirmed no longer live">Delisted '+esc(l.delistedOn)+'</span>':"";
+}
+
 function pillFor(st){
   var m={"New":"new","Reviewing":"hot","Applied":"go","Not a fit":"no","Closed":"no",
          "Recruiter Screen":"hot","Tech Screen":"hot","Onsite / Loop":"hot","Offer":"go",
@@ -523,7 +531,7 @@ function leadsTab(key){
     var cls="md-row"+(l.id===sel.id?" sel":"")+(g?" "+g.p:"");
     return '<div class="'+cls+'" data-select="'+l.id+'" data-scope="'+key+'">'+
       '<div class="md-row-top"><span class="co">'+esc(l.company)+'</span>'+
-        '<span class="pill '+pillFor(l.status)+'">'+esc(l.status)+'</span></div>'+
+        '<span class="pill '+pillFor(l.status)+'">'+esc(l.status)+'</span>'+delistedBadge(l)+'</div>'+
       '<div class="md-row-ttl">'+esc(l.title)+'</div>'+
       '<div class="md-row-loc">'+esc(l.location)+(g?'<span class="geo '+g.p+'">'+esc(g.label)+'</span>':'')+'</div>'+
     '</div>';
@@ -556,7 +564,7 @@ function leadsGridHtml(rows,trackKey){
       '<td class="co cc" title="'+esc(l.company)+'">'+esc(l.company)+'</td>'+
       '<td class="rc"><a href="'+esc(l.url)+'" target="_blank" rel="noopener" title="'+esc(l.title)+'">'+esc(l.title)+'</a></td>'+
       '<td class="loc" title="'+esc(l.location)+'"><div class="loc-txt">'+esc(l.location)+'</div>'+(g?'<span class="geo '+g.p+'">'+esc(g.label)+'</span>':'')+'</td>'+
-      '<td>'+selectHtml(LEAD_STATUS,l.status,'data-id="'+l.id+'" data-field="status"')+'</td>'+
+      '<td>'+selectHtml(LEAD_STATUS,l.status,'data-id="'+l.id+'" data-field="status"')+delistedBadge(l)+'</td>'+
       LEAD_GRID_FIELDS.map(function(f){
         var key=f[0],val=l[key]||"";
         return '<td><input type="text" data-id="'+l.id+'" data-field="'+key+'" value="'+esc(val)+'"></td>';
@@ -580,7 +588,7 @@ function leadDetailHtml(l,key){
     '<div class="dh-meta">'+esc(l.location)+(g?' &middot; <span class="geo '+g.p+'">'+esc(g.label)+'</span>':'')+
       ' &middot; <a href="'+esc(l.url)+'" target="_blank" rel="noopener">View posting &#8599;</a></div></div>';
   if(l.fit)h+='<div class="dh-fit">'+esc(l.fit)+'</div>';
-  h+='<div class="dh-status">'+selectHtml(LEAD_STATUS,l.status,'data-id="'+l.id+'" data-field="status"')+
+  h+='<div class="dh-status">'+selectHtml(LEAD_STATUS,l.status,'data-id="'+l.id+'" data-field="status"')+delistedBadge(l)+
     '<span class="dh-dates">Found '+esc(l.found)+' &middot; Confirmed live '+esc(l.verified)+'</span></div>';
   h+='<div class="facts-card">'+factsGridHtml(l,EXTRA_FIELDS,false)+'</div>';
   h+='<div class="dh-notes"><div class="mf-label">Notes</div>'+
