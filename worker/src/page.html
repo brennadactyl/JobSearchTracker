@@ -691,9 +691,15 @@ function appDetailHtml(a){
 function render(){
   document.getElementById("tabs").innerHTML=tabsHtml();
   var p=document.getElementById("panel");
+  // Re-rendering replaces the master-detail list wholesale, which would
+  // otherwise reset its scroll position to the top on every click -
+  // including just selecting a different row. Preserve it across the swap.
+  var oldList=p.querySelector(".md-list"), scrollTop=oldList?oldList.scrollTop:0;
   if(ui.tab==="dashboard")p.innerHTML=dashboard();
   else if(ui.tab==="applications")p.innerHTML=appsTab();
   else p.innerHTML=leadsTab(ui.tab);
+  var newList=p.querySelector(".md-list");
+  if(newList)newList.scrollTop=scrollTop;
 }
 
 document.addEventListener("click",function(e){
