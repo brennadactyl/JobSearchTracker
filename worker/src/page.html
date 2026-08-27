@@ -13,11 +13,17 @@
   --ink:#14172A; --ink2:#555B77; --ink3:#868CA6;
   --accent:#A96C15; --accent-soft:#F6EBD8;
   --good:#226642; --warn:#96600F; --crit:#A93A31;
-  --pri-high:#0F7B6C; --pri-high-soft:#D8EEEA;
-  --pri-med:#7A3FA0; --pri-med-soft:#F0E3F9;
+  --pri-high:#0E8F6E; --pri-high-soft:#D8EEEA;
+  --pri-med:#6B21A8; --pri-med-soft:#F0E3F9;
   --shadow:0 1px 2px rgba(20,23,42,.06),0 8px 24px -12px rgba(20,23,42,.18);
 }
-@media (prefers-color-scheme:dark){:root{
+/* Dark palette applies by OS/browser preference (prefers-color-scheme),
+   unless the theme toggle (#themeToggle, see the script at the bottom of
+   the page) has set an explicit choice via the data-theme attribute -
+   :not([data-theme="light"]) lets an explicit dark choice fall through
+   here too, and the [data-theme="dark"] block below covers explicit dark
+   when the OS preference itself is light. */
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
   --ground:#0E1018; --surface:#161925; --surface2:#1E2230; --line:#2A2F41;
   --ink:#E9EBF4; --ink2:#A3AAC3; --ink3:#717892;
   --accent:#E0A544; --accent-soft:#33280F;
@@ -26,6 +32,15 @@
   --pri-med:#C994EE; --pri-med-soft:#2B1E38;
   --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
 }}
+:root[data-theme="dark"]{
+  --ground:#0E1018; --surface:#161925; --surface2:#1E2230; --line:#2A2F41;
+  --ink:#E9EBF4; --ink2:#A3AAC3; --ink3:#717892;
+  --accent:#E0A544; --accent-soft:#33280F;
+  --good:#4FBE85; --warn:#DFA63C; --crit:#E8756A;
+  --pri-high:#4FD1B8; --pri-high-soft:#10322D;
+  --pri-med:#C994EE; --pri-med-soft:#2B1E38;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
+}
 *{box-sizing:border-box}
 body{margin:0;background:var(--ground);color:var(--ink);
   font-family:"IBM Plex Sans",system-ui,-apple-system,sans-serif;font-size:15px;line-height:1.5;
@@ -37,6 +52,8 @@ h1,h2,h3{font-family:"Bricolage Grotesque","IBM Plex Sans",sans-serif;margin:0;l
 .hdr{display:flex;flex-wrap:wrap;gap:14px;align-items:baseline;justify-content:space-between;padding:30px 0 18px}
 .hdr h1{font-size:clamp(24px,3.6vw,33px);font-weight:700}
 .hdr .sub{color:var(--ink2);font-size:14px;margin-top:5px}
+.hdr-right{display:flex;align-items:center;gap:12px}
+#themeToggle{font-size:15px;line-height:1;padding:6px 9px}
 .stamp{font-size:12px;color:var(--ink3);display:flex;align-items:center;gap:9px}
 .dot{width:6px;height:6px;border-radius:50%;background:var(--good);flex:none}
 .dot.off{background:var(--ink3)}
@@ -117,7 +134,7 @@ td.rc a{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 td.cc{max-width:170px;overflow:hidden;text-overflow:ellipsis}
 td:first-child{border-left:3px solid transparent}
 tr.p-high td:first-child{border-left-color:var(--pri-high)}
-tr.p-med td:first-child{border-left-color:var(--pri-med)}
+tr.p-med td:first-child{border-left-color:var(--pri-med-soft)}
 td select{padding:5px 7px;font-size:13px;min-width:112px}
 td input[type=text],td input[type=date]{font-size:13px;min-width:104px}
 td textarea{font-size:13px;min-height:32px;min-width:130px}
@@ -140,7 +157,7 @@ td textarea{font-size:13px;min-height:32px;min-width:130px}
 .md-row.sel{background:var(--accent-soft)}
 .md-row.sel:hover{background:var(--accent-soft)}
 .md-row.p-high{border-left-color:var(--pri-high)}
-.md-row.p-med{border-left-color:var(--pri-med)}
+.md-row.p-med{border-left-color:var(--pri-med-soft)}
 .md-row-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
 .md-row-top .co{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .md-row-top .pill{flex:0 0 auto}
@@ -219,6 +236,15 @@ td textarea{font-size:13px;min-height:32px;min-width:130px}
 #gate .err{color:var(--crit);font-size:12.5px;min-height:1em}
 .hidden{display:none!important}
 </style>
+<script>
+// Applied before body paint so a stored theme choice (see #themeToggle's
+// click handler in the main script) doesn't flash the OS-default theme
+// first. Absent/invalid values fall through to prefers-color-scheme.
+try{
+  var t0=localStorage.getItem("bjs.theme");
+  if(t0==="light"||t0==="dark")document.documentElement.setAttribute("data-theme",t0);
+}catch(e){}
+</script>
 </head>
 <body>
 
@@ -239,7 +265,10 @@ td textarea{font-size:13px;min-height:32px;min-width:130px}
         <h1 id="appTitle">Job Search Tracker</h1>
         <div class="sub" id="appSub">Verified openings, refreshed daily. Edit anything &mdash; it saves for every device.</div>
       </div>
-      <div class="stamp"><span class="dot" id="savedot"></span><span id="savetext">Loading</span></div>
+      <div class="hdr-right">
+        <div class="stamp"><span class="dot" id="savedot"></span><span id="savetext">Loading</span></div>
+        <button class="btn ghost" id="themeToggle" type="button" aria-label="Switch to dark theme" title="Switch to dark theme">🌙</button>
+      </div>
     </div>
     <nav class="tabs" id="tabs" role="tablist"></nav>
     <main id="panel"></main>
@@ -249,6 +278,32 @@ td textarea{font-size:13px;min-height:32px;min-width:130px}
 <script>
 (function(){
 "use strict";
+
+// Theme toggle: an explicit choice persists in localStorage ("bjs.theme")
+// and is applied early by the small script in <head> (before this one
+// runs) so there's no flash of the OS-default theme on load. No stored
+// choice falls back to prefers-color-scheme; clicking the toggle always
+// sets an explicit choice from then on, in either direction.
+function effectiveTheme(){
+  var explicit=document.documentElement.getAttribute("data-theme");
+  if(explicit==="light"||explicit==="dark")return explicit;
+  return (window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";
+}
+function paintThemeToggle(){
+  var btn=document.getElementById("themeToggle");
+  if(!btn)return;
+  var next=effectiveTheme()==="dark"?"light":"dark";
+  btn.textContent=next==="dark"?"🌙":"☀️";
+  btn.setAttribute("aria-label","Switch to "+next+" theme");
+  btn.title=btn.getAttribute("aria-label");
+}
+function toggleTheme(){
+  var next=effectiveTheme()==="dark"?"light":"dark";
+  document.documentElement.setAttribute("data-theme",next);
+  try{localStorage.setItem("bjs.theme",next);}catch(e){}
+  paintThemeToggle();
+}
+paintThemeToggle();
 
 var LEAD_STATUS=["New","Reviewing","Applied","Not a fit","Closed"];
 var APP_STATUS=["Applied","Recruiter Screen","Tech Screen","Onsite / Loop","Offer","Rejected","Withdrawn"];
@@ -734,6 +789,7 @@ function render(){
 
 document.addEventListener("click",function(e){
   if(e.target.id==="tokenSubmit"){submitToken();return;}
+  if(e.target.closest("#themeToggle")){toggleTheme();return;}
 
   var t=e.target.closest("[data-tab]");
   if(t){ui.tab=t.getAttribute("data-tab");ui.q="";ui.filter="All";
