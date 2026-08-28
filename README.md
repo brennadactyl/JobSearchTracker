@@ -33,7 +33,7 @@ can be redeployed/updated independently of the other.
 
 ## Architecture
 
-![Architecture diagram: Task Scheduler fires the headless Claude CLI daily, once per configured track, which reads and writes the local private/ folder, searches and verifies career sites, and posts new leads to a Cloudflare Worker. The Worker reads and writes a D1 database and serves the same data to the browser. Tooling code syncs separately with GitHub, never touching the private data.](docs/architecture.svg)
+![Architecture diagram: Task Scheduler fires the headless Claude CLI daily, once per configured track, which reads and writes the local private/ folder, searches and verifies career sites, and posts new leads to a Cloudflare Worker API. The Worker reads and writes a D1 database and answers the browser's cross-origin API calls; a separate static-assets Worker deployment serves the browser the tracker page itself. Tooling code (server and client) syncs separately with GitHub, never touching the private data.](docs/architecture.svg)
 
 Full write-up with a reference table of routes and schedules:
 [docs/architecture.html](docs/architecture.html) (open locally in a browser -
