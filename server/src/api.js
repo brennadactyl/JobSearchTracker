@@ -1,7 +1,27 @@
 /**
- * D1-backed API handlers for the Job Search Tracker worker.
+ * D1-backed API handlers for the Job Search Tracker API worker.
  * See ../migrations/ for schema, and index.js for routing.
+ *
+ * This worker is API-only (no page-serving) - the client is a separate
+ * deployable (see ../../client/) that calls this API cross-origin, hence
+ * CORS_HEADERS below on every response. `*` rather than a specific origin:
+ * this is a self-hosted, per-installer deployment (each installer runs
+ * their own worker + client + D1 + bearer token, never a shared multi-
+ * tenant backend), and the Bearer token - not origin - is the actual
+ * access boundary, so restricting the origin would add config surface
+ * without adding real security.
  */
+
+export const CORS_HEADERS = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET, POST, OPTIONS",
+  "access-control-allow-headers": "Authorization, Content-Type",
+  "access-control-max-age": "86400",
+};
+
+export function corsPreflight() {
+  return new Response(null, { status: 204, headers: CORS_HEADERS });
+}
 
 export function authorized(request, env) {
   const header = request.headers.get("Authorization") || "";
@@ -16,7 +36,7 @@ export function unauthorized() {
 export function json(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
     status,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...CORS_HEADERS },
   });
 }
 

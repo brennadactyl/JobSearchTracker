@@ -1,0 +1,8 @@
+name = "job-search-tracker-client"
+compatibility_date = "2025-01-01"
+
+# Static single-file app, no build step - Cloudflare Pages serves this
+# directory as-is. `pages_build_output_dir` is what lets `wrangler deploy`
+# (the same command used for the API worker) target a Pages project instead
+# of a Worker; see README.md for the deploy flow.
+pages_build_output_dir = "."

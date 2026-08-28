@@ -1,0 +1,11 @@
+{
+  "name": "job-search-tracker-client",
+  "private": true,
+  "description": "Tracker webpage (Cloudflare Pages, static, no build step). Talks to ../server/'s API cross-origin. See README.md.",
+  "scripts": {
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

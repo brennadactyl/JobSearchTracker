@@ -2,12 +2,8 @@ name = "job-search-tracker"
 main = "src/index.js"
 compatibility_date = "2025-01-01"
 
-# src/page.html is imported as a plain string (see src/index.js) rather
-# than bundled as a module.
-[[rules]]
-type = "Text"
-globs = ["**/*.html"]
-fallthrough = true
+# API-only worker - no page-serving, so no text-import rule needed (the
+# client at ../client/ is a separate deployable, see its own wrangler.toml).
 
 # Created by: wrangler d1 create job-search-tracker-db
 # Paste the database_id it prints below.

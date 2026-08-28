@@ -1,14 +1,16 @@
 /**
- * Job Search Tracker - Cloudflare Worker
+ * Job Search Tracker - API worker
  *
- * Serves the tracker webpage (page.html) and a small JSON API, backed by
- * D1 (SQLite). No dependency on any particular AI tool - just HTTP + D1, so
- * the headless search CLI can update it with a plain `curl` call and the
- * page can edit it with `fetch`.
+ * API-only Cloudflare Worker backed by D1 (SQLite). No dependency on any
+ * particular AI tool - just HTTP + D1, so the headless search CLI can
+ * update it with a plain `curl` call and the client can edit it with
+ * `fetch`. The client (the tracker webpage) is a separate deployable - see
+ * ../../client/ - served from its own origin (Cloudflare Pages) and talking
+ * to this worker cross-origin, hence the CORS handling below and in
+ * api.js's json()/CORS_HEADERS. Server and client are versioned, deployed,
+ * and updated independently; see each one's own README for its deploy flow.
  *
  * Routes:
- *   GET  /                   unauthenticated shell; JS prompts for the token,
- *                            then calls the API routes below with it
  *   GET  /api/data           requires Bearer token -> { updated, leads[], applications[], screened[] }
  *   POST /api/leads          requires Bearer token -> body: { leads: [...] }
  *                            appends leads not already present for the same
@@ -42,25 +44,26 @@
  *                            still empty
  *   POST /api/delete-application  requires Bearer token -> body: { id } ->
  *                            removes one application row (used by the
- *                            page's "remove" control; leads are never
+ *                            client's "remove" control; leads are never
  *                            deleted, only re-statused)
  *   GET  /api/config         requires Bearer token -> { tracks[], settings }
  *                            - the per-installer config (track tabs, display
- *                            title, priority-location rules) that page.html
+ *                            title, priority-location rules) that the client
  *                            renders off instead of a baked-in TRACKS object,
  *                            so this same code serves any installer.
  *   POST /api/config         requires Bearer token -> body: { tracks?, display_title?, priority_locations? }
  *                            - sets that config (see handleSetConfig in api.js)
+ *   OPTIONS *                 CORS preflight for any of the above -> 204 + CORS_HEADERS
  *
- * Schema: see ../migrations/. Handlers: see ./api.js. Page: see ./page.html
- * (imported as raw text - see the `rules` entry in ../wrangler.toml).
+ * Schema: see ../migrations/. Handlers: see ./api.js.
  */
 
-import PAGE_HTML from "./page.html";
 import {
   authorized,
   unauthorized,
   json,
+  corsPreflight,
+  CORS_HEADERS,
   handleAddLeads,
   handleAddScreened,
   handleUpdate,
@@ -74,13 +77,9 @@ import {
 
 export default {
   async fetch(request, env) {
-    const url = new URL(request.url);
+    if (request.method === "OPTIONS") return corsPreflight();
 
-    if (url.pathname === "/" && request.method === "GET") {
-      return new Response(PAGE_HTML, {
-        headers: { "content-type": "text/html; charset=utf-8" },
-      });
-    }
+    const url = new URL(request.url);
 
     if (url.pathname === "/api/data" && request.method === "GET") {
       if (!authorized(request, env)) return unauthorized();
@@ -144,6 +143,6 @@ export default {
       return handleDeleteApplication(request, env);
     }
 
-    return new Response("Not found", { status: 404 });
+    return new Response("Not found", { status: 404, headers: CORS_HEADERS });
   },
 };

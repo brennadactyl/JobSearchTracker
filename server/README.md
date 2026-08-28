@@ -1,24 +1,29 @@
-# Job Search Tracker webpage (Cloudflare Worker + D1)
+# Job Search Tracker API (Cloudflare Worker + D1)
 
-A plain hosted webpage backed by a real SQL database (Cloudflare D1, which is
-SQLite), so the headless search CLI can update it with a `curl` call and
-concurrent writes (a search syncing new leads while you're editing a status)
-don't race and silently clobber each other - each row is its own database
-record with its own atomic writes, not one big JSON blob.
+The API-only backend: a small JSON API over a real SQL database (Cloudflare
+D1, which is SQLite), so the headless search CLI can update it with a `curl`
+call and concurrent writes (a search syncing new leads while you're editing a
+status) don't race and silently clobber each other - each row is its own
+database record with its own atomic writes, not one big JSON blob.
+
+This worker serves **no HTML** - the tracker webpage is a separate deployable
+at [`../client/`](../client/), served from its own origin (typically
+Cloudflare Pages) and talking to this API cross-origin (CORS is on by
+default, see `src/api.js`). Server and client are versioned, deployed, and
+updated independently - a client redeploy never needs a server redeploy and
+vice versa, as long as both are compatible with the API described below.
 
 No personal data lives in this repo - the actual data (company names, URLs,
 your notes) lives only in D1 once deployed.
 
 ## Code layout
 
-- `src/index.js` - Worker entry point: routing only (which path/method maps
-  to which handler), no logic of its own.
+- `src/index.js` - routing only (which path/method maps to which handler),
+  no logic of its own. Also owns the CORS preflight (`OPTIONS`) response.
 - `src/api.js` - the D1-backed API handlers (`/api/data`, `/api/leads`,
-  `/api/screened`, `/api/update`, `/api/delete-application`, `/api/config`) and their shared helpers.
-- `src/page.html` - the tracker webpage: a real, standalone HTML file (open
-  it directly in a browser to preview/edit it) with its CSS and client-side
-  JS inline. `index.js` imports it as plain text (see the `[[rules]]` entry
-  in `wrangler.toml`) and serves it verbatim for `GET /`.
+  `/api/screened`, `/api/update`, `/api/delete-application`, `/api/config`),
+  their shared helpers, and `CORS_HEADERS` (applied to every response via
+  the shared `json()` helper).
 - `migrations/` - D1 schema, see below.
 
 ## One-time setup
@@ -31,11 +36,11 @@ can be done on your behalf.
 No Node.js or `wrangler` CLI required locally - the build/deploy happens in
 Cloudflare's own environment.
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/brennadactyl/JobSearchTracker/tree/main/worker)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/brennadactyl/JobSearchTracker/tree/main/server)
 
 1. Click the button, sign in to Cloudflare (creates a free account if you
    don't have one), and accept the defaults on the setup page it shows you.
-2. It forks this `worker/` directory into a new repo in your own GitHub, and
+2. It forks this `server/` directory into a new repo in your own GitHub, and
    reads `wrangler.toml` to auto-provision a D1 database for you (filling in
    the `database_id` for you - nothing to paste in by hand). `package.json`'s
    `deploy` script (`wrangler d1 migrations apply DB --remote && wrangler
@@ -46,14 +51,17 @@ Cloudflare's own environment.
    -Count 40|%{[char]$_})` in PowerShell, works fine). This is done through
    the dashboard UI, no CLI needed.
 4. Your Worker's URL is shown on that same dashboard page (something like
-   `https://job-search-tracker.<your-subdomain>.workers.dev`). Set it and the
-   token you just picked as environment variables on every machine that runs
-   searches:
+   `https://job-search-tracker.<your-subdomain>.workers.dev`). You'll need it
+   for two places: the client's own gate screen (see
+   [`../client/README.md`](../client/README.md)), and as an environment
+   variable on every machine that runs searches:
    ```bat
    setx TRACKER_API_TOKEN "the-secret-value-you-picked"
    setx TRACKER_URL "https://job-search-tracker.<your-subdomain>.workers.dev"
    ```
    Open a new terminal afterward.
+5. Now deploy the client - see [`../client/README.md`](../client/README.md).
+   It's a separate one-click deploy; this worker alone has no webpage.
 
 ### Manual setup (alternative, or for updating an existing deployment)
 
@@ -68,7 +76,7 @@ Cloudflare's own environment.
 
 3. **Create the D1 database:**
    ```bat
-   cd worker
+   cd server
    wrangler d1 create job-search-tracker-db
    ```
    It prints a `database_id`. Paste it into `wrangler.toml`, replacing
@@ -104,20 +112,27 @@ Cloudflare's own environment.
    ```
    Open a new terminal afterward.
 
-## Updating the page after code changes
+8. **Deploy the client** - see [`../client/README.md`](../client/README.md).
 
-**Always deploy from `main`, never from a feature branch or worktree** - merge/fast-forward `main` and push first, then deploy from a checkout that's actually on `main`. `wrangler deploy` and `wrangler d1 migrations apply --remote` both push whatever's on disk live regardless of git branch, so deploying from a branch leaves the live Worker running code that isn't in `main`'s history.
+## Updating after code changes
+
+**Always deploy from `main`, never from a feature branch or worktree** -
+merge/fast-forward `main` and push first, then deploy from a checkout that's
+actually on `main`. `wrangler deploy` and `wrangler d1 migrations apply
+--remote` both push whatever's on disk live regardless of git branch, so
+deploying from a branch leaves the live Worker running code that isn't in
+`main`'s history.
 
 ```bat
-cd worker
+cd server
 wrangler deploy
 ```
 
-Schema changes are tracked migrations in `worker/migrations/` (Wrangler
+Schema changes are tracked migrations in `server/migrations/` (Wrangler
 records which ones have run, so `apply` is always safe to re-run - it only
 executes files it hasn't seen). To add a schema change:
 ```bat
-cd worker
+cd server
 wrangler d1 migrations create job-search-tracker-db <short-name>
 ```
 Edit the generated file, then apply it the same way as step 4 above:
@@ -125,12 +140,19 @@ Edit the generated file, then apply it the same way as step 4 above:
 wrangler d1 migrations apply job-search-tracker-db --remote
 ```
 
-## API (used by the search scripts, see ../private.example/README.md)
+A schema/API change only requires redeploying `server/` - `client/` doesn't
+need a redeploy unless it also needs to use the new field/route. Keep the API
+additive (new optional fields, new routes) where you can, so old clients
+don't break against a newer server; note any breaking change clearly in the
+commit and in this README's API section below.
+
+## API (used by the search scripts, see ../private.example/README.md, and by the client, see ../client/)
 
 - `GET /api/data` - Bearer token required - returns `{ updated, leads[], applications[], screened[] }`
 - `POST /api/leads` - Bearer token required - body `{ "leads": [ {search, company, title, location, url, found, verified, fit, team, setup, comp} ] }` - appends only leads not already present for the same `(search, url)` pair (DB-enforced, atomic); never touches existing status/notes. `team`/`setup`/`comp` are optional (omit rather than send empty) and only meaningful when the posting states them - other Details fields (referral, resume, lastContact, nextAction*, link) are accepted too but are user-entered only, never sent by the search scripts.
 - `POST /api/screened` - Bearer token required - body `{ "screened": [ {search, url, company, title, location, reason, date} ] }` - records a posting the search looked at and decided NOT to add as a lead (dead-on-arrival, outside the US, wrong level/role-type, duplicate), so the next run's dedup check (against `GET /api/data`'s `screened[]`) skips it without re-verifying. Same `(search, url)`-deduped, atomic append as `/api/leads`; `date` defaults to today if omitted. No read-back/UI for this list today - it exists purely so scheduled runs don't re-spend a verification attempt on something already ruled out.
 - `POST /api/update` - Bearer token required - body `{ "type": "lead", "id": ..., "status": "...", "notes": "...", "delistedOn": "..." }` or `{ "type": "application", ... }`. `delistedOn` is set by the scheduled searches (a `YYYY-MM-DD` when a previously-live posting is confirmed taken down, or `""` to clear it if later found live again) - kept separate from `status` so a lead can be, say, "Applied" and delisted at the same time without either field overwriting the other. All fields are optional per call (only what's passed gets updated).
 - `POST /api/delete-application` - Bearer token required - body `{ "id": ... }` - removes one application row (leads are never deleted, only re-statused)
-- `GET /api/config` - Bearer token required - returns `{ tracks: [{key, label, full_description, sort_order}], settings: {display_title, priority_locations} }` - the per-installer config the page renders its tabs/title/geo-priority labels from, instead of a baked-in TRACKS object. `priority_locations` is an ordered list of `{tier: "p-high"|"p-med", label, anyOf: [...], allOf?: [...]}` rules (substring match against the lowercased location, first match wins).
+- `GET /api/config` - Bearer token required - returns `{ tracks: [{key, label, full_description, sort_order}], settings: {display_title, priority_locations} }` - the per-installer config the client renders its tabs/title/geo-priority labels from, instead of a baked-in TRACKS object. `priority_locations` is an ordered list of `{tier: "p-high"|"p-med", label, anyOf: [...], allOf?: [...]}` rules (substring match against the lowercased location, first match wins).
 - `POST /api/config` - Bearer token required - body `{ tracks?, display_title?, priority_locations? }` - sets any of the above. `tracks`, if present, replaces the whole track list (existing leads/applications keep their `search` value even if its track is removed - they just lose their tab, they're never deleted).
+- `OPTIONS *` - CORS preflight for any route above - no auth, returns `204` + `CORS_HEADERS`. Every real response (including error responses) carries `CORS_HEADERS` too (`Access-Control-Allow-Origin: *` - the Bearer token, not origin, is the actual access boundary for this self-hosted, single-installer-per-deployment API).

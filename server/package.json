@@ -1,7 +1,7 @@
 {
-  "name": "job-search-tracker-worker",
+  "name": "job-search-tracker-server",
   "private": true,
-  "description": "Tracker webpage + API (Cloudflare Worker + D1). See README.md.",
+  "description": "Tracker API (Cloudflare Worker + D1). API-only - see ../client/ for the webpage. See README.md.",
   "scripts": {
     "deploy": "wrangler d1 migrations apply DB --remote && wrangler deploy"
   },

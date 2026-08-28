@@ -17,15 +17,19 @@ see [private.example/README.md](private.example/README.md) for the expected
 layout. That separation is what makes this repo safe to keep on GitHub (public
 or private) and to reuse across machines.
 
-**The tracker is a plain webpage** (a Cloudflare Worker + D1, see
-[worker/README.md](worker/README.md)), not a Claude-specific artifact - so the
-whole pipeline runs through the standalone `claude` CLI with no desktop app or
-special tooling required. Search results reach the page via a `curl` POST to
-a small API; every edit is one D1 row write, not a shared blob, so a headless
-sync and a browser edit landing at the same moment can't clobber each other.
-Track labels, the page title, and which locations count as top-priority are
-config the webpage stores itself (`/api/config`), not anything baked into the
-code - one deployed Worker works for anyone's tracks.
+**The tracker is a plain webpage backed by an API, deployed as two
+independent pieces** - a static client ([client/README.md](client/README.md),
+Cloudflare Pages) and a Cloudflare Worker + D1 API
+([server/README.md](server/README.md)), talking to each other cross-origin
+over CORS. Neither is a Claude-specific artifact - the whole pipeline runs
+through the standalone `claude` CLI with no desktop app or special tooling
+required. Search results reach the tracker via a `curl` POST to the API;
+every edit is one D1 row write, not a shared blob, so a headless sync and a
+browser edit landing at the same moment can't clobber each other. Track
+labels, the page title, and which locations count as top-priority are config
+the API stores itself (`/api/config`), not anything baked into the client -
+one deployed client + server pair works for anyone's tracks, and either half
+can be redeployed/updated independently of the other.
 
 ## Architecture
 
@@ -47,17 +51,26 @@ docs/
 scripts/
   run-search.ps1              runs one track (any key with a matching scheduled-tasks/<key>.md)
   setup-scheduler.ps1          registers every track it finds as a daily Windows Scheduled Task
-worker/
-  src/index.js                  routing
-  src/api.js                    D1-backed API handlers
-  src/page.html                 the tracker webpage itself
+server/                        API only - Cloudflare Worker + D1, no HTML served
+  src/index.js                  routing + CORS preflight
+  src/api.js                    D1-backed API handlers + CORS headers
   migrations/                   D1 schema, applied via `wrangler d1 migrations apply`
   wrangler.toml                  deploy config
   package.json                   lets the Deploy to Cloudflare button chain migrations + deploy
+  README.md                      one-time deploy instructions + API reference
+client/                        the tracker webpage - static, no build step
+  index.html                    standalone HTML+CSS+JS, calls server/'s API cross-origin
+  wrangler.toml                  deploy config (Cloudflare Pages)
+  package.json                   lets the Deploy to Cloudflare button deploy it
   README.md                      one-time deploy instructions
 private.example/
   README.md                    expected layout for your own private data folder
 ```
+
+`server/` and `client/` are deployed and versioned independently - a client
+UI change never requires redeploying the API, and vice versa, as long as
+both stay compatible (see `server/README.md`'s API section for what's
+currently supported).
 
 ## Setup on any machine
 
@@ -79,25 +92,36 @@ note after each step if you'd rather do it the traditional way instead.
    Claude Code fetches everything itself - no `git clone` needed. (If you'd
    rather have an editable local copy - e.g. to change the code - `git clone`
    still works exactly as before; everything below is the same either way.)
-3. **Deploy the tracker webpage** (once - not per machine):
+3. **Deploy the tracker** (once - not per machine). Two separate one-click
+   deploys, server first:
 
-   [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/brennadactyl/JobSearchTracker/tree/main/worker)
+   [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/brennadactyl/JobSearchTracker/tree/main/server)
 
    Click it, sign in to Cloudflare (creates a free account if you don't have
-   one), and accept the defaults - it forks the Worker code into your own
+   one), and accept the defaults - it forks the API code into your own
    GitHub, provisions the D1 database, and deploys, all in Cloudflare's own
    build environment. You'll land on your new Worker's dashboard; from
    **Settings → Variables and Secrets**, add a secret named `API_TOKEN` with
    any long random value you pick (this is the token the searches and the
-   webpage both authenticate with - no CLI needed to set it). Then set it,
+   client both authenticate with - no CLI needed to set it). Then set it,
    plus your Worker's URL, on every machine that runs searches:
    ```bat
    setx TRACKER_URL "https://job-search-tracker.<your-subdomain>.workers.dev"
    setx TRACKER_API_TOKEN "<the secret value you just picked>"
    ```
+
+   Then the client:
+
+   [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/brennadactyl/JobSearchTracker/tree/main/client)
+
+   Same flow - it forks the client into your own GitHub and deploys it as a
+   Cloudflare Pages project. Open the Pages URL it gives you and, on the gate
+   screen, enter the Worker URL and token from the previous step - both are
+   remembered in your browser for next time.
+
    (Prefer the CLI, or need to re-run migrations after a schema change later?
-   [worker/README.md](worker/README.md) documents the manual `wrangler`-based
-   path too - same end result.)
+   [server/README.md](server/README.md) and [client/README.md](client/README.md)
+   document the manual `wrangler`-based path too - same end result.)
 4. **Set up your private data folder** - either:
    - **With Claude's help (recommended):** put your resume(s) somewhere
      Claude can read them, then ask it to run the

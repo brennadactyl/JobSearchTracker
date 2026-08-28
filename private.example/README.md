@@ -3,8 +3,8 @@
 This repo (the "tooling") never contains personal data. Everything specific to
 you - resumes, candidate profile, target companies, search results - lives in
 a separate folder that is **not** part of this git repo (see `.gitignore` ->
-`/private/`). The live tracker webpage's own data (leads, applications, track
-config) lives in its Cloudflare D1 database once you deploy `../worker/` -
+`/private/`). The live tracker's own data (leads, applications, track
+config) lives in its Cloudflare D1 database once you deploy `../server/` -
 not in this folder either.
 
 **Recommended: let Claude fill this folder in for you.** Point it at
@@ -54,8 +54,10 @@ one-key-for-everything convention above; a fresh track's doc should just be
 `scheduled-tasks/*.md` are the actual prompts run each day - they're personal
 (they reference your name, resume paths, and target companies), which is why
 they live here rather than in the repo. Each one syncs new postings to the
-tracker webpage over HTTP (`curl` + a bearer token) - see `../worker/README.md`
-for deploying that webpage and getting `TRACKER_URL` / `TRACKER_API_TOKEN`.
+tracker API over HTTP (`curl` + a bearer token) - see `../server/README.md`
+for deploying that API and getting `TRACKER_URL` / `TRACKER_API_TOKEN`. (The
+webpage itself is a separate deployable, `../client/` - the search scripts
+never talk to it directly, only to the API.)
 
 ## Moving to a new machine
 
@@ -65,5 +67,5 @@ zip transfer, a private cloud-synced folder, an external drive, or a separate
 machine: clone this repo, put the private folder wherever you like, set
 `JOB_SEARCH_DATA_DIR` (or pass `-DataDir`) to point at it, and set
 `TRACKER_URL` / `TRACKER_API_TOKEN` (same values as any other machine - the
-webpage and its data are already deployed centrally on Cloudflare, not
-per-machine).
+tracker (client + API) and its data are already deployed centrally on
+Cloudflare, not per-machine).

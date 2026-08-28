@@ -133,7 +133,7 @@
 
   <figure>
     <div class="diagram-frame">
-      <svg viewBox="0 0 1440 530" role="img" aria-label="Windows Task Scheduler fires the claude CLI daily, once per configured track; it reads and writes private local data, searches and verifies career sites, and posts new leads to a Cloudflare Worker. The Worker reads and writes a D1 database and serves the same data to the browser for live editing. Tooling code syncs separately with GitHub, never touching the private data.">
+      <svg viewBox="0 0 1440 530" role="img" aria-label="Windows Task Scheduler fires the claude CLI daily, once per configured track; it reads and writes private local data, searches and verifies career sites, and posts new leads to a Cloudflare Worker API. The Worker reads and writes a D1 database and answers the browser's cross-origin API calls; a separate Cloudflare Pages deployment serves the browser the static tracker page itself. Tooling code (server and client) syncs separately with GitHub, never touching the private data.">
 
         <defs>
           <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -156,11 +156,13 @@
           <polyline points="300,275 520,275 520,55 590,55" marker-end="url(#arrow)" />
           <!-- Worker -> D1 -->
           <line x1="720" y1="350" x2="720" y2="400" marker-end="url(#arrow)" />
+          <!-- Pages -> Browser (serves the static page) -->
+          <line x1="1270" y1="400" x2="1270" y2="350" marker-end="url(#arrow)" />
         </g>
         <g fill="none" stroke="var(--accent)" stroke-width="2">
           <!-- Claude CLI -> Worker (sync new leads) -->
           <line x1="300" y1="315" x2="590" y2="315" marker-end="url(#arrowAccent)" />
-          <!-- Worker <-> Browser -->
+          <!-- Worker <-> Browser (cross-origin API calls - separate deployment from Pages) -->
           <line x1="850" y1="305" x2="1140" y2="305" marker-end="url(#arrowAccent)" marker-start="url(#arrowAccent)" />
         </g>
 
@@ -176,12 +178,14 @@
         <g font-family="Space Mono, monospace" font-size="11.5" fill="var(--accent)">
           <text x="330" y="308">POST /api/leads</text>
           <text x="330" y="324" opacity="0.75">curl + Bearer token</text>
-          <text x="878" y="296">GET / · fetch /api/data</text>
-          <text x="878" y="312" opacity="0.75">/api/update, Bearer token</text>
+          <text x="878" y="296">fetch /api/data, /api/update</text>
+          <text x="878" y="312" opacity="0.75">cross-origin, CORS + Bearer token</text>
         </g>
         <g font-family="Space Mono, monospace" font-size="11.5" fill="currentColor">
           <text x="734" y="380">SQL</text>
           <text x="734" y="396" opacity="0.7">UNIQUE(search,url)</text>
+          <text x="1284" y="380">static file</text>
+          <text x="1284" y="396" opacity="0.7">HTML+CSS+JS, no build</text>
         </g>
 
         <!-- ===== boxes ===== -->
@@ -189,7 +193,7 @@
         <g>
           <rect x="40" y="20" width="260" height="70" rx="9" fill="var(--surface2)" stroke="var(--line-strong)" stroke-width="1.3" />
           <text x="60" y="48" font-family="Archivo, sans-serif" font-weight="700" font-size="15" fill="currentColor">GitHub</text>
-          <text x="60" y="68" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">JobSearchTracker — scripts, worker code</text>
+          <text x="60" y="68" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">JobSearchTracker — scripts, server + client code</text>
           <text x="60" y="83" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">no personal data, ever</text>
         </g>
 
@@ -227,13 +231,13 @@
           <text x="610" y="83" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">Rockstar, 2K, Roblox, …</text>
         </g>
 
-        <!-- Worker -->
+        <!-- Worker (API only) -->
         <g>
           <rect x="590" y="260" width="260" height="90" rx="9" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.6" />
-          <text x="610" y="288" font-family="Archivo, sans-serif" font-weight="700" font-size="15" fill="var(--accent)">Cloudflare Worker</text>
+          <text x="610" y="288" font-family="Archivo, sans-serif" font-weight="700" font-size="15" fill="var(--accent)">Cloudflare Worker — API</text>
           <text x="610" y="308" font-family="Space Mono, monospace" font-size="11" fill="currentColor" opacity="0.75">job-search-tracker</text>
           <text x="610" y="323" font-family="Space Mono, monospace" font-size="11" fill="currentColor" opacity="0.75">.workers.dev</text>
-          <text x="610" y="341" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">serves page + JSON API</text>
+          <text x="610" y="341" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">JSON only, no page — CORS-enabled</text>
         </g>
 
         <!-- D1 -->
@@ -251,12 +255,21 @@
           <text x="1160" y="288" font-family="Archivo, sans-serif" font-weight="700" font-size="15" fill="currentColor">Browser</text>
           <text x="1160" y="308" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">view + edit status, notes</text>
           <text x="1160" y="323" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">mark applied, add details</text>
-          <text x="1160" y="341" font-family="Space Mono, monospace" font-size="11" fill="currentColor" opacity="0.65">token in localStorage</text>
+          <text x="1160" y="341" font-family="Space Mono, monospace" font-size="11" fill="currentColor" opacity="0.65">API URL + token in localStorage</text>
+        </g>
+
+        <!-- Pages (client) -->
+        <g>
+          <rect x="1140" y="400" width="260" height="90" rx="9" fill="var(--surface)" stroke="var(--line-strong)" stroke-width="1.3" />
+          <text x="1160" y="428" font-family="Archivo, sans-serif" font-weight="700" font-size="15" fill="currentColor">Cloudflare Pages — client</text>
+          <text x="1160" y="448" font-family="Space Mono, monospace" font-size="11" fill="currentColor" opacity="0.75">job-search-tracker-client</text>
+          <text x="1160" y="463" font-family="Space Mono, monospace" font-size="11" fill="currentColor" opacity="0.75">.pages.dev</text>
+          <text x="1160" y="478" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">separate deploy from the Worker</text>
         </g>
 
       </svg>
     </div>
-    <figcaption>Each track's daily headless run writes to its own local, private doc and pushes only new verified postings to the Worker; the same Worker backs the live webpage, so what you see in the browser and what the search wrote are the same D1 rows. Tooling (scripts, Worker code) syncs with GitHub on its own — the private-data box never does.</figcaption>
+    <figcaption>Each track's daily headless run writes to its own local, private doc and pushes only new verified postings to the Worker API; the browser loads the tracker page from a separate Pages deployment and calls the same Worker API cross-origin, so what you see in the browser and what the search wrote are the same D1 rows. Tooling (scripts, server, client) syncs with GitHub on its own — the private-data box never does.</figcaption>
   </figure>
 
   <section>
@@ -265,17 +278,17 @@
       <div class="card">
         <p class="k">01 · Pipeline</p>
         <p>Task Scheduler fires <code class="mono">run-search.ps1</code> once daily per track — however many you've set up (<code class="mono">scripts/setup-scheduler.ps1</code> discovers them and registers one task each). Each run invokes the Claude CLI non-interactively with a fixed, scoped tool list — no permission prompt sits waiting for a person who isn't there.</p>
-        <p>The CLI reads that track's baseline doc and resume, searches and verifies real job postings, rewrites the doc, then <code class="mono">curl</code>s any genuinely new ones to the Worker.</p>
+        <p>The CLI reads that track's baseline doc and resume, searches and verifies real job postings, rewrites the doc, then <code class="mono">curl</code>s any genuinely new ones to the Worker API.</p>
       </div>
       <div class="card">
         <p class="k">02 · Live page</p>
-        <p>The same Worker serves the tracker webpage and answers its <code class="mono">fetch</code> calls. Every edit — a status change, a note — is one D1 row update, so a browser edit and a headless sync landing at the same moment can't silently overwrite each other.</p>
-        <p>A single bearer token gates every route; the browser stores it in <code class="mono">localStorage</code> after first entry.</p>
+        <p>The tracker page (<code class="mono">client/</code>) is a separate Cloudflare Pages deployment from the API Worker (<code class="mono">server/</code>) - it calls the API cross-origin over <code class="mono">fetch</code>, CORS-enabled on the API side. Every edit - a status change, a note - is one D1 row update, so a browser edit and a headless sync landing at the same moment can't silently overwrite each other. Either half redeploys independently of the other.</p>
+        <p>A single bearer token gates every API route; the browser stores it (and the API's URL) in <code class="mono">localStorage</code> after first entry.</p>
       </div>
       <div class="card private">
         <p class="k">03 · Data boundary</p>
         <p>Everything personal — resumes, target companies, candidate profile, the prompts themselves — lives in a local <code class="mono">private/</code> folder, gitignored from day one. The <code class="mono">.claude/skills/job-search-setup/</code> skill generates it from a resume and a conversation, rather than anyone hand-authoring it.</p>
-        <p>Only the mechanism (scripts, Worker source, schema) lives in the public GitHub repo, which is what makes it safe to clone onto another machine.</p>
+        <p>Only the mechanism (scripts, <code class="mono">server/</code>, <code class="mono">client/</code>, schema) lives in the public GitHub repo, which is what makes it safe to clone onto another machine.</p>
       </div>
     </div>
   </section>

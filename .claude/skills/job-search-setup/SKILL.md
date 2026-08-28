@@ -5,13 +5,14 @@ description: Onboards an installer of this job-search tracker (or adds a track t
 
 # Job search setup
 
-This repo's tooling (`scripts/`, `worker/`) is generic - it has no opinion on
-whose job search this is, how many tracks they want, or what locations
-matter to them. The personal parts live entirely in one private data folder
-(see `../../../private.example/README.md` for the expected layout) and in
-the tracker webpage's D1-backed config (see `../../../worker/README.md`'s
-`/api/config` section). This skill is what fills those in conversationally,
-instead of the installer hand-authoring prompt files and JSON.
+This repo's tooling (`scripts/`, `server/`, `client/`) is generic - it has no
+opinion on whose job search this is, how many tracks they want, or what
+locations matter to them. The personal parts live entirely in one private
+data folder (see `../../../private.example/README.md` for the expected
+layout) and in the tracker API's D1-backed config (see
+`../../../server/README.md`'s `/api/config` section). This skill is what
+fills those in conversationally, instead of the installer hand-authoring
+prompt files and JSON.
 
 Runs the same way for a brand-new install (no `scheduled-tasks/` yet) and for
 adding one more track to an existing install - check what's already there
@@ -43,8 +44,9 @@ new tracks; one slug is simpler and there's no reason left not to.)
   existing track's key. If any exist, this is an "add a track" run for
   whatever tracks are missing; don't touch the existing files.
 - Check `TRACKER_URL` and `TRACKER_API_TOKEN` are set (needed for step 6 and
-  for the daily searches themselves - see `../../../worker/README.md` if
-  they deploy the webpage). If missing, keep going (steps 2-5 don't need
+  for the daily searches themselves - see `../../../server/README.md` if
+  they still need to deploy the API, and `../../../client/README.md` for the
+  webpage). If missing, keep going (steps 2-5 don't need
   them) but tell the installer they'll need to set those and re-run step 6
   before the searches can sync anywhere.
 
@@ -139,10 +141,10 @@ Show the generated file(s) (or a summary if long) before moving on -
 cheaper to fix a wrong target company or location tier now than after it's
 pushed live and scheduled.
 
-### 6. Push config to the tracker webpage
+### 6. Push config to the tracker API
 
 **GET `/api/config` first and merge** - `POST /api/config`'s `tracks` field
-*replaces the whole track list* (see `../../../worker/README.md`); posting
+*replaces the whole track list* (see `../../../server/README.md`); posting
 only the new track(s) would delete every existing one. So:
 
 ```

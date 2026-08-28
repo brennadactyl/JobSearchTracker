@@ -256,9 +256,13 @@ try{
 <div id="gate">
   <div class="card">
     <h1>Job search access</h1>
-    <p>Enter your access token to continue.</p>
+    <p id="gateHint">Enter your access token to continue.</p>
+    <div id="apiUrlRow" class="hidden">
+      <input id="apiUrlInput" type="text" placeholder="API URL (e.g. https://job-search-tracker.you.workers.dev)" autocapitalize="off" autocorrect="off" spellcheck="false">
+    </div>
     <input id="tokenInput" type="password" placeholder="Token">
     <button class="btn primary" id="tokenSubmit">Enter</button>
+    <button class="btn ghost" id="changeApiUrl" type="button" style="font-size:12px">Change API URL</button>
     <div id="gateError" class="err"></div>
   </div>
 </div>
@@ -272,6 +276,7 @@ try{
       </div>
       <div class="hdr-right">
         <div class="stamp"><span class="dot" id="savedot"></span><span id="savetext">Loading</span></div>
+        <button class="btn ghost" id="copyLoginLink" type="button" title="Copy a login link for another device/browser - carries your API URL and token, so you won't have to type them again">🔗 Copy login link</button>
         <button class="btn ghost" id="themeToggle" type="button" aria-label="Switch to dark theme" title="Switch to dark theme">🌙</button>
       </div>
     </div>
@@ -318,6 +323,20 @@ var ACTIVE=["Recruiter Screen","Tech Screen","Onsite / Loop"];
 var TRACKS={};
 
 var TOKEN=localStorage.getItem("tracker_token")||"";
+// The API worker's origin (e.g. "https://job-search-tracker.you.workers.dev")
+// - no trailing slash. This client is a separate deployable from the API
+// (see ../server/), served from its own origin, so it has no same-origin
+// API to fall back on.
+//
+// DEFAULT_API_BASE is this deployment's own API - set here so this
+// installer only ever has to enter a token at the gate, same as before the
+// client/server split. Forking this for a different installer? Replace the
+// value below with your own API worker's URL (from ../server/'s deploy
+// step), or clear it to "" to always show the API URL field and let
+// visitors type/paste their own (e.g. for a template/demo deployment with
+// no fixed backend).
+var DEFAULT_API_BASE="https://job-search-tracker.brenna-duffitt.workers.dev";
+var API_BASE=localStorage.getItem("tracker_api_base")||DEFAULT_API_BASE;
 var state={updated:null,leads:[],applications:[],tracks:[],settings:{display_title:"Job Search Tracker",priority_locations:[]}};
 
 // Turns the API's tracks[] (rows: key/label/full_description/sort_order)
@@ -457,9 +476,72 @@ function setSaved(msg,ok){
   t.textContent=msg;
 }
 
+// Builds a one-time login link carrying both the API URL and the token in
+// the URL *fragment* (#...), never the path or query string - a fragment
+// never leaves the browser (not sent to any server, not logged by Pages/any
+// CDN/proxy in access logs), so this is no less safe than the values
+// already sitting in localStorage. Meant to be shared with yourself, e.g.
+// AirDrop/text it to a phone, to skip retyping the URL+token on a new
+// device/browser - see tryConnectFromHash() below, which consumes it once
+// and then wipes it from the visible URL.
+function copyLoginLink(){
+  if(!API_BASE||!TOKEN)return;
+  var link=location.origin+location.pathname+"#u="+encodeURIComponent(API_BASE)+"&t="+encodeURIComponent(TOKEN);
+  var done=function(){setSaved("Login link copied",true);};
+  var fail=function(){setSaved("Couldn't copy - copy the address bar after clicking Copy again",false);};
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(link).then(done,fail);
+  }else{
+    try{
+      var ta=document.createElement("textarea");
+      ta.value=link;ta.style.position="fixed";ta.style.opacity="0";
+      document.body.appendChild(ta);ta.select();document.execCommand("copy");
+      document.body.removeChild(ta);done();
+    }catch(e){fail();}
+  }
+}
+
+// Consumes a #u=...&t=... fragment from a copyLoginLink() link (or one
+// hand-built the same way): saves both values and clears the fragment from
+// the visible URL/history so it doesn't linger in browser history or get
+// re-shared accidentally on a later copy/screenshot. Returns true if it
+// found and applied one.
+function tryConnectFromHash(){
+  if(!location.hash)return false;
+  var params=new URLSearchParams(location.hash.slice(1));
+  var u=params.get("u"),t=params.get("t");
+  if(!u||!t)return false;
+  API_BASE=u.replace(/\/+$/,"");TOKEN=t;
+  localStorage.setItem("tracker_api_base",API_BASE);
+  localStorage.setItem("tracker_token",TOKEN);
+  history.replaceState(null,"",location.pathname+location.search);
+  return true;
+}
+
+// Reveals the (normally hidden, since DEFAULT_API_BASE covers the common
+// case) API URL field, for the rare case an installer needs to point this
+// same deployed client at a different API - a different environment, a
+// friend's instance while testing, etc.
+function showApiUrlField(){
+  document.getElementById("apiUrlRow").classList.remove("hidden");
+  document.getElementById("changeApiUrl").classList.add("hidden");
+  document.getElementById("gateHint").textContent="Enter your tracker API URL and access token to continue.";
+  document.getElementById("apiUrlInput").focus();
+}
+
 function submitToken(){
+  // apiUrlInput is hidden (and can be blank) whenever DEFAULT_API_BASE is
+  // set - fall back to whatever's already in API_BASE (the default, or a
+  // previously-saved override) rather than requiring it be visible/typed.
+  var urlField=document.getElementById("apiUrlInput").value.trim().replace(/\/+$/,"");
+  var url=urlField||API_BASE;
   TOKEN=document.getElementById("tokenInput").value.trim();
-  if(!TOKEN)return;
+  if(!url||!TOKEN){
+    document.getElementById("gateError").textContent=url?"Enter a token.":"Enter both the API URL and a token.";
+    return;
+  }
+  API_BASE=url;
+  localStorage.setItem("tracker_api_base",API_BASE);
   localStorage.setItem("tracker_token",TOKEN);
   boot();
 }
@@ -470,7 +552,7 @@ function api(path,opts){
   var merged={};
   if(opts){for(var k2 in opts){merged[k2]=opts[k2];}}
   merged.headers=headers;
-  return fetch(path,merged).then(function(res){
+  return fetch(API_BASE+path,merged).then(function(res){
     if(res.status===401){
       localStorage.removeItem("tracker_token");
       document.getElementById("gate").classList.remove("hidden");
@@ -841,6 +923,8 @@ function render(){
 document.addEventListener("click",function(e){
   if(e.target.id==="tokenSubmit"){submitToken();return;}
   if(e.target.closest("#themeToggle")){toggleTheme();return;}
+  if(e.target.closest("#copyLoginLink")){copyLoginLink();return;}
+  if(e.target.closest("#changeApiUrl")){showApiUrlField();return;}
 
   var t=e.target.closest("[data-tab]");
   if(t){ui.tab=t.getAttribute("data-tab");ui.q="";ui.filter="All";
@@ -911,7 +995,7 @@ document.addEventListener("click",function(e){
 });
 
 document.addEventListener("keydown",function(e){
-  if(e.target.id==="tokenInput"&&e.key==="Enter"){submitToken();}
+  if((e.target.id==="tokenInput"||e.target.id==="apiUrlInput")&&e.key==="Enter"){submitToken();}
 });
 
 document.addEventListener("input",function(e){
@@ -1000,7 +1084,19 @@ document.addEventListener("focusout",function(e){
   if(e.target.matches("textarea[data-id],input[data-id]"))commit(e.target);
 });
 
-if(TOKEN)boot(); else document.getElementById("gate").classList.remove("hidden");
+tryConnectFromHash(); // a shared login link wins over whatever's already stored
+var apiUrlEl=document.getElementById("apiUrlInput");
+if(apiUrlEl&&API_BASE)apiUrlEl.value=API_BASE;
+// Only show the API URL field (and its hint text) up front when there's no
+// default to fall back on and nothing saved yet - the common case (this
+// deployment's own DEFAULT_API_BASE, or a value already saved from a prior
+// visit/login link) needs just the token, matching the pre-split flow.
+if(API_BASE){
+  document.getElementById("gateHint").textContent="Enter your access token to continue.";
+}else{
+  showApiUrlField();
+}
+if(TOKEN&&API_BASE)boot(); else document.getElementById("gate").classList.remove("hidden");
 })();
 </script>
 </body>
