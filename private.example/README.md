@@ -35,7 +35,7 @@ a fixed number:
 ```
 private/
   docs/
-    tracked_<key>_postings.md   candidate profile, target companies, found postings - one per track
+    tracked_<key>_postings.md   candidate profile, target companies, fetch-reliability notes - one per track (found/screened postings live in the tracker DB, not here)
   resumes/
     <your resume files>.docx
   reference/

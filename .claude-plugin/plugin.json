@@ -1,7 +1,7 @@
 {
   "name": "job-search-tracker",
   "description": "AI-run daily job search: reads your resume, searches and verifies real postings against your configured tracks, and syncs them to a self-hosted tracker webpage. Bundles the job-search-setup skill for onboarding.",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "author": { "name": "Brenna Duffitt" },
   "homepage": "https://github.com/brennadactyl/JobSearchTracker",
   "repository": "https://github.com/brennadactyl/JobSearchTracker",

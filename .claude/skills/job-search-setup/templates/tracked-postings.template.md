@@ -1,16 +1,19 @@
 # Tracked Job Postings — Daily Search Baseline ({{TRACK_TITLE}})
 
-This doc is the running baseline for the daily "{{SEARCH_GOAL_SENTENCE}}" search.{{SIBLING_DOCS_NOTE}}
+This doc is the running knowledge base for the daily "{{SEARCH_GOAL_SENTENCE}}" search - candidate profile, target companies, scope rules, and per-company fetch-reliability notes.{{SIBLING_DOCS_NOTE}}
+
+**Posting data lives in the tracker DB, not this doc.** The "found" list (what's already tracked) and the "screened" list (what's been looked at and rejected) are both fetched from the tracker each run - see step 1b of `scheduled-tasks/{{TRACK_KEY}}.md`. This doc holds only the knowledge that has no DB equivalent.
 
 Each run should:
-1. Read this doc to see what's already been found (compare by URL).
+1. Fetch the tracker's current leads AND screened data (step 1b of the scheduled-task prompt: `GET /api/data` → `leads[]`, `screened[]`) to see what's already found or already ruled out (compare by URL).
 2. Re-search the target companies below for {{ROLE_SEARCH_LINE}} matching the Candidate Profile below.
 3. **Also run a broader discovery search beyond the fixed target list**: search generally for other companies currently hiring for these roles, plus targeted searches on companies with a strong fit not on the core list (see "Expanded net" below for ones tried so far; add more each run). Apply the same mandatory verification - a new company is not exempt. If an expanded-net company yields a strong verified fit more than once, consider promoting it to the core list.
-4. **MANDATORY: fetch every candidate URL directly and confirm it renders an actual job description (title, responsibilities, etc.) before including it anywhere** - in this doc, the tracker, or the summary to the user. A URL surfaced only by a search-engine snippet is a lead, not a finding, until opened and confirmed. Many "found" links turn out closed/expired/wrong even when freshly searched - check every single one, every run, including previously verified ones (they close later). Watch for search snippets that resolve to a listing/index page instead of the individual posting - that does not count as verified, even if the title text matches.
-5. Report only postings whose URL is NOT already listed below as new findings.
-6. Append genuinely new (and verified-live) postings to the table below with today's date and a "Verified live <date>" note, and rewrite this doc in full so the baseline stays current. This doc is the durable source of truth for postings.
-7. **Update the live tracker webpage** (a self-hosted Cloudflare Worker + D1 - see `../../worker/README.md`). Sync is done via `curl POST $TRACKER_URL/api/leads` with a Bearer token from `$TRACKER_API_TOKEN`, from the scheduled-task prompt (`scheduled-tasks/{{TRACK_KEY}}.md`) - see that file for the exact procedure. If there are no new verified postings, skip the sync. If the required environment variables aren't readable in the current session, say so and skip rather than guessing.
-8. If a previously-listed posting is confirmed dead on a later check, **it stays in the found table - it never gets removed for that reason alone.** Mark it delisted on the tracker instead (`POST /api/update`, `delistedOn` = today; procedure is step 8 of `scheduled-tasks/{{TRACK_KEY}}.md`), independent of whatever `status` it's in - the installer still needs to track what they applied to regardless of whether the listing survives. If it's later found live again, clear `delistedOn` the same way. If a posting couldn't be re-verified due to a fetch/tooling problem (timeout, blocked domain, truncated content) rather than a confirmed 404/closed page, don't touch `delistedOn` at all - leave it as-is and note the tooling issue instead, don't treat "couldn't check" as "dead."
+4. **MANDATORY: fetch every candidate URL directly and confirm it renders an actual job description (title, responsibilities, etc.) before including it anywhere** - in the tracker or the summary to the user. A URL surfaced only by a search-engine snippet is a lead, not a finding, until opened and confirmed. Many "found" links turn out closed/expired/wrong even when freshly searched - check every single one, every run, including previously-tracked ones (they close later). Watch for search snippets that resolve to a listing/index page instead of the individual posting - that does not count as verified, even if the title text matches.
+5. Identify postings that are genuinely new - URL not already in `leads[]` or `screened[]` from step 1 - and verified live.
+6. **Sync new verified postings to the tracker** via `POST /api/leads` (step 9 of the scheduled-task prompt). The tracker DB is the durable source of truth for postings; this doc doesn't keep its own copy.
+6b. **Record rejected candidates too.** For any URL checked this run that's genuinely new but does NOT qualify (dead-on-arrival, out of scope, wrong level, duplicate), `POST /api/screened` with a one-line `reason` (step 9b of the scheduled-task prompt) instead of writing a doc bullet. That's what lets tomorrow's run skip re-verifying it.
+7. **Update the live tracker webpage** (a self-hosted Cloudflare Worker + D1 - see `../../worker/README.md`). Sync is done via `curl POST $TRACKER_URL/api/leads` / `/api/screened` with a Bearer token from `$TRACKER_API_TOKEN`, from the scheduled-task prompt (`scheduled-tasks/{{TRACK_KEY}}.md`) - see that file for the exact procedure. If there's nothing new either way, skip the relevant call. If the required environment variables aren't readable in the current session, say so and skip rather than guessing.
+8. If a previously-tracked lead is confirmed dead on a later check, **it stays a lead - it's never deleted or moved for that reason alone.** Mark it delisted on the tracker instead (`POST /api/update`, `delistedOn` = today; procedure is step 8 of `scheduled-tasks/{{TRACK_KEY}}.md`), independent of whatever `status` it's in - the installer still needs to track what they applied to regardless of whether the listing survives. If it's later found live again, clear `delistedOn` the same way. If a posting couldn't be re-verified due to a fetch/tooling problem (timeout, blocked domain, truncated content) rather than a confirmed 404/closed page, don't touch `delistedOn` at all - leave it as-is and note the tooling issue instead, don't treat "couldn't check" as "dead."
 
 
 ## Fetch efficiency (apply on every run)
@@ -30,8 +33,7 @@ Once a domain-wide block has shown up on 2+ separate run-dates (track it in the 
 {{LOCATION_TIER_ROWS}}
 | Standard | any other{{SCOPE_ADJECTIVE}} location | no stripe |
 
-**Postings removed as out of scope** - do not re-add:
-*(none yet - entries land here as runs exclude postings)*
+Out-of-scope candidates get recorded via `POST /api/screened` (step 6b above), not a list here.
 
 ## Candidate Profile (from {{RESUME_FILENAME}})
 {{CANDIDATE_PROFILE_PARAGRAPH}}
@@ -46,9 +48,3 @@ Best-fit roles: {{BEST_FIT_SENTENCE}}
 
 Reliability notes per company (will drift - always re-verify):
 *(none yet - notes accumulate here as runs discover which sites fetch reliably)*
-
-## Postings Found (all verified live as of the date shown)
-
-| Date Found | Company | Title | Location | URL | Verified |
-|---|---|---|---|---|---|
-*(none yet - the first run populates this table)*
