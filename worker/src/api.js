@@ -40,6 +40,16 @@ export const EXTRA_FIELDS = [
   "nextAction", "nextActionDate", "resume", "referral", "comp",
 ];
 
+// When an application first reaches a given pipeline stage (see
+// migrations/0005_add_application_stage_dates.sql) - applications only,
+// leads have no equivalent columns, so this must never be added to
+// EXTRA_FIELDS above (that list is shared by both tables' UPDATE/INSERT
+// statements below).
+export const APP_STAGE_DATE_FIELDS = [
+  "dateRecruiterScreen", "dateTechScreen", "dateOnsite",
+  "dateOffer", "dateRejected", "dateWithdrawn",
+];
+
 // Reads the per-deployment config (see migrations/0003_add_tracks_and_settings.sql):
 // the tracks a track tab exists for, plus display settings. This is what
 // lets one Worker deployment serve any installer's tracks/branding/priority
@@ -198,7 +208,7 @@ export async function handleUpdate(request, env) {
   }
 
   if (body.type === "application") {
-    const fields = ["company", "title", "dateApplied", "status", "notes", "leadId", ...EXTRA_FIELDS];
+    const fields = ["company", "title", "dateApplied", "status", "notes", "leadId", ...EXTRA_FIELDS, ...APP_STAGE_DATE_FIELDS];
     if (body.id) {
       const setClause = fields.map((f) => `${f} = COALESCE(?, ${f})`).join(", ");
       const values = fields.map((f) => (typeof body[f] === "string" ? body[f] : null));

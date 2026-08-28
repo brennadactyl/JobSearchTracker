@@ -369,6 +369,25 @@ var TRACKING_FIELDS=[
 ];
 var APP_ROLE_FIELDS=ROLE_FIELDS.concat([["link","Link"]]);
 
+// One date per APP_STATUS pipeline stage an application has reached (see
+// migrations/0005_add_application_stage_dates.sql) - "Applied" isn't here,
+// it already has dateApplied. commit() auto-stamps the matching entry with
+// today's date the first time status moves to it (only if not already
+// set), but every field here stays a normal editable date input - same
+// pattern as any other field - so a wrong or skipped-stage date can always
+// be fixed or backfilled by hand.
+var STAGE_DATE_FIELDS=[
+  ["Recruiter Screen","dateRecruiterScreen"],
+  ["Tech Screen","dateTechScreen"],
+  ["Onsite / Loop","dateOnsite"],
+  ["Offer","dateOffer"],
+  ["Rejected","dateRejected"],
+  ["Withdrawn","dateWithdrawn"]
+];
+// factsGridHtml-ready [key,label,type] form of the above, keyed by the DB
+// column instead of the status string.
+var STAGE_DATE_RENDER_FIELDS=STAGE_DATE_FIELDS.map(function(s){return [s[1],s[0],"date"];});
+
 function factsGridHtml(item,fields,isApp){
   var appAttr=isApp?' data-app="1"':'';
   return '<div class="more-grid">'+fields.map(function(f){
@@ -390,7 +409,10 @@ function factsCardsHtml(item,isApp,compact){
   return '<div class="facts-card"'+(compact?' style="margin-top:0"':'')+'><div class="mf-label">Role details</div>'+
       factsGridHtml(item,roleFields,isApp)+'</div>'+
     '<div class="facts-card"><div class="mf-label">Follow-up</div>'+
-      factsGridHtml(item,TRACKING_FIELDS,isApp)+'</div>';
+      factsGridHtml(item,TRACKING_FIELDS,isApp)+
+      '<div class="mf-label" style="margin-top:14px">Stage history</div>'+
+      factsGridHtml(item,STAGE_DATE_RENDER_FIELDS,isApp)+
+    '</div>';
 }
 try{var s=localStorage.getItem("bjs.tab");if(s)ui.tab=s;}catch(e){}
 try{var vw0=localStorage.getItem("bjs.view");if(vw0)ui.view=vw0;}catch(e){}
@@ -908,15 +930,26 @@ function commit(el){
   var row=list.filter(function(r){return String(r.id)===String(id);})[0];
   if(!row||row[field]===el.value)return;
   row[field]=el.value;
-  setSaved("Saving…",false);
   var body=isApp?{type:"application",id:id}:{type:"lead",id:id};
   body[field]=el.value;
+  // Auto-stamp the matching Stage history date the first time an
+  // application's status moves to it - only if that stage doesn't already
+  // have a date, so this never clobbers one that was corrected by hand.
+  if(isApp&&field==="status"){
+    var stage=STAGE_DATE_FIELDS.filter(function(s){return s[0]===el.value;})[0];
+    if(stage&&!row[stage[1]]){
+      row[stage[1]]=today();
+      body[stage[1]]=today();
+    }
+  }
+  setSaved("Saving…",false);
   api("/api/update",{method:"POST",body:JSON.stringify(body)}).then(function(){
     setSaved("Saved",true);
     if(field==="status"&&!isApp){
       if(el.value==="Applied")moveToApplications(row);
       render();
     }
+    if(isApp&&field==="status")render(); // reflect the newly-stamped stage date
   }).catch(function(){setSaved("Couldn't save — try again","bad");});
 }
 
