@@ -15,8 +15,8 @@
   pattern blocked the model from even checking whether TRACKER_URL/
   TRACKER_API_TOKEN were set before attempting curl, since env-checking
   commands (printenv etc.) didn't match the pattern. The prompt syncs new
-  postings to the tracker webpage via `curl`, which needs TRACKER_URL and
-  TRACKER_API_TOKEN set as environment variables (see ../worker/README.md) -
+  postings to the tracker API via `curl`, which needs TRACKER_URL and
+  TRACKER_API_TOKEN set as environment variables (see ../server/README.md) -
   if they're missing, the search and doc update still run, the sync step is
   just skipped.
 

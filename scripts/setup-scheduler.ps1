@@ -20,8 +20,8 @@
     - Node.js + the claude CLI (npm install -g @anthropic-ai/claude-code)
     - CLAUDE_CODE_OAUTH_TOKEN set for your account (run `claude setup-token`,
       then `setx CLAUDE_CODE_OAUTH_TOKEN "<token>"`) so headless runs authenticate
-    - TRACKER_URL and TRACKER_API_TOKEN set (see ../worker/README.md) so runs
-      can sync new postings to the tracker webpage
+    - TRACKER_URL and TRACKER_API_TOKEN set (see ../server/README.md) so runs
+      can sync new postings to the tracker API
     - Your private data folder (docs/, resumes/, reference/, scheduled-tasks/)
       in place - see private.example/README.md in this repo
 
