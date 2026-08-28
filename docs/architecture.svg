@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 530" role="img" aria-label="Windows Task Scheduler fires the claude CLI daily, once per configured track; it reads and writes private local data, searches and verifies career sites, and posts new leads to a Cloudflare Worker API. The Worker reads and writes a D1 database and answers the browser's cross-origin API calls; a separate static-assets Worker deployment serves the browser the tracker page itself. Tooling code (server and client) syncs separately with GitHub, never touching the private data.">
-  <rect x="0" y="0" width="1440" height="530" fill="#FAFAF7" />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 410" role="img" aria-label="Windows Task Scheduler fires the claude CLI daily, once per configured track; it reads and writes private local data, searches and verifies career sites, and posts new leads to a Cloudflare Worker API in server/. That API reads and writes a D1 database and answers the browser's cross-origin API calls; a separate static-assets Worker deployment, client/, serves the browser the tracker page itself.">
+  <rect x="0" y="0" width="1440" height="410" fill="#FAFAF7" />
 
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -12,67 +12,58 @@
 
   <!-- ===== connectors ===== -->
   <g fill="none" stroke="#1D2027" stroke-width="1.6" opacity="0.85">
-    <line x1="170" y1="90" x2="170" y2="140" stroke-dasharray="5 5" marker-end="url(#arrow)" marker-start="url(#arrow)" />
-    <line x1="170" y1="210" x2="170" y2="260" marker-end="url(#arrow)" />
-    <line x1="170" y1="350" x2="170" y2="400" marker-end="url(#arrow)" marker-start="url(#arrow)" />
-    <polyline points="300,275 520,275 520,55 590,55" fill="none" marker-end="url(#arrow)" />
-    <line x1="720" y1="350" x2="720" y2="400" marker-end="url(#arrow)" />
-    <line x1="1270" y1="400" x2="1270" y2="350" marker-end="url(#arrow)" />
+    <line x1="170" y1="90" x2="170" y2="140" marker-end="url(#arrow)" />
+    <line x1="170" y1="230" x2="170" y2="280" marker-end="url(#arrow)" marker-start="url(#arrow)" />
+    <polyline points="300,155 520,155 520,55 590,55" fill="none" marker-end="url(#arrow)" />
+    <line x1="720" y1="230" x2="720" y2="280" marker-end="url(#arrow)" />
+    <line x1="1270" y1="280" x2="1270" y2="230" marker-end="url(#arrow)" />
   </g>
   <g fill="none" stroke="#4548D6" stroke-width="2">
-    <line x1="300" y1="315" x2="590" y2="315" marker-end="url(#arrowAccent)" />
-    <line x1="850" y1="305" x2="1140" y2="305" marker-end="url(#arrowAccent)" marker-start="url(#arrowAccent)" />
+    <line x1="300" y1="195" x2="590" y2="195" marker-end="url(#arrowAccent)" />
+    <line x1="850" y1="185" x2="1140" y2="185" marker-end="url(#arrowAccent)" marker-start="url(#arrowAccent)" />
   </g>
 
   <!-- ===== connector labels ===== -->
   <g font-family="'Space Mono', ui-monospace, monospace" font-size="11.5" fill="#1D2027">
-    <text x="184" y="118" opacity="0.75">git pull / push</text>
-    <text x="184" y="238">fires daily, per track</text>
-    <text x="82" y="380" text-anchor="end" opacity="0.75">read docs</text>
-    <text x="184" y="380">write doc</text>
+    <text x="184" y="118">fires daily, per track</text>
+    <text x="82" y="260" text-anchor="end" opacity="0.75">read docs</text>
+    <text x="184" y="260">write doc</text>
     <text x="330" y="80">WebSearch + WebFetch</text>
     <text x="330" y="96" opacity="0.7">verify every URL</text>
-    <text x="734" y="380">SQL</text>
-    <text x="734" y="396" opacity="0.7">UNIQUE(search,url)</text>
-    <text x="1284" y="380">static file</text>
-    <text x="1284" y="396" opacity="0.7">HTML+CSS+JS, no build</text>
+    <text x="734" y="260">SQL</text>
+    <text x="734" y="276" opacity="0.7">UNIQUE(search,url)</text>
+    <text x="1284" y="260">static file</text>
+    <text x="1284" y="276" opacity="0.7">HTML+CSS+JS, no build</text>
   </g>
   <g font-family="'Space Mono', ui-monospace, monospace" font-size="11.5" fill="#4548D6">
-    <text x="330" y="308">POST /api/leads</text>
-    <text x="330" y="324" opacity="0.75">curl + Bearer token</text>
-    <text x="878" y="296">fetch /api/data, /api/update</text>
-    <text x="878" y="312" opacity="0.75">cross-origin, CORS + Bearer token</text>
+    <text x="330" y="188">POST /api/leads</text>
+    <text x="330" y="204" opacity="0.75">curl + Bearer token</text>
+    <text x="878" y="176">fetch /api/data, /api/update</text>
+    <text x="878" y="192" opacity="0.75">cross-origin, CORS + Bearer token</text>
   </g>
 
   <!-- ===== boxes ===== -->
   <g>
-    <rect x="40" y="20" width="260" height="70" rx="9" fill="#F1F1EC" stroke="#C3C5CE" stroke-width="1.3" />
-    <text x="60" y="48" font-family="'Archivo', sans-serif" font-weight="700" font-size="15" fill="#1D2027">GitHub</text>
-    <text x="60" y="68" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.65">JobSearchTracker — scripts, server + client code</text>
-    <text x="60" y="83" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.65">no personal data, ever</text>
+    <rect x="40" y="20" width="260" height="70" rx="9" fill="#FFFFFF" stroke="#C3C5CE" stroke-width="1.3" />
+    <text x="60" y="48" font-family="'Archivo', sans-serif" font-weight="700" font-size="15" fill="#1D2027">Windows Task Scheduler</text>
+    <text x="60" y="68" font-family="'Space Mono', monospace" font-size="11.5" fill="#1D2027" opacity="0.7">run-search.ps1</text>
+    <text x="60" y="83" font-family="'Space Mono', monospace" font-size="11.5" fill="#1D2027" opacity="0.7">staggered, one per track</text>
   </g>
 
   <g>
-    <rect x="40" y="140" width="260" height="70" rx="9" fill="#FFFFFF" stroke="#C3C5CE" stroke-width="1.3" />
-    <text x="60" y="168" font-family="'Archivo', sans-serif" font-weight="700" font-size="15" fill="#1D2027">Windows Task Scheduler</text>
-    <text x="60" y="188" font-family="'Space Mono', monospace" font-size="11.5" fill="#1D2027" opacity="0.7">run-search.ps1</text>
-    <text x="60" y="203" font-family="'Space Mono', monospace" font-size="11.5" fill="#1D2027" opacity="0.7">staggered, one per track</text>
+    <rect x="40" y="140" width="260" height="90" rx="9" fill="#FFFFFF" stroke="#C3C5CE" stroke-width="1.3" />
+    <text x="60" y="168" font-family="'Archivo', sans-serif" font-weight="700" font-size="15" fill="#1D2027">Claude CLI — headless</text>
+    <text x="60" y="188" font-family="'Space Mono', monospace" font-size="11" fill="#1D2027" opacity="0.7">claude -p --allowedTools</text>
+    <text x="60" y="203" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.65">Read Write Edit WebSearch</text>
+    <text x="60" y="218" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.65">WebFetch Bash — scoped, no gate</text>
   </g>
 
   <g>
-    <rect x="40" y="260" width="260" height="90" rx="9" fill="#FFFFFF" stroke="#C3C5CE" stroke-width="1.3" />
-    <text x="60" y="288" font-family="'Archivo', sans-serif" font-weight="700" font-size="15" fill="#1D2027">Claude CLI — headless</text>
-    <text x="60" y="308" font-family="'Space Mono', monospace" font-size="11" fill="#1D2027" opacity="0.7">claude -p --allowedTools</text>
-    <text x="60" y="323" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.65">Read Write Edit WebSearch</text>
-    <text x="60" y="338" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.65">WebFetch Bash — scoped, no gate</text>
-  </g>
-
-  <g>
-    <rect x="40" y="400" width="260" height="90" rx="9" fill="#F7ECDA" stroke="#A9660E" stroke-width="1.4" />
-    <text x="60" y="428" font-family="'Archivo', sans-serif" font-weight="700" font-size="15" fill="#A9660E">private/ — local only</text>
-    <text x="60" y="448" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.75">docs, resumes, prompts</text>
-    <text x="60" y="463" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.75">gitignored — never committed</text>
-    <text x="60" y="478" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.75">candidate profile, target cos.</text>
+    <rect x="40" y="280" width="260" height="90" rx="9" fill="#F7ECDA" stroke="#A9660E" stroke-width="1.4" />
+    <text x="60" y="308" font-family="'Archivo', sans-serif" font-weight="700" font-size="15" fill="#A9660E">private/ — local only</text>
+    <text x="60" y="328" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.75">docs, resumes, prompts</text>
+    <text x="60" y="343" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.75">gitignored — never committed</text>
+    <text x="60" y="358" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.75">candidate profile, target cos.</text>
   </g>
 
   <g>
@@ -83,35 +74,35 @@
   </g>
 
   <g>
-    <rect x="590" y="260" width="260" height="90" rx="9" fill="#E9E9FB" stroke="#4548D6" stroke-width="1.6" />
-    <text x="610" y="288" font-family="'Archivo', sans-serif" font-weight="700" font-size="15" fill="#4548D6">Cloudflare Worker — API</text>
-    <text x="610" y="308" font-family="'Space Mono', monospace" font-size="11" fill="#1D2027" opacity="0.75">job-search-tracker</text>
-    <text x="610" y="323" font-family="'Space Mono', monospace" font-size="11" fill="#1D2027" opacity="0.75">.workers.dev</text>
-    <text x="610" y="341" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.65">JSON only, no page — CORS-enabled</text>
+    <rect x="590" y="140" width="260" height="90" rx="9" fill="#E9E9FB" stroke="#4548D6" stroke-width="1.6" />
+    <text x="610" y="168" font-family="'Archivo', sans-serif" font-weight="700" font-size="15" fill="#4548D6">server/ — API Worker</text>
+    <text x="610" y="188" font-family="'Space Mono', monospace" font-size="11" fill="#1D2027" opacity="0.75">job-search-tracker</text>
+    <text x="610" y="203" font-family="'Space Mono', monospace" font-size="11" fill="#1D2027" opacity="0.75">.workers.dev</text>
+    <text x="610" y="221" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.65">JSON only, no page — CORS-enabled</text>
   </g>
 
   <g>
-    <rect x="590" y="400" width="260" height="90" rx="9" fill="#FFFFFF" stroke="#C3C5CE" stroke-width="1.3" />
-    <text x="610" y="428" font-family="'Archivo', sans-serif" font-weight="700" font-size="15" fill="#1D2027">D1 database</text>
-    <text x="610" y="448" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.65">leads, applications — SQLite</text>
-    <text x="610" y="463" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.65">one row per posting, atomic</text>
-    <text x="610" y="478" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.65">writes — no shared blob to race</text>
+    <rect x="590" y="280" width="260" height="90" rx="9" fill="#FFFFFF" stroke="#C3C5CE" stroke-width="1.3" />
+    <text x="610" y="308" font-family="'Archivo', sans-serif" font-weight="700" font-size="15" fill="#1D2027">D1 database</text>
+    <text x="610" y="328" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.65">leads, applications — SQLite</text>
+    <text x="610" y="343" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.65">one row per posting, atomic</text>
+    <text x="610" y="358" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.65">writes — no shared blob to race</text>
   </g>
 
   <g>
-    <rect x="1140" y="260" width="260" height="90" rx="9" fill="#FFFFFF" stroke="#C3C5CE" stroke-width="1.3" />
-    <text x="1160" y="288" font-family="'Archivo', sans-serif" font-weight="700" font-size="15" fill="#1D2027">Browser</text>
-    <text x="1160" y="308" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.65">view + edit status, notes</text>
-    <text x="1160" y="323" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.65">mark applied, add details</text>
-    <text x="1160" y="341" font-family="'Space Mono', monospace" font-size="11" fill="#1D2027" opacity="0.65">token in localStorage</text>
+    <rect x="1140" y="140" width="260" height="90" rx="9" fill="#FFFFFF" stroke="#C3C5CE" stroke-width="1.3" />
+    <text x="1160" y="168" font-family="'Archivo', sans-serif" font-weight="700" font-size="15" fill="#1D2027">Browser</text>
+    <text x="1160" y="188" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.65">view + edit status, notes</text>
+    <text x="1160" y="203" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.65">mark applied, add details</text>
+    <text x="1160" y="221" font-family="'Space Mono', monospace" font-size="11" fill="#1D2027" opacity="0.65">token in localStorage</text>
   </g>
 
   <g>
-    <rect x="1140" y="400" width="260" height="90" rx="9" fill="#FFFFFF" stroke="#C3C5CE" stroke-width="1.3" />
-    <text x="1160" y="428" font-family="'Archivo', sans-serif" font-weight="700" font-size="15" fill="#1D2027">Static client (Worker assets)</text>
-    <text x="1160" y="448" font-family="'Space Mono', monospace" font-size="11" fill="#1D2027" opacity="0.75">job-search-tracker-client</text>
-    <text x="1160" y="463" font-family="'Space Mono', monospace" font-size="11" fill="#1D2027" opacity="0.75">.workers.dev</text>
-    <text x="1160" y="478" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.65">separate deploy from the Worker</text>
+    <rect x="1140" y="280" width="260" height="90" rx="9" fill="#FFFFFF" stroke="#C3C5CE" stroke-width="1.3" />
+    <text x="1160" y="308" font-family="'Archivo', sans-serif" font-weight="700" font-size="15" fill="#1D2027">client/ — static Worker</text>
+    <text x="1160" y="328" font-family="'Space Mono', monospace" font-size="11" fill="#1D2027" opacity="0.75">job-search-tracker-client</text>
+    <text x="1160" y="343" font-family="'Space Mono', monospace" font-size="11" fill="#1D2027" opacity="0.75">.workers.dev</text>
+    <text x="1160" y="358" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.65">separate deploy from server/</text>
   </g>
 
 </svg>
