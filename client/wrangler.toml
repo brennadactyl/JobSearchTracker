@@ -1,8 +1,13 @@
 name = "job-search-tracker-client"
 compatibility_date = "2025-01-01"
 
-# Static single-file app, no build step - Cloudflare Pages serves this
-# directory as-is. `pages_build_output_dir` is what lets `wrangler deploy`
-# (the same command used for the API worker) target a Pages project instead
-# of a Worker; see README.md for the deploy flow.
-pages_build_output_dir = "."
+# Static single-file app, no build step, no server-side code - deployed as
+# a Worker whose only content is a static assets directory (Cloudflare's
+# current recommended path for a pure static site, having since superseded
+# classic "Pages" - `wrangler deploy` here uploads and serves this
+# directory directly, no `main` entry-point needed). Still a fully separate
+# deployable from ../server/ - different name, different URL, no shared
+# code - just a different Cloudflare product under the hood than the
+# "Cloudflare Pages" name implied a year ago.
+[assets]
+directory = "."
