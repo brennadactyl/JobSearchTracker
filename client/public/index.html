@@ -259,12 +259,8 @@ try{
   <div class="card">
     <h1>Job search access</h1>
     <p id="gateHint">Enter your access token to continue.</p>
-    <div id="apiUrlRow" class="hidden">
-      <input id="apiUrlInput" type="text" placeholder="API URL (e.g. https://job-search-tracker.you.workers.dev)" autocapitalize="off" autocorrect="off" spellcheck="false">
-    </div>
     <input id="tokenInput" type="password" placeholder="Token">
     <button class="btn primary" id="tokenSubmit">Enter</button>
-    <button class="btn ghost" id="changeApiUrl" type="button" style="font-size:12px">Change API URL</button>
     <div id="gateError" class="err"></div>
   </div>
 </div>
@@ -337,16 +333,14 @@ var TOKEN=localStorage.getItem("tracker_token")||"";
 // (see ../server/), served from its own origin, so it has no same-origin
 // API to fall back on.
 //
-// DEFAULT_API_BASE comes from local-config.js (gitignored - see the <script>
-// tag above) if present, so this installer only ever has to enter a token at
-// the gate. That file is never committed, so a fresh fork of this repo gets
-// "" here - the gate asks for both the API URL and the token on first visit,
-// same as any other installer, rather than silently defaulting to someone
-// else's deployed API. Create your own public/local-config.js (see
-// local-config.example.js) with your ../server/ deploy's URL to get the
-// token-only gate for your own browser too.
-var DEFAULT_API_BASE=(typeof LOCAL_API_BASE!=="undefined"?LOCAL_API_BASE:"");
-var API_BASE=localStorage.getItem("tracker_api_base")||DEFAULT_API_BASE;
+// API_BASE comes from local-config.js (gitignored - see the <script> tag
+// above), a deploy-time setting, never something a visitor types in - one
+// deployed client always talks to one server. That file is never committed,
+// so a fresh fork of this repo gets "" here until its deployer creates
+// public/local-config.js (see local-config.example.js) with their
+// ../server/ deploy's URL and redeploys - see the gate-init check below for
+// what a visitor sees in the meantime.
+var API_BASE=(typeof LOCAL_API_BASE!=="undefined"?LOCAL_API_BASE:"");
 var state={updated:null,leads:[],applications:[],tracks:[],settings:{display_title:"Job Search Tracker",priority_locations:[]}};
 
 // Turns the API's tracks[] (rows: key/label/full_description/sort_order)
@@ -486,30 +480,16 @@ function setSaved(msg,ok){
   t.textContent=msg;
 }
 
-// Reveals the (normally hidden, since DEFAULT_API_BASE covers the common
-// case) API URL field, for the rare case an installer needs to point this
-// same deployed client at a different API - a different environment, a
-// friend's instance while testing, etc.
-function showApiUrlField(){
-  document.getElementById("apiUrlRow").classList.remove("hidden");
-  document.getElementById("changeApiUrl").classList.add("hidden");
-  document.getElementById("gateHint").textContent="Enter your tracker API URL and access token to continue.";
-  document.getElementById("apiUrlInput").focus();
-}
-
 function submitToken(){
-  // apiUrlInput is hidden (and can be blank) whenever DEFAULT_API_BASE is
-  // set - fall back to whatever's already in API_BASE (the default, or a
-  // previously-saved override) rather than requiring it be visible/typed.
-  var urlField=document.getElementById("apiUrlInput").value.trim().replace(/\/+$/,"");
-  var url=urlField||API_BASE;
-  TOKEN=document.getElementById("tokenInput").value.trim();
-  if(!url||!TOKEN){
-    document.getElementById("gateError").textContent=url?"Enter a token.":"Enter both the API URL and a token.";
+  if(!API_BASE){
+    document.getElementById("gateError").textContent="This deployment has no API URL configured - see public/local-config.example.js.";
     return;
   }
-  API_BASE=url;
-  localStorage.setItem("tracker_api_base",API_BASE);
+  TOKEN=document.getElementById("tokenInput").value.trim();
+  if(!TOKEN){
+    document.getElementById("gateError").textContent="Enter a token.";
+    return;
+  }
   localStorage.setItem("tracker_token",TOKEN);
   boot();
 }
@@ -893,7 +873,6 @@ function render(){
 document.addEventListener("click",function(e){
   if(e.target.id==="tokenSubmit"){submitToken();return;}
   if(e.target.closest("#themeToggle")){toggleTheme();return;}
-  if(e.target.closest("#changeApiUrl")){showApiUrlField();return;}
 
   var t=e.target.closest("[data-tab]");
   if(t){ui.tab=t.getAttribute("data-tab");ui.q="";ui.filter="All";
@@ -964,7 +943,7 @@ document.addEventListener("click",function(e){
 });
 
 document.addEventListener("keydown",function(e){
-  if((e.target.id==="tokenInput"||e.target.id==="apiUrlInput")&&e.key==="Enter"){submitToken();}
+  if(e.target.id==="tokenInput"&&e.key==="Enter"){submitToken();}
 });
 
 document.addEventListener("input",function(e){
@@ -1053,16 +1032,14 @@ document.addEventListener("focusout",function(e){
   if(e.target.matches("textarea[data-id],input[data-id]"))commit(e.target);
 });
 
-var apiUrlEl=document.getElementById("apiUrlInput");
-if(apiUrlEl&&API_BASE)apiUrlEl.value=API_BASE;
-// Only show the API URL field (and its hint text) up front when there's no
-// default to fall back on and nothing saved yet - the common case (this
-// deployment's own DEFAULT_API_BASE, or a value already saved from a prior
-// visit) needs just the token, matching the pre-split flow.
-if(API_BASE){
-  document.getElementById("gateHint").textContent="Enter your access token to continue.";
-}else{
-  showApiUrlField();
+// API_BASE is a deploy-time setting (see local-config.js above) - a missing
+// one means whoever deployed this client skipped that step, not something a
+// visitor can fix here. Say so plainly instead of a token field that can
+// never succeed.
+if(!API_BASE){
+  document.getElementById("gateHint").textContent="This deployment has no API URL configured - see public/local-config.example.js.";
+  document.getElementById("tokenInput").classList.add("hidden");
+  document.getElementById("tokenSubmit").classList.add("hidden");
 }
 if(TOKEN&&API_BASE)boot(); else document.getElementById("gate").classList.remove("hidden");
 })();
