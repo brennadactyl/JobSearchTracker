@@ -13,3 +13,8 @@ client/.wrangler/
 # client/package.json are mainly for the Deploy to Cloudflare button, which
 # installs its own copy)
 node_modules/
+
+# This installer's own API URL - treated like private/ data (see
+# client/public/local-config.example.js). Never commit a real deployment's
+# URL into the tracked template that other installers fork.
+client/public/local-config.js

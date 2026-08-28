@@ -19,24 +19,29 @@ URL has to live outside that directory, not be filtered out of it.
 
 ## How it finds its API
 
-`public/index.html` hardcodes this deployment's own API URL as
-`DEFAULT_API_BASE` (a plain JS constant near the top of the `<script>` block -
-safe to bake in, since an API URL isn't a secret the way the token is). So
-day to day, the gate screen only ever asks for **the token** - exactly like
-before this was split into two deployables.
+`public/index.html` reads its `DEFAULT_API_BASE` from `local-config.js` -
+**gitignored, never committed**, same treatment as this repo's private job
+data (an API URL isn't a secret the way the token is, but it's still *your*
+deployment's own detail, not something that belongs in the tracked template
+other installers fork from). No `local-config.js` present - a fresh fork,
+before you've created one - and `DEFAULT_API_BASE` is `""`, so the gate asks
+for both the API URL and the token, exactly as it should for someone who
+hasn't set anything up yet.
 
-The API URL field only shows up when there's no default to fall back on
-(e.g. a fresh fork where `DEFAULT_API_BASE` has been cleared to `""`), or if
-you click "Change API URL" to point this same deployed client at a different
-backend. Both values, once entered, are remembered in `localStorage`
-(`tracker_api_base`, `tracker_token` - per-browser, never sent anywhere but
-to the API you typed in) - so on a second device/browser you'll enter the
-token once there too, the same as the first.
+Create your own copy to skip retyping the URL every visit:
+```bat
+cd client\public
+copy local-config.example.js local-config.js
+```
+Edit the copy, set `LOCAL_API_BASE` to your `../server/` deploy's URL, then
+redeploy (`wrangler deploy` from `client/` - it uploads whatever's on disk,
+`local-config.js` included, regardless of it not being in git).
 
-The token can't get the same `DEFAULT_API_BASE` treatment - `public/index.html`
-is served publicly and unauthenticated, so anything baked into the file is
-visible to anyone who requests it, defeating the token's purpose as an
-access gate. An API URL isn't a secret the same way, so it's fine to bake in.
+You can also just click "Change API URL" on the gate screen instead, without
+touching any file - either way, once entered, both the API URL and the token
+are remembered in `localStorage` (`tracker_api_base`, `tracker_token` -
+per-browser, never sent anywhere but to the API you typed in), so a second
+device/browser needs the same one-time entry, the same as the token does.
 
 ## One-time setup
 
@@ -59,17 +64,18 @@ Cloudflare's own environment.
 3. Your client's URL is shown on the dashboard (something like
    `https://job-search-tracker-client.<your-subdomain>.workers.dev`). Open
    it.
-4. **Recommended:** in your forked repo, edit `public/index.html` and set
-   `DEFAULT_API_BASE` (search for it near the top of the `<script>` block) to
-   your own API worker's URL from [`../server/README.md`](../server/README.md)'s
-   setup, then redeploy (`wrangler deploy` from `client/`, or push and let
-   your fork's own CI redeploy it if you set that up). This is what makes the
-   gate ask for only a token, not both fields.
+4. **Recommended:** in your forked repo, create `public/local-config.js`
+   (copy `public/local-config.example.js`) with your own API worker's URL
+   from [`../server/README.md`](../server/README.md)'s setup, then redeploy
+   (`wrangler deploy` from `client/`, or push and let your fork's own CI
+   redeploy it if you set that up). This is what makes the gate ask for only
+   a token, not both fields - see "How it finds its API" above.
    - If you skip this, the gate will ask for both the API URL and the token
-     on first visit - still works, just one more field to fill in once.
-5. Open the client and enter the `API_TOKEN` you picked when deploying the
-   server. Click Enter - it's remembered for next time. See "Copy login
-   link" above for reusing it on another device.
+     on first visit - still works, just one more field to fill in once (or
+     click "Change API URL" there instead of creating the file at all).
+5. Open the client and enter your server's `API_TOKEN`. Click Enter - both
+   it and the API URL (if you typed one) are remembered in this browser for
+   next time.
 
 ### Manual setup
 

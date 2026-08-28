@@ -115,12 +115,12 @@ note after each step if you'd rather do it the traditional way instead.
    [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/brennadactyl/JobSearchTracker/tree/main/client)
 
    Same flow - it forks the client into your own GitHub and deploys it as a
-   Worker serving a static page. Open the URL it gives you and enter the
-   token from the previous step on the gate screen - it's remembered in your
-   browser for next time. (Optional but recommended: edit
-   `public/index.html`'s `DEFAULT_API_BASE` to your Worker URL from the
-   previous step and redeploy, so the gate only ever asks for the token, not
-   the API URL too - see [client/README.md](client/README.md).)
+   Worker serving a static page. Open the URL it gives you - the gate asks
+   for both the API URL (your Worker URL from the previous step) and the
+   token; enter both and they're remembered in your browser for next time.
+   (Optional but recommended: create `public/local-config.js` in your fork
+   with that URL and redeploy, so the gate only ever asks for the token - see
+   [client/README.md](client/README.md).)
 
    (Prefer the CLI, or need to re-run migrations after a schema change later?
    [server/README.md](server/README.md) and [client/README.md](client/README.md)

@@ -286,6 +286,14 @@ try{
   </div>
 </div>
 
+<!--
+  local-config.js is gitignored - never committed, same as private/ data
+  elsewhere in this repo. It's how *this* deployment's own API URL gets in
+  without hardcoding a personal URL into the tracked template that other
+  installers fork. Doesn't exist? The browser just 404s this one request
+  and moves on - see local-config.example.js for the file to create.
+-->
+<script src="local-config.js"></script>
 <script>
 (function(){
 "use strict";
@@ -329,14 +337,15 @@ var TOKEN=localStorage.getItem("tracker_token")||"";
 // (see ../server/), served from its own origin, so it has no same-origin
 // API to fall back on.
 //
-// DEFAULT_API_BASE is this deployment's own API - set here so this
-// installer only ever has to enter a token at the gate, same as before the
-// client/server split. Forking this for a different installer? Replace the
-// value below with your own API worker's URL (from ../server/'s deploy
-// step), or clear it to "" to always show the API URL field and let
-// visitors type/paste their own (e.g. for a template/demo deployment with
-// no fixed backend).
-var DEFAULT_API_BASE="https://job-search-tracker.brenna-duffitt.workers.dev";
+// DEFAULT_API_BASE comes from local-config.js (gitignored - see the <script>
+// tag above) if present, so this installer only ever has to enter a token at
+// the gate. That file is never committed, so a fresh fork of this repo gets
+// "" here - the gate asks for both the API URL and the token on first visit,
+// same as any other installer, rather than silently defaulting to someone
+// else's deployed API. Create your own public/local-config.js (see
+// local-config.example.js) with your ../server/ deploy's URL to get the
+// token-only gate for your own browser too.
+var DEFAULT_API_BASE=(typeof LOCAL_API_BASE!=="undefined"?LOCAL_API_BASE:"");
 var API_BASE=localStorage.getItem("tracker_api_base")||DEFAULT_API_BASE;
 var state={updated:null,leads:[],applications:[],tracks:[],settings:{display_title:"Job Search Tracker",priority_locations:[]}};
 
