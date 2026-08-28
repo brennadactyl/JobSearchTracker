@@ -508,7 +508,7 @@ function tabsHtml(){
     // The tab badge is a "what hasn't been triaged yet" count, so it only
     // counts New leads - not the whole track (Reviewing/Not a fit are
     // things you've already looked at, and Applied leads have moved to
-    // the Applications tab entirely, see moveToApplications()).
+    // the Applications tab entirely, see setLeadStatus()).
     t.push({id:k,label:TRACKS[k].label,n:state.leads.filter(function(l){return l.search===k&&l.status==="New";}).length});
   });
   return t.map(function(x){
@@ -597,7 +597,7 @@ function dashboard(){
 
 function leadsTab(key){
   // A lead marked "Applied" has moved to the Applications tab (see
-  // moveToApplications()) - it's still in state.leads underneath (so URL
+  // setLeadStatus()) - it's still in state.leads underneath (so URL
   // dedup and delistedOn tracking keep working), just no longer shown here.
   var all=state.leads.filter(function(l){return l.search===key&&l.status!=="Applied";});
   var q=ui.q.toLowerCase();
@@ -929,46 +929,69 @@ function commit(el){
   var list=isApp?state.applications:state.leads;
   var row=list.filter(function(r){return String(r.id)===String(id);})[0];
   if(!row||row[field]===el.value)return;
+  // Status changes go through dedicated endpoints instead of this
+  // function's generic field-whitelist write - the server validates the
+  // value and owns side effects a plain field write can't (creating a
+  // lead's application atomically, stamping a stage date). Every other
+  // field (notes, comp, referral, free-typed dates, ...) is a plain write
+  // and keeps using this path unchanged.
+  if(field==="status"){
+    if(isApp)setApplicationStatus(id,el.value); else setLeadStatus(id,el.value);
+    return;
+  }
   row[field]=el.value;
+  setSaved("Saving…",false);
   var body=isApp?{type:"application",id:id}:{type:"lead",id:id};
   body[field]=el.value;
-  // Auto-stamp the matching Stage history date the first time an
-  // application's status moves to it - only if that stage doesn't already
-  // have a date, so this never clobbers one that was corrected by hand.
-  if(isApp&&field==="status"){
-    var stage=STAGE_DATE_FIELDS.filter(function(s){return s[0]===el.value;})[0];
-    if(stage&&!row[stage[1]]){
-      row[stage[1]]=today();
-      body[stage[1]]=today();
-    }
-  }
-  setSaved("Saving…",false);
   api("/api/update",{method:"POST",body:JSON.stringify(body)}).then(function(){
     setSaved("Saved",true);
-    if(field==="status"&&!isApp){
-      if(el.value==="Applied")moveToApplications(row);
-      render();
-    }
-    if(isApp&&field==="status")render(); // reflect the newly-stamped stage date
   }).catch(function(){setSaved("Couldn't save — try again","bad");});
 }
 
-// Marking a lead "Applied" moves it to the Applications tab - a lead's
-// status and an application's pipeline stage are different things (compare
-// LEAD_STATUS to APP_STATUS), so this creates a real application row rather
-// than stretching the lead's own status to cover interview stages later.
+// Replaces the entry in `list` matching item.id (in place, preserving its
+// position) - used below to swap in the server's authoritative row after
+// a status change, rather than optimistically guessing what changed.
+function replaceById(list,item){
+  for(var i=0;i<list.length;i++){
+    if(String(list[i].id)===String(item.id)){list[i]=item;return true;}
+  }
+  return false;
+}
+
+// A lead's status and an application's pipeline stage are different
+// things (compare LEAD_STATUS to APP_STATUS) - marking a lead "Applied"
+// moves it to the Applications tab by creating a real application row,
+// rather than stretching the lead's own status to cover interview stages
+// later. See api.js's handleSetLeadStatus: the lead update and the
+// application creation happen atomically server-side now (previously this
+// was two sequential POSTs from the client, which could leave a lead
+// marked Applied with no application if the second one never landed).
 // The lead row itself is untouched beyond its status: it stays in
 // state.leads/the DB (URL dedup and delistedOn tracking both need it to
 // still exist), it just no longer shows in the Leads tab - see leadsTab().
-function moveToApplications(lead){
-  if(state.applications.some(function(a){return String(a.leadId)===String(lead.id);}))return; // already moved once
-  var body={type:"application",company:lead.company,title:lead.title,dateApplied:today(),
-    status:"Applied",notes:lead.notes||"",leadId:String(lead.id),link:lead.url||""};
-  ROLE_FIELDS.forEach(function(f){body[f[0]]=lead[f[0]]||"";});
-  api("/api/update",{method:"POST",body:JSON.stringify(body)}).then(function(res){
-    state.applications.unshift(res.application);
+function setLeadStatus(id,value){
+  setSaved("Saving…",false);
+  api("/api/leads/"+id+"/status",{method:"POST",body:JSON.stringify({status:value})}).then(function(res){
+    replaceById(state.leads,res.lead);
+    if(res.application&&!state.applications.some(function(a){return String(a.id)===String(res.application.id);})){
+      state.applications.unshift(res.application);
+    }
+    setSaved("Saved",true);
     render();
-  }).catch(function(){setSaved("Applied, but couldn't add it to Applications - add it there manually","bad");});
+  }).catch(function(){setSaved("Couldn't save — try again","bad");});
+}
+
+// See api.js's handleSetApplicationStatus - stamps the matching Stage
+// history date server-side (only if it isn't already set) in the same
+// request as the status write, then returns the full row so the newly
+// stamped date shows up immediately.
+function setApplicationStatus(id,value){
+  setSaved("Saving…",false);
+  api("/api/applications/"+id+"/status",{method:"POST",body:JSON.stringify({status:value})}).then(function(res){
+    replaceById(state.applications,res.application);
+    setSaved("Saved",true);
+    render();
+  }).catch(function(){setSaved("Couldn't save — try again","bad");});
 }
 document.addEventListener("change",function(e){
   if(e.target.matches("select[data-id],input[data-id]"))commit(e.target);

@@ -17,7 +17,24 @@
  *                            touches existing status/notes
  *   POST /api/update         requires Bearer token -> body: { type: "lead"|"application", ... }
  *                            updates one lead's status/notes, or upserts one
- *                            application record
+ *                            application record. Generic field-whitelist
+ *                            write - status changes go through the two
+ *                            purpose-built routes below instead, which
+ *                            validate the value and own the side effects
+ *                            (application creation, stage-date stamping)
+ *                            that a plain field write can't.
+ *   POST /api/leads/:id/status       requires Bearer token -> body: { status }
+ *                            validates against LEAD_STATUS; if the new
+ *                            status is "Applied", atomically (one D1
+ *                            batch/transaction) also creates the
+ *                            corresponding application row, unless one
+ *                            already exists for this lead
+ *   POST /api/applications/:id/status  requires Bearer token -> body: { status }
+ *                            validates against APP_STATUS; if the status
+ *                            is a pipeline stage with a Stage history
+ *                            column (STAGE_DATE_MAP), stamps it with
+ *                            today's date, but only if that column is
+ *                            still empty
  *   POST /api/delete-application  requires Bearer token -> body: { id } ->
  *                            removes one application row (used by the
  *                            page's "remove" control; leads are never
@@ -41,6 +58,8 @@ import {
   json,
   handleAddLeads,
   handleUpdate,
+  handleSetLeadStatus,
+  handleSetApplicationStatus,
   handleDeleteApplication,
   getTracksAndSettings,
   handleGetConfig,
@@ -92,6 +111,19 @@ export default {
     if (url.pathname === "/api/update" && request.method === "POST") {
       if (!authorized(request, env)) return unauthorized();
       return handleUpdate(request, env);
+    }
+
+    // Path-param routes (the only ones in this file) - matched by regex
+    // instead of the exact-string checks above.
+    let m;
+    if ((m = url.pathname.match(/^\/api\/leads\/(\d+)\/status$/)) && request.method === "POST") {
+      if (!authorized(request, env)) return unauthorized();
+      return handleSetLeadStatus(request, env, m[1]);
+    }
+
+    if ((m = url.pathname.match(/^\/api\/applications\/(\d+)\/status$/)) && request.method === "POST") {
+      if (!authorized(request, env)) return unauthorized();
+      return handleSetApplicationStatus(request, env, m[1]);
     }
 
     if (url.pathname === "/api/delete-application" && request.method === "POST") {

@@ -50,6 +50,29 @@ export const APP_STAGE_DATE_FIELDS = [
   "dateOffer", "dateRejected", "dateWithdrawn",
 ];
 
+// Valid status values, duplicated from page.html's LEAD_STATUS/APP_STATUS
+// (same intentional-duplication pattern as EXTRA_FIELDS above - no build
+// step ties client and server together). Used to validate the two
+// status-change endpoints below; the generic handleUpdate() path is left
+// unvalidated on purpose - see handleSetLeadStatus/handleSetApplicationStatus.
+export const LEAD_STATUS = ["New", "Reviewing", "Applied", "Not a fit"];
+export const APP_STATUS = [
+  "Applied", "Recruiter Screen", "Tech Screen", "Onsite / Loop",
+  "Offer", "Rejected", "Withdrawn",
+];
+
+// Which applications column holds the date an application first reached a
+// given pipeline stage - mirrors page.html's STAGE_DATE_FIELDS. "Applied"
+// isn't here; it already has dateApplied.
+export const STAGE_DATE_MAP = {
+  "Recruiter Screen": "dateRecruiterScreen",
+  "Tech Screen": "dateTechScreen",
+  "Onsite / Loop": "dateOnsite",
+  "Offer": "dateOffer",
+  "Rejected": "dateRejected",
+  "Withdrawn": "dateWithdrawn",
+};
+
 // Reads the per-deployment config (see migrations/0003_add_tracks_and_settings.sql):
 // the tracks a track tab exists for, plus display settings. This is what
 // lets one Worker deployment serve any installer's tracks/branding/priority
@@ -241,6 +264,95 @@ export async function handleUpdate(request, env) {
   }
 
   return json({ error: "unknown update type" }, 400);
+}
+
+// Atomically moves a lead to "Applied" and creates its application row -
+// replaces the client's old two-sequential-POST approach (set status, then
+// a separate call to create the application), which could leave a lead
+// marked Applied with no application if the second call never landed.
+// D1's batch() runs as one real transaction: if either statement fails,
+// both roll back.
+//
+// The duplicate-application guard here is a read-then-conditionally-write
+// within one request, not a schema-enforced constraint - it doesn't
+// protect against two genuinely concurrent requests for the same lead
+// (e.g. two devices). Still a strict improvement over the previous
+// client-side guard, which trusted stale local state and never
+// re-checked the server at all.
+export async function handleSetLeadStatus(request, env, id) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "invalid JSON body" }, 400);
+  }
+  if (!LEAD_STATUS.includes(body.status)) {
+    return json({ error: "invalid status" }, 400);
+  }
+
+  const [lead, existingApp] = await Promise.all([
+    env.DB.prepare("SELECT * FROM leads WHERE id = ?").bind(id).first(),
+    env.DB.prepare("SELECT * FROM applications WHERE leadId = ? LIMIT 1").bind(String(id)).first(),
+  ]);
+  if (!lead) return json({ error: "lead not found" }, 404);
+
+  const batch = [
+    env.DB.prepare("UPDATE leads SET status = ? WHERE id = ?").bind(body.status, id),
+  ];
+  const willCreateApp = body.status === "Applied" && !existingApp;
+  if (willCreateApp) {
+    batch.push(
+      env.DB.prepare(
+        `INSERT INTO applications
+           (leadId, company, title, dateApplied, status, notes, link, referral, comp, team, setup)
+         VALUES (?, ?, ?, ?, 'Applied', ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        String(id), lead.company, lead.title, today(), lead.notes || "", lead.url || "",
+        lead.referral || "", lead.comp || "", lead.team || "", lead.setup || ""
+      )
+    );
+  }
+  const results = await env.DB.batch(batch);
+  await touchUpdated(env);
+
+  const updatedLead = await env.DB.prepare("SELECT * FROM leads WHERE id = ?").bind(id).first();
+  let application = existingApp || null;
+  if (willCreateApp) {
+    application = await env.DB
+      .prepare("SELECT * FROM applications WHERE id = ?")
+      .bind(results[1].meta.last_row_id)
+      .first();
+  }
+  return json({ lead: updatedLead, application });
+}
+
+// Validates status and, the first time an application reaches a stage
+// with a Stage history column (STAGE_DATE_MAP), stamps it with today's
+// date in the same statement - but only if that column is still empty,
+// so it never overwrites a date the user corrected or backfilled by hand
+// (that still goes through the generic handleUpdate() path below).
+export async function handleSetApplicationStatus(request, env, id) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "invalid JSON body" }, 400);
+  }
+  if (!APP_STATUS.includes(body.status)) {
+    return json({ error: "invalid status" }, 400);
+  }
+
+  const stageCol = STAGE_DATE_MAP[body.status];
+  const result = stageCol
+    ? await env.DB.prepare(
+        `UPDATE applications SET status = ?, ${stageCol} = CASE WHEN ${stageCol} = '' THEN ? ELSE ${stageCol} END WHERE id = ?`
+      ).bind(body.status, today(), id).run()
+    : await env.DB.prepare("UPDATE applications SET status = ? WHERE id = ?").bind(body.status, id).run();
+
+  if (result.meta.changes === 0) return json({ error: "application not found" }, 404);
+  await touchUpdated(env);
+  const application = await env.DB.prepare("SELECT * FROM applications WHERE id = ?").bind(id).first();
+  return json({ application });
 }
 
 export async function handleDeleteApplication(request, env) {
