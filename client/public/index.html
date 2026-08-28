@@ -276,7 +276,6 @@ try{
       </div>
       <div class="hdr-right">
         <div class="stamp"><span class="dot" id="savedot"></span><span id="savetext">Loading</span></div>
-        <button class="btn ghost" id="copyLoginLink" type="button" title="Copy a login link for another device/browser - carries your API URL and token, so you won't have to type them again">🔗 Copy login link</button>
         <button class="btn ghost" id="themeToggle" type="button" aria-label="Switch to dark theme" title="Switch to dark theme">🌙</button>
       </div>
     </div>
@@ -474,48 +473,6 @@ function setSaved(msg,ok){
   var d=document.getElementById("savedot"),t=document.getElementById("savetext");
   if(!d)return; d.className="dot"+(ok===false?" off":ok==="bad"?" bad":"");
   t.textContent=msg;
-}
-
-// Builds a one-time login link carrying both the API URL and the token in
-// the URL *fragment* (#...), never the path or query string - a fragment
-// never leaves the browser (not sent to any server, not logged by Pages/any
-// CDN/proxy in access logs), so this is no less safe than the values
-// already sitting in localStorage. Meant to be shared with yourself, e.g.
-// AirDrop/text it to a phone, to skip retyping the URL+token on a new
-// device/browser - see tryConnectFromHash() below, which consumes it once
-// and then wipes it from the visible URL.
-function copyLoginLink(){
-  if(!API_BASE||!TOKEN)return;
-  var link=location.origin+location.pathname+"#u="+encodeURIComponent(API_BASE)+"&t="+encodeURIComponent(TOKEN);
-  var done=function(){setSaved("Login link copied",true);};
-  var fail=function(){setSaved("Couldn't copy - copy the address bar after clicking Copy again",false);};
-  if(navigator.clipboard&&navigator.clipboard.writeText){
-    navigator.clipboard.writeText(link).then(done,fail);
-  }else{
-    try{
-      var ta=document.createElement("textarea");
-      ta.value=link;ta.style.position="fixed";ta.style.opacity="0";
-      document.body.appendChild(ta);ta.select();document.execCommand("copy");
-      document.body.removeChild(ta);done();
-    }catch(e){fail();}
-  }
-}
-
-// Consumes a #u=...&t=... fragment from a copyLoginLink() link (or one
-// hand-built the same way): saves both values and clears the fragment from
-// the visible URL/history so it doesn't linger in browser history or get
-// re-shared accidentally on a later copy/screenshot. Returns true if it
-// found and applied one.
-function tryConnectFromHash(){
-  if(!location.hash)return false;
-  var params=new URLSearchParams(location.hash.slice(1));
-  var u=params.get("u"),t=params.get("t");
-  if(!u||!t)return false;
-  API_BASE=u.replace(/\/+$/,"");TOKEN=t;
-  localStorage.setItem("tracker_api_base",API_BASE);
-  localStorage.setItem("tracker_token",TOKEN);
-  history.replaceState(null,"",location.pathname+location.search);
-  return true;
 }
 
 // Reveals the (normally hidden, since DEFAULT_API_BASE covers the common
@@ -923,7 +880,6 @@ function render(){
 document.addEventListener("click",function(e){
   if(e.target.id==="tokenSubmit"){submitToken();return;}
   if(e.target.closest("#themeToggle")){toggleTheme();return;}
-  if(e.target.closest("#copyLoginLink")){copyLoginLink();return;}
   if(e.target.closest("#changeApiUrl")){showApiUrlField();return;}
 
   var t=e.target.closest("[data-tab]");
@@ -1084,13 +1040,12 @@ document.addEventListener("focusout",function(e){
   if(e.target.matches("textarea[data-id],input[data-id]"))commit(e.target);
 });
 
-tryConnectFromHash(); // a shared login link wins over whatever's already stored
 var apiUrlEl=document.getElementById("apiUrlInput");
 if(apiUrlEl&&API_BASE)apiUrlEl.value=API_BASE;
 // Only show the API URL field (and its hint text) up front when there's no
 // default to fall back on and nothing saved yet - the common case (this
 // deployment's own DEFAULT_API_BASE, or a value already saved from a prior
-// visit/login link) needs just the token, matching the pre-split flow.
+// visit) needs just the token, matching the pre-split flow.
 if(API_BASE){
   document.getElementById("gateHint").textContent="Enter your access token to continue.";
 }else{

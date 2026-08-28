@@ -30,23 +30,13 @@ The API URL field only shows up when there's no default to fall back on
 you click "Change API URL" to point this same deployed client at a different
 backend. Both values, once entered, are remembered in `localStorage`
 (`tracker_api_base`, `tracker_token` - per-browser, never sent anywhere but
-to the API you typed in).
+to the API you typed in) - so on a second device/browser you'll enter the
+token once there too, the same as the first.
 
-**For a second device/browser, you shouldn't need to type the token either.**
-Use the "🔗 Copy login link" button in the app header - it copies a URL like
-`https://your-client.../#u=<api-url>&t=<token>` to your clipboard. Open that
-link on any other device/browser (AirDrop it to your phone, paste it in a
-second browser) and it logs you in automatically. The values travel in the
-URL *fragment* (after `#`), which browsers never send to any server - it's
-exactly as safe as what's already sitting in `localStorage`, just shareable.
-The client wipes the fragment from the visible URL immediately after
-consuming it, so it won't linger in your history.
-
-The token can't be baked in as `DEFAULT_API_BASE` is, the way a future
-version of this client for a different backend might do for the URL -
-`public/index.html` is served publicly and unauthenticated, so anything in
-the file is visible to anyone who requests it, defeating the token's purpose
-as an access gate.
+The token can't get the same `DEFAULT_API_BASE` treatment - `public/index.html`
+is served publicly and unauthenticated, so anything baked into the file is
+visible to anyone who requests it, defeating the token's purpose as an
+access gate. An API URL isn't a secret the same way, so it's fine to bake in.
 
 ## One-time setup
 
