@@ -9,5 +9,10 @@ compatibility_date = "2025-01-01"
 # deployable from ../server/ - different name, different URL, no shared
 # code - just a different Cloudflare product under the hood than the
 # "Cloudflare Pages" name implied a year ago.
+#
+# `directory` points at ./public, NOT this folder itself - assets upload
+# publishes literally everything under `directory` with no exceptions, so
+# README.md/package.json/wrangler.toml/.wrangler (which briefly held an
+# account-identifying file) must live outside it, not be filtered out of it.
 [assets]
-directory = "."
+directory = "./public"

@@ -19,7 +19,7 @@ or private) and to reuse across machines.
 
 **The tracker is a plain webpage backed by an API, deployed as two
 independent pieces** - a static client ([client/README.md](client/README.md),
-Cloudflare Pages) and a Cloudflare Worker + D1 API
+a Cloudflare Worker serving static assets) and a Cloudflare Worker + D1 API
 ([server/README.md](server/README.md)), talking to each other cross-origin
 over CORS. Neither is a Claude-specific artifact - the whole pipeline runs
 through the standalone `claude` CLI with no desktop app or special tooling
@@ -59,8 +59,8 @@ server/                        API only - Cloudflare Worker + D1, no HTML served
   package.json                   lets the Deploy to Cloudflare button chain migrations + deploy
   README.md                      one-time deploy instructions + API reference
 client/                        the tracker webpage - static, no build step
-  index.html                    standalone HTML+CSS+JS, calls server/'s API cross-origin
-  wrangler.toml                  deploy config (Cloudflare Pages)
+  public/index.html             standalone HTML+CSS+JS, calls server/'s API cross-origin (only public/ is served)
+  wrangler.toml                  deploy config (Worker serving public/ as static assets)
   package.json                   lets the Deploy to Cloudflare button deploy it
   README.md                      one-time deploy instructions
 private.example/
@@ -115,9 +115,12 @@ note after each step if you'd rather do it the traditional way instead.
    [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/brennadactyl/JobSearchTracker/tree/main/client)
 
    Same flow - it forks the client into your own GitHub and deploys it as a
-   Cloudflare Pages project. Open the Pages URL it gives you and, on the gate
-   screen, enter the Worker URL and token from the previous step - both are
-   remembered in your browser for next time.
+   Worker serving a static page. Open the URL it gives you and enter the
+   token from the previous step on the gate screen - it's remembered in your
+   browser for next time. (Optional but recommended: edit
+   `public/index.html`'s `DEFAULT_API_BASE` to your Worker URL from the
+   previous step and redeploy, so the gate only ever asks for the token, not
+   the API URL too - see [client/README.md](client/README.md).)
 
    (Prefer the CLI, or need to re-run migrations after a schema change later?
    [server/README.md](server/README.md) and [client/README.md](client/README.md)

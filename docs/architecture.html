@@ -133,7 +133,7 @@
 
   <figure>
     <div class="diagram-frame">
-      <svg viewBox="0 0 1440 530" role="img" aria-label="Windows Task Scheduler fires the claude CLI daily, once per configured track; it reads and writes private local data, searches and verifies career sites, and posts new leads to a Cloudflare Worker API. The Worker reads and writes a D1 database and answers the browser's cross-origin API calls; a separate Cloudflare Pages deployment serves the browser the static tracker page itself. Tooling code (server and client) syncs separately with GitHub, never touching the private data.">
+      <svg viewBox="0 0 1440 530" role="img" aria-label="Windows Task Scheduler fires the claude CLI daily, once per configured track; it reads and writes private local data, searches and verifies career sites, and posts new leads to a Cloudflare Worker API. The Worker reads and writes a D1 database and answers the browser's cross-origin API calls; a separate static-assets Worker deployment serves the browser the tracker page itself. Tooling code (server and client) syncs separately with GitHub, never touching the private data.">
 
         <defs>
           <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -156,13 +156,13 @@
           <polyline points="300,275 520,275 520,55 590,55" marker-end="url(#arrow)" />
           <!-- Worker -> D1 -->
           <line x1="720" y1="350" x2="720" y2="400" marker-end="url(#arrow)" />
-          <!-- Pages -> Browser (serves the static page) -->
+          <!-- Client (static assets) -> Browser (serves the static page) -->
           <line x1="1270" y1="400" x2="1270" y2="350" marker-end="url(#arrow)" />
         </g>
         <g fill="none" stroke="var(--accent)" stroke-width="2">
           <!-- Claude CLI -> Worker (sync new leads) -->
           <line x1="300" y1="315" x2="590" y2="315" marker-end="url(#arrowAccent)" />
-          <!-- Worker <-> Browser (cross-origin API calls - separate deployment from Pages) -->
+          <!-- Worker <-> Browser (cross-origin API calls - separate deployment) -->
           <line x1="850" y1="305" x2="1140" y2="305" marker-end="url(#arrowAccent)" marker-start="url(#arrowAccent)" />
         </g>
 
@@ -258,18 +258,18 @@
           <text x="1160" y="341" font-family="Space Mono, monospace" font-size="11" fill="currentColor" opacity="0.65">API URL + token in localStorage</text>
         </g>
 
-        <!-- Pages (client) -->
+        <!-- Static client (Worker assets) -->
         <g>
           <rect x="1140" y="400" width="260" height="90" rx="9" fill="var(--surface)" stroke="var(--line-strong)" stroke-width="1.3" />
-          <text x="1160" y="428" font-family="Archivo, sans-serif" font-weight="700" font-size="15" fill="currentColor">Cloudflare Pages — client</text>
+          <text x="1160" y="428" font-family="Archivo, sans-serif" font-weight="700" font-size="15" fill="currentColor">Static client (Worker assets)</text>
           <text x="1160" y="448" font-family="Space Mono, monospace" font-size="11" fill="currentColor" opacity="0.75">job-search-tracker-client</text>
-          <text x="1160" y="463" font-family="Space Mono, monospace" font-size="11" fill="currentColor" opacity="0.75">.pages.dev</text>
+          <text x="1160" y="463" font-family="Space Mono, monospace" font-size="11" fill="currentColor" opacity="0.75">.workers.dev</text>
           <text x="1160" y="478" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">separate deploy from the Worker</text>
         </g>
 
       </svg>
     </div>
-    <figcaption>Each track's daily headless run writes to its own local, private doc and pushes only new verified postings to the Worker API; the browser loads the tracker page from a separate Pages deployment and calls the same Worker API cross-origin, so what you see in the browser and what the search wrote are the same D1 rows. Tooling (scripts, server, client) syncs with GitHub on its own — the private-data box never does.</figcaption>
+    <figcaption>Each track's daily headless run writes to its own local, private doc and pushes only new verified postings to the Worker API; the browser loads the tracker page from a separate static-assets deployment and calls the same Worker API cross-origin, so what you see in the browser and what the search wrote are the same D1 rows. Tooling (scripts, server, client) syncs with GitHub on its own — the private-data box never does.</figcaption>
   </figure>
 
   <section>
@@ -282,7 +282,7 @@
       </div>
       <div class="card">
         <p class="k">02 · Live page</p>
-        <p>The tracker page (<code class="mono">client/</code>) is a separate Cloudflare Pages deployment from the API Worker (<code class="mono">server/</code>) - it calls the API cross-origin over <code class="mono">fetch</code>, CORS-enabled on the API side. Every edit - a status change, a note - is one D1 row update, so a browser edit and a headless sync landing at the same moment can't silently overwrite each other. Either half redeploys independently of the other.</p>
+        <p>The tracker page (<code class="mono">client/</code>) is a separate static-assets Worker deployment from the API Worker (<code class="mono">server/</code>) - it calls the API cross-origin over <code class="mono">fetch</code>, CORS-enabled on the API side. Every edit - a status change, a note - is one D1 row update, so a browser edit and a headless sync landing at the same moment can't silently overwrite each other. Either half redeploys independently of the other.</p>
         <p>A single bearer token gates every API route; the browser stores it (and the API's URL) in <code class="mono">localStorage</code> after first entry.</p>
       </div>
       <div class="card private">
