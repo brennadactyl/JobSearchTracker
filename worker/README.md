@@ -106,6 +106,8 @@ Cloudflare's own environment.
 
 ## Updating the page after code changes
 
+**Always deploy from `main`, never from a feature branch or worktree** - merge/fast-forward `main` and push first, then deploy from a checkout that's actually on `main`. `wrangler deploy` and `wrangler d1 migrations apply --remote` both push whatever's on disk live regardless of git branch, so deploying from a branch leaves the live Worker running code that isn't in `main`'s history.
+
 ```bat
 cd worker
 wrangler deploy
