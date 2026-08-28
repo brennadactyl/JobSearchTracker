@@ -167,8 +167,10 @@ td textarea{font-size:13px;min-height:32px;min-width:130px}
 .md-row-top .co{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .md-row-top .pill{flex:0 0 auto}
 .md-row-ttl{font-size:13px;color:var(--ink2);margin-top:3px;line-height:1.4}
-.md-row-loc{font-size:11.5px;color:var(--ink3);margin-top:7px}
-.md-row-loc .geo{margin-left:6px;padding:1px 7px}
+.md-row-loc{font-size:11.5px;color:var(--ink3);margin-top:7px;display:flex;align-items:baseline}
+.md-row-loc .geo{flex:0 0 auto;margin-left:6px;padding:1px 7px}
+.md-row-place{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.md-row-found{flex:0 0 auto;margin-left:auto;padding-left:10px;white-space:nowrap}
 .md-detail{flex:1;min-width:0;padding:22px 28px;overflow-y:auto;
   max-height:min(720px,calc(100vh - 260px))}
 .md-empty{padding:70px 20px;text-align:center;color:var(--ink3)}
@@ -686,7 +688,9 @@ function leadsTab(key){
       '<div class="md-row-top"><span class="co">'+esc(l.company)+'</span>'+
         '<span class="pill '+pillFor(l.status)+'">'+esc(l.status)+'</span>'+delistedBadge(l)+'</div>'+
       '<div class="md-row-ttl">'+esc(l.title)+'</div>'+
-      '<div class="md-row-loc">'+esc(l.location)+(g?'<span class="geo '+g.p+'">'+esc(g.label)+'</span>':'')+'</div>'+
+      '<div class="md-row-loc"><span class="md-row-place">'+esc(l.location)+'</span>'+
+        (g?'<span class="geo '+g.p+'">'+esc(g.label)+'</span>':'')+
+        '<span class="md-row-found" title="Date this listing was added">Found <span class="mono">'+esc(l.found)+'</span></span></div>'+
     '</div>';
   }).join("");
 
