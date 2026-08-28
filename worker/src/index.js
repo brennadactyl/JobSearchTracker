@@ -9,12 +9,17 @@
  * Routes:
  *   GET  /                   unauthenticated shell; JS prompts for the token,
  *                            then calls the API routes below with it
- *   GET  /api/data           requires Bearer token -> { updated, leads[], applications[] }
+ *   GET  /api/data           requires Bearer token -> { updated, leads[], applications[], screened[] }
  *   POST /api/leads          requires Bearer token -> body: { leads: [...] }
  *                            appends leads not already present for the same
  *                            (search, url) pair (DB-enforced UNIQUE constraint
  *                            + INSERT OR IGNORE - atomic, race-free); never
  *                            touches existing status/notes
+ *   POST /api/screened       requires Bearer token -> body: { screened: [...] }
+ *                            appends postings the search decided NOT to add
+ *                            as a lead (dead-on-arrival, outside the US,
+ *                            wrong level, duplicate) - same dedup shape as
+ *                            /api/leads. See migrations/0006_add_screened_table.sql.
  *   POST /api/update         requires Bearer token -> body: { type: "lead"|"application", ... }
  *                            updates one lead's status/notes, or upserts one
  *                            application record. Generic field-whitelist
@@ -57,6 +62,7 @@ import {
   unauthorized,
   json,
   handleAddLeads,
+  handleAddScreened,
   handleUpdate,
   handleSetLeadStatus,
   handleSetApplicationStatus,
@@ -78,9 +84,10 @@ export default {
 
     if (url.pathname === "/api/data" && request.method === "GET") {
       if (!authorized(request, env)) return unauthorized();
-      const [leads, applications, meta, config] = await Promise.all([
+      const [leads, applications, screened, meta, config] = await Promise.all([
         env.DB.prepare("SELECT * FROM leads ORDER BY id").all(),
         env.DB.prepare("SELECT * FROM applications ORDER BY id").all(),
+        env.DB.prepare("SELECT * FROM screened ORDER BY id").all(),
         env.DB.prepare("SELECT value FROM meta WHERE key = 'updated'").first(),
         getTracksAndSettings(env),
       ]);
@@ -88,6 +95,7 @@ export default {
         updated: meta ? meta.value : null,
         leads: leads.results,
         applications: applications.results,
+        screened: screened.results,
         tracks: config.tracks,
         settings: config.settings,
       });
@@ -106,6 +114,11 @@ export default {
     if (url.pathname === "/api/leads" && request.method === "POST") {
       if (!authorized(request, env)) return unauthorized();
       return handleAddLeads(request, env);
+    }
+
+    if (url.pathname === "/api/screened" && request.method === "POST") {
+      if (!authorized(request, env)) return unauthorized();
+      return handleAddScreened(request, env);
     }
 
     if (url.pathname === "/api/update" && request.method === "POST") {

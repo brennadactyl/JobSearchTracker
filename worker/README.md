@@ -14,7 +14,7 @@ your notes) lives only in D1 once deployed.
 - `src/index.js` - Worker entry point: routing only (which path/method maps
   to which handler), no logic of its own.
 - `src/api.js` - the D1-backed API handlers (`/api/data`, `/api/leads`,
-  `/api/update`, `/api/delete-application`, `/api/config`) and their shared helpers.
+  `/api/screened`, `/api/update`, `/api/delete-application`, `/api/config`) and their shared helpers.
 - `src/page.html` - the tracker webpage: a real, standalone HTML file (open
   it directly in a browser to preview/edit it) with its CSS and client-side
   JS inline. `index.js` imports it as plain text (see the `[[rules]]` entry
@@ -125,8 +125,9 @@ wrangler d1 migrations apply job-search-tracker-db --remote
 
 ## API (used by the search scripts, see ../private.example/README.md)
 
-- `GET /api/data` - Bearer token required - returns `{ updated, leads[], applications[] }`
+- `GET /api/data` - Bearer token required - returns `{ updated, leads[], applications[], screened[] }`
 - `POST /api/leads` - Bearer token required - body `{ "leads": [ {search, company, title, location, url, found, verified, fit, team, setup, comp} ] }` - appends only leads not already present for the same `(search, url)` pair (DB-enforced, atomic); never touches existing status/notes. `team`/`setup`/`comp` are optional (omit rather than send empty) and only meaningful when the posting states them - other Details fields (referral, resume, lastContact, nextAction*, link) are accepted too but are user-entered only, never sent by the search scripts.
+- `POST /api/screened` - Bearer token required - body `{ "screened": [ {search, url, company, title, location, reason, date} ] }` - records a posting the search looked at and decided NOT to add as a lead (dead-on-arrival, outside the US, wrong level/role-type, duplicate), so the next run's dedup check (against `GET /api/data`'s `screened[]`) skips it without re-verifying. Same `(search, url)`-deduped, atomic append as `/api/leads`; `date` defaults to today if omitted. No read-back/UI for this list today - it exists purely so scheduled runs don't re-spend a verification attempt on something already ruled out.
 - `POST /api/update` - Bearer token required - body `{ "type": "lead", "id": ..., "status": "...", "notes": "...", "delistedOn": "..." }` or `{ "type": "application", ... }`. `delistedOn` is set by the scheduled searches (a `YYYY-MM-DD` when a previously-live posting is confirmed taken down, or `""` to clear it if later found live again) - kept separate from `status` so a lead can be, say, "Applied" and delisted at the same time without either field overwriting the other. All fields are optional per call (only what's passed gets updated).
 - `POST /api/delete-application` - Bearer token required - body `{ "id": ... }` - removes one application row (leads are never deleted, only re-statused)
 - `GET /api/config` - Bearer token required - returns `{ tracks: [{key, label, full_description, sort_order}], settings: {display_title, priority_locations} }` - the per-installer config the page renders its tabs/title/geo-priority labels from, instead of a baked-in TRACKS object. `priority_locations` is an ordered list of `{tier: "p-high"|"p-med", label, anyOf: [...], allOf?: [...]}` rules (substring match against the lowercased location, first match wins).

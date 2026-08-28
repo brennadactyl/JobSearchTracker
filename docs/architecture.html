@@ -303,8 +303,9 @@
         </thead>
         <tbody>
           <tr><td class="mono">/</td><td class="mono">GET</td><td>tracker webpage</td></tr>
-          <tr><td class="mono">/api/data</td><td class="mono">GET</td><td>current leads + applications + track/display config</td></tr>
+          <tr><td class="mono">/api/data</td><td class="mono">GET</td><td>current leads + applications + screened postings + track/display config</td></tr>
           <tr><td class="mono">/api/leads</td><td class="mono">POST</td><td>add new postings, deduped on (search, url)</td></tr>
+          <tr><td class="mono">/api/screened</td><td class="mono">POST</td><td>record a posting the search ruled out (dead, outside US, wrong level, duplicate) so it isn't re-verified next run</td></tr>
           <tr><td class="mono">/api/update</td><td class="mono">POST</td><td>edit a lead's status/notes, or add/edit an application</td></tr>
           <tr><td class="mono">/api/delete-application</td><td class="mono">POST</td><td>remove one application row</td></tr>
           <tr><td class="mono">/api/config</td><td class="mono">GET/POST</td><td>read/set track labels, display title, priority-location rules</td></tr>

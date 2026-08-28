@@ -206,6 +206,50 @@ export async function handleAddLeads(request, env) {
   return json({ added });
 }
 
+// Records postings the search looked at and decided NOT to add as a lead
+// (dead-on-arrival, outside the US, wrong level/role-type, duplicate) - see
+// migrations/0006_add_screened_table.sql. Same INSERT-OR-IGNORE-on-(search,
+// url) shape as handleAddLeads above, but no touchUpdated() call: screened
+// items don't show up on the tracker page, so they shouldn't bump its
+// "last updated" banner.
+export async function handleAddScreened(request, env) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "invalid JSON body" }, 400);
+  }
+  const incoming = Array.isArray(body.screened) ? body.screened : [];
+  if (incoming.length === 0) return json({ error: "no screened items provided" }, 400);
+
+  const t = today();
+  const stmt = env.DB.prepare(
+    `INSERT OR IGNORE INTO screened (search, url, company, title, location, reason, date)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  );
+
+  const batch = [];
+  for (const item of incoming) {
+    if (!item.search || !item.url) continue;
+    batch.push(
+      stmt.bind(
+        item.search,
+        item.url,
+        item.company || "",
+        item.title || "",
+        item.location || "",
+        item.reason || "",
+        item.date || t
+      )
+    );
+  }
+  if (batch.length === 0) return json({ error: "no valid screened items in payload" }, 400);
+
+  const results = await env.DB.batch(batch);
+  const added = results.reduce((n, r) => n + (r.meta.changes || 0), 0);
+  return json({ added });
+}
+
 export async function handleUpdate(request, env) {
   let body;
   try {
