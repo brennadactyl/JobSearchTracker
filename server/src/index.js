@@ -10,6 +10,11 @@
  * api.js's json()/CORS_HEADERS. Server and client are versioned, deployed,
  * and updated independently; see each one's own README for its deploy flow.
  *
+ * This file is routing only - which path/method maps to which handler - plus
+ * building the one `Db` instance (see ./db.js) each request's handlers share.
+ * All D1 access lives in db.js; all request parsing/validation/response
+ * shaping lives in api.js. Nothing here talks to `env.DB` directly.
+ *
  * Routes:
  *   GET  /api/data           requires Bearer token -> { updated, leads[], applications[], screened[] }
  *   POST /api/leads          requires Bearer token -> body: { leads: [...] }
@@ -71,9 +76,10 @@
  *                            tracks lose theirs.
  *   OPTIONS *                 CORS preflight for any of the above -> 204 + CORS_HEADERS
  *
- * Schema: see ../migrations/. Handlers: see ./api.js.
+ * Schema: see ../migrations/. Persistence: see ./db.js. Handlers: see ./api.js.
  */
 
+import { Db } from "./db.js";
 import {
   authorized,
   unauthorized,
@@ -87,9 +93,9 @@ import {
   handleSetLeadStatus,
   handleSetApplicationStatus,
   handleDeleteApplication,
-  getTracksAndSettings,
   handleGetConfig,
   handleSetConfig,
+  handleGetData,
 } from "./api.js";
 
 export default {
@@ -97,54 +103,41 @@ export default {
     if (request.method === "OPTIONS") return corsPreflight();
 
     const url = new URL(request.url);
+    const db = new Db(env.DB);
 
     if (url.pathname === "/api/data" && request.method === "GET") {
       if (!authorized(request, env)) return unauthorized();
-      const [leads, applications, screened, meta, config] = await Promise.all([
-        env.DB.prepare("SELECT * FROM leads ORDER BY id").all(),
-        env.DB.prepare("SELECT * FROM applications ORDER BY id").all(),
-        env.DB.prepare("SELECT * FROM screened ORDER BY id").all(),
-        env.DB.prepare("SELECT value FROM meta WHERE key = 'updated'").first(),
-        getTracksAndSettings(env),
-      ]);
-      return json({
-        updated: meta ? meta.value : null,
-        leads: leads.results,
-        applications: applications.results,
-        screened: screened.results,
-        tracks: config.tracks,
-        settings: config.settings,
-      });
+      return handleGetData(db);
     }
 
     if (url.pathname === "/api/config" && request.method === "GET") {
       if (!authorized(request, env)) return unauthorized();
-      return handleGetConfig(env);
+      return handleGetConfig(db);
     }
 
     if (url.pathname === "/api/config" && request.method === "POST") {
       if (!authorized(request, env)) return unauthorized();
-      return handleSetConfig(request, env);
+      return handleSetConfig(request, db);
     }
 
     if (url.pathname === "/api/leads" && request.method === "POST") {
       if (!authorized(request, env)) return unauthorized();
-      return handleAddLeads(request, env);
+      return handleAddLeads(request, db);
     }
 
     if (url.pathname === "/api/runs" && request.method === "POST") {
       if (!authorized(request, env)) return unauthorized();
-      return handleRecordRun(request, env);
+      return handleRecordRun(request, db);
     }
 
     if (url.pathname === "/api/screened" && request.method === "POST") {
       if (!authorized(request, env)) return unauthorized();
-      return handleAddScreened(request, env);
+      return handleAddScreened(request, db);
     }
 
     if (url.pathname === "/api/update" && request.method === "POST") {
       if (!authorized(request, env)) return unauthorized();
-      return handleUpdate(request, env);
+      return handleUpdate(request, db);
     }
 
     // Path-param routes (the only ones in this file) - matched by regex
@@ -152,17 +145,17 @@ export default {
     let m;
     if ((m = url.pathname.match(/^\/api\/leads\/(\d+)\/status$/)) && request.method === "POST") {
       if (!authorized(request, env)) return unauthorized();
-      return handleSetLeadStatus(request, env, m[1]);
+      return handleSetLeadStatus(request, db, m[1]);
     }
 
     if ((m = url.pathname.match(/^\/api\/applications\/(\d+)\/status$/)) && request.method === "POST") {
       if (!authorized(request, env)) return unauthorized();
-      return handleSetApplicationStatus(request, env, m[1]);
+      return handleSetApplicationStatus(request, db, m[1]);
     }
 
     if (url.pathname === "/api/delete-application" && request.method === "POST") {
       if (!authorized(request, env)) return unauthorized();
-      return handleDeleteApplication(request, env);
+      return handleDeleteApplication(request, db);
     }
 
     return new Response("Not found", { status: 404, headers: CORS_HEADERS });

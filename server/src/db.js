@@ -1,0 +1,529 @@
+/**
+ * The one place that knows this is D1 (SQLite). Every `env.DB.prepare(...)`
+ * call in the whole worker lives here - api.js and index.js never touch D1
+ * directly, only Db's methods below. That's the point: if this ever needs
+ * to run on a different database, only this file changes. The rest of the
+ * codebase (request parsing, validation, deciding *when* something happens)
+ * doesn't know or care what's storing the rows.
+ *
+ * New to JS? A "class" here is just a bundle of related functions (the
+ * methods below) that share one piece of state - the D1 binding, stored as
+ * `this.d1` in the constructor. `new Db(env.DB)` makes one instance; every
+ * method call after that (`db.getLead(5)`) automatically has access to that
+ * same `this.d1` without you passing it around everywhere.
+ *
+ * ---- JSDoc typedefs: this project has no build step (see client/README.md),
+ * so there's no TypeScript compiler. @typedef comments are the zero-build
+ * substitute: plain comments that do nothing at runtime, but that VS Code
+ * (and `tsc --checkJs`, if you ever want to run it) read to give you
+ * autocomplete and type-checking on plain .js files. Think of them as the
+ * "contract" for what shape an object has - documentation a tool can verify
+ * for you, instead of documentation that quietly goes stale.
+ */
+
+/**
+ * @typedef {Object} Lead
+ * @property {number} id
+ * @property {string} search - track key, matches Track.key
+ * @property {string} found - YYYY-MM-DD, date first found
+ * @property {string} company
+ * @property {string} title
+ * @property {string} location
+ * @property {string} url
+ * @property {string} verified - YYYY-MM-DD, date last verified live
+ * @property {string} fit
+ * @property {string} status - one of LEAD_STATUS in api.js
+ * @property {string} notes
+ * @property {string} delistedOn - YYYY-MM-DD, or '' if still live
+ * @property {string} team
+ * @property {string} setup
+ * @property {string} source
+ * @property {string} link
+ * @property {string} lastContact
+ * @property {string} nextAction
+ * @property {string} nextActionDate
+ * @property {string} resume
+ * @property {string} referral
+ * @property {string} comp
+ */
+
+/**
+ * @typedef {Object} Application
+ * @property {number} id
+ * @property {string} leadId - the originating Lead.id as text, or '' if added by hand
+ * @property {string} company
+ * @property {string} title
+ * @property {string} dateApplied - YYYY-MM-DD
+ * @property {string} status - one of APP_STATUS in api.js
+ * @property {string} notes
+ * @property {string} team
+ * @property {string} setup
+ * @property {string} source
+ * @property {string} link
+ * @property {string} lastContact
+ * @property {string} nextAction
+ * @property {string} nextActionDate
+ * @property {string} resume
+ * @property {string} referral
+ * @property {string} comp
+ * @property {string} dateRecruiterScreen
+ * @property {string} dateTechScreen
+ * @property {string} dateOnsite
+ * @property {string} dateOffer
+ * @property {string} dateRejected
+ * @property {string} dateWithdrawn
+ */
+
+/**
+ * @typedef {Object} ScreenedItem
+ * @property {number} id
+ * @property {string} search - track key
+ * @property {string} url
+ * @property {string} company
+ * @property {string} title
+ * @property {string} location
+ * @property {string} reason
+ * @property {string} date - YYYY-MM-DD, date screened
+ */
+
+/**
+ * @typedef {Object} SearchRun
+ * @property {string} track_key
+ * @property {string} last_run_at - ISO 8601 UTC instant, or '' if never recorded
+ * @property {string} last_run_on - YYYY-MM-DD, the installer's local date
+ * @property {string} status - 'ok' | 'error' | ''
+ * @property {number} leads_added
+ * @property {number} screened_added
+ * @property {number} delisted
+ * @property {string} note
+ */
+
+/**
+ * @typedef {Object} Track
+ * @property {string} key
+ * @property {string} label
+ * @property {string} full_description
+ * @property {number} sort_order
+ */
+
+/**
+ * @typedef {Track & {last_run: {at: string, on: string, status: string, leads_added: number, screened_added: number, delisted: number, note: string}}} TrackWithRun
+ */
+
+/**
+ * @typedef {Object} Settings
+ * @property {string} display_title
+ * @property {string} overview_label
+ * @property {string} applications_label
+ * @property {number} stale_run_hours
+ * @property {Array<Object>} priority_locations
+ */
+
+// Same field lists api.js validates/whitelists against - re-exported from
+// here so there is exactly one definition, not two that can drift apart.
+export const EXTRA_FIELDS = [
+  "team", "setup", "source", "link", "lastContact",
+  "nextAction", "nextActionDate", "resume", "referral", "comp",
+];
+export const APP_STAGE_DATE_FIELDS = [
+  "dateRecruiterScreen", "dateTechScreen", "dateOnsite",
+  "dateOffer", "dateRejected", "dateWithdrawn",
+];
+export const SETTING_KEYS = [
+  "display_title", "overview_label", "applications_label", "stale_run_hours",
+];
+export const DEFAULT_SETTINGS = {
+  display_title: "Job Search Tracker",
+  overview_label: "Overview",
+  applications_label: "Applications",
+  stale_run_hours: 36,
+  priority_locations: [],
+};
+
+function today() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+export class Db {
+  /** @param {D1Database} d1 */
+  constructor(d1) {
+    this.d1 = d1;
+  }
+
+  // ---------------------------------------------------------------- meta --
+
+  /** @returns {Promise<string|null>} the 'updated' timestamp, or null if never set */
+  async getUpdatedTimestamp() {
+    const row = await this.d1.prepare("SELECT value FROM meta WHERE key = 'updated'").first();
+    return row ? row.value : null;
+  }
+
+  /** Stamps 'updated' with today's date - call after any write a viewer should see reflected. */
+  async touchUpdated() {
+    await this.d1
+      .prepare(
+        `INSERT INTO meta (key, value) VALUES ('updated', ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+      )
+      .bind(today())
+      .run();
+  }
+
+  // -------------------------------------------------------- full dumps --
+
+  /** @returns {Promise<Lead[]>} */
+  async getAllLeads() {
+    const res = await this.d1.prepare("SELECT * FROM leads ORDER BY id").all();
+    return res.results;
+  }
+
+  /** @returns {Promise<Application[]>} */
+  async getAllApplications() {
+    const res = await this.d1.prepare("SELECT * FROM applications ORDER BY id").all();
+    return res.results;
+  }
+
+  /** @returns {Promise<ScreenedItem[]>} */
+  async getAllScreened() {
+    const res = await this.d1.prepare("SELECT * FROM screened ORDER BY id").all();
+    return res.results;
+  }
+
+  // -------------------------------------------------- tracks & settings --
+
+  /** @returns {Promise<{tracks: TrackWithRun[], settings: Settings}>} */
+  async getTracksAndSettings() {
+    const [tracksRes, settingsRows] = await Promise.all([
+      this.d1
+        .prepare(
+          `SELECT t.key, t.label, t.full_description, t.sort_order,
+                  r.last_run_at, r.last_run_on, r.status AS last_run_status,
+                  r.leads_added, r.screened_added, r.delisted, r.note
+           FROM tracks t LEFT JOIN search_runs r ON r.track_key = t.key
+           ORDER BY t.sort_order, t.key`
+        )
+        .all(),
+      this.d1
+        .prepare(
+          `SELECT key, value FROM meta WHERE key IN (${["priority_locations", ...SETTING_KEYS]
+            .map(() => "?")
+            .join(", ")})`
+        )
+        .bind("priority_locations", ...SETTING_KEYS)
+        .all(),
+    ]);
+
+    const settings = { ...DEFAULT_SETTINGS };
+    for (const row of settingsRows.results) {
+      if (row.key === "priority_locations") {
+        try {
+          settings.priority_locations = JSON.parse(row.value);
+        } catch {
+          settings.priority_locations = [];
+        }
+      } else if (row.key === "stale_run_hours") {
+        const n = Number(row.value);
+        if (Number.isFinite(n) && n > 0) settings.stale_run_hours = n;
+      } else {
+        settings[row.key] = row.value;
+      }
+    }
+
+    const tracks = tracksRes.results.map((row) => ({
+      key: row.key,
+      label: row.label,
+      full_description: row.full_description,
+      sort_order: row.sort_order,
+      last_run: {
+        at: row.last_run_at || "",
+        on: row.last_run_on || "",
+        status: row.last_run_status || "",
+        leads_added: row.leads_added || 0,
+        screened_added: row.screened_added || 0,
+        delisted: row.delisted || 0,
+        note: row.note || "",
+      },
+    }));
+
+    return { tracks, settings };
+  }
+
+  /** @param {string} key @returns {Promise<boolean>} */
+  async trackExists(key) {
+    const row = await this.d1.prepare("SELECT key FROM tracks WHERE key = ?").bind(key).first();
+    return !!row;
+  }
+
+  /**
+   * Replaces the whole track list in one batch (one real transaction) and
+   * keeps `search_runs` 1:1 with it - a new track gets an empty "never ran"
+   * row, a removed track's run row goes with it.
+   * @param {Array<{key: string, label?: string, full_description?: string, sort_order?: number}>} tracks
+   */
+  async replaceTracks(tracks) {
+    const stmt = this.d1.prepare(
+      `INSERT INTO tracks (key, label, full_description, sort_order) VALUES (?, ?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET label = excluded.label,
+         full_description = excluded.full_description, sort_order = excluded.sort_order`
+    );
+    // INSERT OR IGNORE, not a plain INSERT - re-posting an unchanged track
+    // list is the normal case and must not wipe existing run history.
+    const runStmt = this.d1.prepare("INSERT OR IGNORE INTO search_runs (track_key) VALUES (?)");
+    const placeholders = tracks.map(() => "?").join(", ");
+    const keys = tracks.map((t) => t.key);
+    const batch = [
+      this.d1.prepare(`DELETE FROM tracks WHERE key NOT IN (${placeholders})`).bind(...keys),
+      this.d1.prepare(`DELETE FROM search_runs WHERE track_key NOT IN (${placeholders})`).bind(...keys),
+      ...tracks.map((t, i) =>
+        stmt.bind(t.key, t.label || t.key, t.full_description || "", Number.isInteger(t.sort_order) ? t.sort_order : i)
+      ),
+      ...keys.map((k) => runStmt.bind(k)),
+    ];
+    await this.d1.batch(batch);
+  }
+
+  /**
+   * Sets any subset of display/behavior settings. Empty strings are ignored
+   * (falls back to DEFAULT_SETTINGS) rather than stored, so clearing a field
+   * produces the default instead of a blank label.
+   * @param {Partial<{display_title: string, overview_label: string, applications_label: string, stale_run_hours: number, priority_locations: Array<Object>}>} patch
+   */
+  async setSettings(patch) {
+    const textSettings = SETTING_KEYS.filter((k) => k !== "stale_run_hours");
+    for (const key of textSettings) {
+      if (typeof patch[key] === "string" && patch[key]) {
+        await this.d1
+          .prepare(
+            `INSERT INTO meta (key, value) VALUES (?, ?)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+          )
+          .bind(key, patch[key])
+          .run();
+      }
+    }
+    if (patch.stale_run_hours != null) {
+      await this.d1
+        .prepare(
+          `INSERT INTO meta (key, value) VALUES ('stale_run_hours', ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+        )
+        .bind(String(patch.stale_run_hours))
+        .run();
+    }
+    if (Array.isArray(patch.priority_locations)) {
+      await this.d1
+        .prepare(
+          `INSERT INTO meta (key, value) VALUES ('priority_locations', ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+        )
+        .bind(JSON.stringify(patch.priority_locations))
+        .run();
+    }
+  }
+
+  // ------------------------------------------------------------- runs --
+
+  /**
+   * @param {string} key
+   * @param {{at: string, on: string, status: string, leadsAdded: number, screenedAdded: number, delisted: number, note: string}} run
+   * @returns {Promise<SearchRun>}
+   */
+  async recordRun(key, run) {
+    await this.d1
+      .prepare(
+        `INSERT INTO search_runs
+           (track_key, last_run_at, last_run_on, status, leads_added, screened_added, delisted, note)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(track_key) DO UPDATE SET
+           last_run_at = excluded.last_run_at, last_run_on = excluded.last_run_on,
+           status = excluded.status, leads_added = excluded.leads_added,
+           screened_added = excluded.screened_added, delisted = excluded.delisted,
+           note = excluded.note`
+      )
+      .bind(key, run.at, run.on, run.status, run.leadsAdded, run.screenedAdded, run.delisted, run.note)
+      .run();
+    return this.d1.prepare("SELECT * FROM search_runs WHERE track_key = ?").bind(key).first();
+  }
+
+  // ------------------------------------------------------------ leads --
+
+  /**
+   * Inserts leads not already present for the same (search, url) pair -
+   * DB-enforced UNIQUE constraint + INSERT OR IGNORE, atomic and race-free.
+   * Never touches an existing row's status/notes.
+   * @param {Array<Partial<Lead>>} leads
+   * @returns {Promise<number>} how many were actually inserted
+   */
+  async addLeads(leads) {
+    const t = today();
+    const stmt = this.d1.prepare(
+      `INSERT OR IGNORE INTO leads
+         (search, found, company, title, location, url, verified, fit, status, notes, ${EXTRA_FIELDS.join(", ")})
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'New', '', ${EXTRA_FIELDS.map(() => "?").join(", ")})`
+    );
+    const batch = leads.map((lead) =>
+      stmt.bind(
+        lead.search,
+        lead.found || t,
+        lead.company,
+        lead.title,
+        lead.location || "",
+        lead.url,
+        lead.verified || t,
+        lead.fit || "",
+        ...EXTRA_FIELDS.map((f) => lead[f] || "")
+      )
+    );
+    const results = await this.d1.batch(batch);
+    return results.reduce((n, r) => n + (r.meta.changes || 0), 0);
+  }
+
+  /** @param {number|string} id @returns {Promise<Lead|null>} */
+  async getLead(id) {
+    return this.d1.prepare("SELECT * FROM leads WHERE id = ?").bind(id).first();
+  }
+
+  /**
+   * Field-whitelist partial update - only keys present in `patch` (as
+   * strings) are changed; everything else is left as-is via COALESCE.
+   * @param {number|string} id
+   * @param {Partial<Lead>} patch
+   * @returns {Promise<Lead|null>} the updated row, or null if no row matched
+   */
+  async updateLead(id, patch) {
+    const fields = ["status", "notes", "delistedOn", ...EXTRA_FIELDS];
+    const setClause = fields.map((f) => `${f} = COALESCE(?, ${f})`).join(", ");
+    const values = fields.map((f) => (typeof patch[f] === "string" ? patch[f] : null));
+    const result = await this.d1.prepare(`UPDATE leads SET ${setClause} WHERE id = ?`).bind(...values, id).run();
+    if (result.meta.changes === 0) return null;
+    return this.getLead(id);
+  }
+
+  // -------------------------------------------------------- screened --
+
+  /**
+   * Same INSERT-OR-IGNORE-on-(search,url) dedup shape as addLeads.
+   * @param {Array<Partial<ScreenedItem>>} items
+   * @returns {Promise<number>} how many were actually inserted
+   */
+  async addScreened(items) {
+    const t = today();
+    const stmt = this.d1.prepare(
+      `INSERT OR IGNORE INTO screened (search, url, company, title, location, reason, date)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    );
+    const batch = items.map((item) =>
+      stmt.bind(item.search, item.url, item.company || "", item.title || "", item.location || "", item.reason || "", item.date || t)
+    );
+    const results = await this.d1.batch(batch);
+    return results.reduce((n, r) => n + (r.meta.changes || 0), 0);
+  }
+
+  // ----------------------------------------------------- applications --
+
+  /** @param {number|string} id @returns {Promise<Application|null>} */
+  async getApplication(id) {
+    return this.d1.prepare("SELECT * FROM applications WHERE id = ?").bind(id).first();
+  }
+
+  /** @param {number|string} leadId @returns {Promise<Application|null>} */
+  async getApplicationByLeadId(leadId) {
+    return this.d1.prepare("SELECT * FROM applications WHERE leadId = ? LIMIT 1").bind(String(leadId)).first();
+  }
+
+  /**
+   * @param {Partial<Application>} fields
+   * @returns {Promise<Application>}
+   */
+  async insertApplication(fields) {
+    const cols = ["leadId", "company", "title", "dateApplied", "status", "notes", ...EXTRA_FIELDS, ...APP_STAGE_DATE_FIELDS];
+    const placeholders = cols.map(() => "?").join(", ");
+    const values = cols.map((f) => {
+      if (f === "dateApplied") return fields.dateApplied || today();
+      if (f === "status") return fields.status || "Applied";
+      return fields[f] || "";
+    });
+    const result = await this.d1.prepare(`INSERT INTO applications (${cols.join(", ")}) VALUES (${placeholders})`).bind(...values).run();
+    return this.getApplication(result.meta.last_row_id);
+  }
+
+  /**
+   * Field-whitelist partial update, same COALESCE pattern as updateLead.
+   * @param {number|string} id
+   * @param {Partial<Application>} patch
+   * @returns {Promise<Application|null>}
+   */
+  async updateApplication(id, patch) {
+    const fields = ["company", "title", "dateApplied", "status", "notes", "leadId", ...EXTRA_FIELDS, ...APP_STAGE_DATE_FIELDS];
+    const setClause = fields.map((f) => `${f} = COALESCE(?, ${f})`).join(", ");
+    const values = fields.map((f) => (typeof patch[f] === "string" ? patch[f] : null));
+    const result = await this.d1.prepare(`UPDATE applications SET ${setClause} WHERE id = ?`).bind(...values, id).run();
+    if (result.meta.changes === 0) return null;
+    return this.getApplication(id);
+  }
+
+  /** @param {number|string} id @returns {Promise<boolean>} true if a row was actually deleted */
+  async deleteApplication(id) {
+    const result = await this.d1.prepare("DELETE FROM applications WHERE id = ?").bind(id).run();
+    return result.meta.changes > 0;
+  }
+
+  /**
+   * Sets status and, the first time it reaches a stage with a history
+   * column, stamps that column with today's date - but only if it's still
+   * empty, so it never overwrites a date the user corrected by hand.
+   * @param {number|string} id
+   * @param {string} status
+   * @param {string|null} stageDateColumn - one of APP_STAGE_DATE_FIELDS, or null if this status has none
+   * @returns {Promise<Application|null>}
+   */
+  async setApplicationStatus(id, status, stageDateColumn) {
+    const result = stageDateColumn
+      ? await this.d1
+          .prepare(
+            `UPDATE applications SET status = ?, ${stageDateColumn} = CASE WHEN ${stageDateColumn} = '' THEN ? ELSE ${stageDateColumn} END WHERE id = ?`
+          )
+          .bind(status, today(), id)
+          .run()
+      : await this.d1.prepare("UPDATE applications SET status = ? WHERE id = ?").bind(status, id).run();
+    if (result.meta.changes === 0) return null;
+    return this.getApplication(id);
+  }
+
+  // ------------------------------------------------------- composite --
+
+  /**
+   * Atomically (one D1 batch/transaction) sets a lead's status and,
+   * optionally, inserts a new application row alongside it - so a lead can
+   * never end up "Applied" with no application because a second, separate
+   * write failed partway. Whether to create one is the caller's decision
+   * (business logic: "Applied" + no existing application yet) - this method
+   * just makes doing both atomic once that decision's been made.
+   * @param {number|string} id
+   * @param {string} status
+   * @param {Partial<Application>|null} newApplicationFields - pass an object to also create an application in the same transaction, or null to just set the status
+   * @returns {Promise<{lead: Lead|null, application: Application|null}>}
+   */
+  async setLeadStatusAndMaybeCreateApplication(id, status, newApplicationFields) {
+    const batch = [this.d1.prepare("UPDATE leads SET status = ? WHERE id = ?").bind(status, id)];
+    if (newApplicationFields) {
+      const cols = ["leadId", "company", "title", "dateApplied", "status", "notes", "link", "referral", "comp", "team", "setup"];
+      const values = cols.map((f) => {
+        if (f === "dateApplied") return newApplicationFields.dateApplied || today();
+        if (f === "status") return newApplicationFields.status || "Applied";
+        return newApplicationFields[f] || "";
+      });
+      batch.push(
+        this.d1.prepare(`INSERT INTO applications (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`).bind(...values)
+      );
+    }
+    const results = await this.d1.batch(batch);
+
+    const lead = await this.getLead(id);
+    let application = null;
+    if (newApplicationFields) {
+      application = await this.getApplication(results[1].meta.last_row_id);
+    }
+    return { lead, application };
+  }
+}
