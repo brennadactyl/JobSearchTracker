@@ -59,6 +59,14 @@ for deploying that API and getting `TRACKER_URL` / `TRACKER_API_TOKEN`. (The
 webpage itself is a separate deployable, `../client/` - the search scripts
 never talk to it directly, only to the API.)
 
+Each prompt also ends by POSTing to `/api/runs` to record that it ran, and
+that step is unconditional - it fires even on a day that found nothing. Keep
+it if you edit a prompt by hand: it's the only thing that distinguishes a
+genuinely quiet day from a search that stopped running, since a run finding
+nothing otherwise writes nothing anywhere. The generated prompts include it
+already (step 9c); a prompt authored by hand without it leaves that track's
+tab stuck reading "No run recorded yet" forever.
+
 ## Moving to a new machine
 
 This private folder isn't distributed via GitHub. Copy it yourself - a

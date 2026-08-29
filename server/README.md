@@ -86,6 +86,10 @@ Cloudflare's own environment.
    ```bat
    wrangler d1 migrations apply job-search-tracker-db --remote
    ```
+   One file, one pass - it creates every table and seeds nothing. Your tracks,
+   page title and priority locations are set later via `/api/config` (the
+   `job-search-setup` skill does it), so the page is deliberately empty until
+   then rather than pre-filled with someone else's job search.
 
 5. **Set the access token** (skip if you already have one from an earlier
    setup - it carries over). Pick a long random value yourself:

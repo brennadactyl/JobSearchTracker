@@ -119,14 +119,25 @@ note after each step if you'd rather do it the traditional way instead.
    [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/brennadactyl/JobSearchTracker/tree/main/client)
 
    Same flow - it forks the client into your own GitHub and deploys it as a
-   Worker serving a static page. Open the URL it gives you - the gate asks
-   for both the API URL (your Worker URL from the previous step) and the
-   token; enter both and they're remembered in your browser for next time.
-   (Optional but recommended: create `public/local-config.js` in your fork
-   with that URL and redeploy, so the gate only ever asks for the token - see
-   [client/README.md](client/README.md).)
+   Worker serving a static page.
 
-   (Prefer the CLI, or need to re-run migrations after a schema change later?
+   **Then one required step before it will work:** in your fork, create
+   `client/public/local-config.js` (copy `local-config.example.js`) with your
+   API Worker's URL from the previous step, and redeploy. The API URL is a
+   deploy-time setting, not something a visitor types in - there's no field
+   for it on the sign-in screen. Skip this and the page just says "This
+   deployment has no API URL configured". See
+   [client/README.md](client/README.md).
+
+   Now open the client's URL. It asks only for the `API_TOKEN` you picked
+   above, and remembers it in that browser.
+
+   **The page will be empty at this point, and that's correct** - no track
+   tabs, just Overview and Applications. A fresh database ships with no
+   tracks, no title and no location rules of its own; step 4 is what fills
+   them in. (Nothing here is pre-seeded with anyone else's job search.)
+
+   (Prefer the CLI, or need to apply a schema change later?
    [server/README.md](server/README.md) and [client/README.md](client/README.md)
    document the manual `wrangler`-based path too - same end result.)
 4. **Set up your private data folder** - either:
@@ -153,7 +164,10 @@ note after each step if you'd rather do it the traditional way instead.
    ```bat
    schtasks /Run /TN JobSearch-Engineering
    ```
-   Check `private\logs\<track>.log` for what happened.
+   Check `private\logs\<track>.log` for what happened, then reload the
+   tracker page: that track's tab should now show when it last ran and what
+   it found. Until a track's first run reports in it reads "No run recorded
+   yet", which is also what you'll see on a brand-new install.
 
 Tasks run daily while you're logged in - no stored Windows password required.
 If the machine is off or you're logged out at the scheduled time, that run is
@@ -187,6 +201,17 @@ them blindly.
 scheduling you'd need the machine to stay logged in (Task Scheduler can be
 configured to run whether logged on or not, but that requires storing your
 Windows password in the task - a bigger tradeoff, not set up here by default).
+
+**A search that finds nothing and a search that stopped running look
+identical, so the page tracks the difference explicitly.** Every run reports
+in when it finishes - including runs that found nothing - and each track's
+tab shows when it last ran and what it did. A track whose search hasn't
+reported in over 36 hours gets an amber dot on its tab; one whose last run
+reported an error gets a red one. If you see either, check the scheduled task
+and `private\logs\<track>.log` rather than reading a quiet tab as a quiet
+job market. Tune the threshold with `stale_run_hours` via `/api/config` if a
+track is scheduled less often than daily - a weekly search left at 36 hours
+would warn nearly all week.
 
 **Headless runs use a scoped tool allowlist**, not full permission bypass -
 see `scripts/run-search.ps1`. If a search prompt ever needs a new capability,

@@ -71,6 +71,13 @@ Cloudflare's own environment.
    configured" instead of a sign-in screen.
 5. Open the client and enter your server's `API_TOKEN`. Click Enter - it's
    remembered in this browser for next time.
+6. **Expect an empty page here.** A newly created database has no tracks,
+   title or location rules of its own - the schema seeds nothing - so you'll
+   see only the Overview and Applications tabs until the
+   [job-search-setup](../.claude/skills/job-search-setup/) skill posts your
+   config to `/api/config` (see the root [README](../README.md)'s setup step
+   4). Track tabs appear as soon as it does, reading "No run recorded yet"
+   until their first scheduled search reports in.
 
 ### Manual setup
 
@@ -80,8 +87,10 @@ wrangler login          REM if you haven't already
 wrangler deploy
 ```
 Prints your live URL, something like
-`https://job-search-tracker-client.<your-subdomain>.workers.dev`. Open it and
-fill in the gate screen as in step 5 above (and consider step 4 too).
+`https://job-search-tracker-client.<your-subdomain>.workers.dev`. Step 4 above
+(`local-config.js`) is required for this path too - without it the page can't
+find your API at all. Then sign in as in step 5, and expect the empty page of
+step 6 until your config is posted.
 
 ## Updating after code changes
 

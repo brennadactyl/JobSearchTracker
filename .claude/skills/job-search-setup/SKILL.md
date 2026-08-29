@@ -230,5 +230,12 @@ scheduled time:
 scripts\run-search.ps1 -Task <key>
 ```
 
-Then check `<data dir>\logs\<key>.log` for what happened, and confirm the
-new track's tab shows up on the tracker webpage.
+Then check `<data dir>\logs\<key>.log` for what happened, and confirm on the
+tracker webpage that the new track's tab shows up *and* now reports when it
+last ran. A tab still reading "No run recorded yet" after a completed run
+means the prompt's step 9c (`POST /api/runs`) didn't land - worth chasing,
+since that record is the only thing that will later distinguish a quiet day
+from a search that stopped firing.
+
+If this was a brand-new install, this is also the point where the page stops
+being empty: it had no tracks at all until step 6 posted the config.

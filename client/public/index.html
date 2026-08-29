@@ -422,8 +422,12 @@ function applyConfig(){
   var titleEl=document.getElementById("appTitle"); if(titleEl)titleEl.textContent=title;
   var n=state.tracks.length;
   var subEl=document.getElementById("appSub");
-  if(subEl)subEl.textContent="Verified openings across "+n+" tracked search"+(n===1?"":"es")+
-    ", refreshed daily. Edit anything — it saves for every device.";
+  // A brand-new deployment has no tracks until setup posts its config, and
+  // "across 0 tracked searches" reads like a bug rather than a first run.
+  if(subEl)subEl.textContent=n
+    ? "Verified openings across "+n+" tracked search"+(n===1?"":"es")+
+      ", refreshed daily. Edit anything — it saves for every device."
+    : "No tracked searches configured yet — run the job-search-setup skill to add one.";
 }
 var ui={tab:"dashboard",q:"",filter:"All",selected:{},expanded:{},view:"detail"};
 
@@ -729,6 +733,15 @@ function dashboard(){
   else subline="All "+keys.length+" reporting on schedule";
   h+='<div class="sec"><h2>Daily searches</h2><p>'+esc(subline)+'</p></div>';
 
+  // With no tracks there are no bars to draw, and the card would render as an
+  // empty slab - which on a fresh install (where this is the expected state,
+  // not an error) looks like something failed to load.
+  if(!keys.length){
+    h+='<div class="card empty"><strong>No searches set up yet</strong>'+
+      'Run the job-search-setup skill to add a tracked search. Once one exists, '+
+      'its daily run reports in here — including the days it finds nothing.</div>';
+  }else{
+
   h+='<div class="card" style="padding:19px"><div class="bars">';
   keys.forEach(function(k){
     var rows=state.leads.filter(function(l){return l.search===k;});
@@ -746,6 +759,7 @@ function dashboard(){
       '<span class="legend-run">'+runStampHtml(k)+'</span></div></div>';
   });
   h+='</div></div>';
+  }
 
   var todo=A.filter(function(a){return a.nextAction;})
     .sort(function(x,y){return String(x.nextActionDate||"9999").localeCompare(String(y.nextActionDate||"9999"));});
@@ -760,8 +774,10 @@ function dashboard(){
           '<td><span class="pill '+pillFor(a.status)+'">'+esc(a.status||"&mdash;")+'</span></td></tr>';
       }).join("")+'</tbody></table></div></div>';
   }
-  h+='<div class="note">Scheduled searches across your '+trackCount+' tracked search'+(trackCount===1?'':'es')+
-    ' add rows here every day. Every posting is opened and confirmed live before it lands; nothing arrives from a search snippet alone.</div>';
+  h+='<div class="note">'+(trackCount
+    ? 'Scheduled searches across your '+trackCount+' tracked search'+(trackCount===1?'':'es')+' add rows here every day.'
+    : 'Once a tracked search is set up, its scheduled run adds rows here every day.')+
+    ' Every posting is opened and confirmed live before it lands; nothing arrives from a search snippet alone.</div>';
   return h;
 }
 
