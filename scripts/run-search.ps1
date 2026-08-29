@@ -70,8 +70,15 @@ $logDir = Join-Path $DataDir "logs"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $logFile = Join-Path $logDir "$Task.log"
 
+# -Encoding utf8 is not optional here. Windows PowerShell 5.1's Out-File
+# defaults to UTF-16LE, but this log file may already have been started as
+# UTF-8 by an earlier version of this script - appending the default encoding
+# to it produces one file with two encodings in it, which grep reports as
+# binary and Get-Content silently decodes only the first half of, showing a
+# stale tail that looks like the searches stopped running. Pin it explicitly
+# on every writer (there are two - see the claude-output append below).
 function Log($msg) {
-    "$(Get-Date -Format o) - $msg" | Out-File -Append -FilePath $logFile
+    "$(Get-Date -Format o) - $msg" | Out-File -Append -Encoding utf8 -FilePath $logFile
 }
 
 $claude = Get-Command claude -ErrorAction SilentlyContinue
@@ -100,6 +107,14 @@ Log "TRACKER_API_TOKEN set:      $([bool]$env:TRACKER_API_TOKEN)"
 $job = Start-Job -ScriptBlock {
     param($claudePath, $prompt, $allowedTools, $dataDir)
     Set-Location $dataDir
+    # The claude CLI writes UTF-8. Without this, PowerShell decodes its stdout
+    # using the console's OEM codepage instead, so every non-ASCII character
+    # the model writes is mangled before it ever reaches the log file - an
+    # em-dash lands as "-o" garbage, and no amount of fixing the file's own
+    # encoding recovers it, because the damage happened upstream of the write.
+    # Set inside the script block on purpose: Start-Job runs in its own
+    # process, so setting this in the parent would have no effect here.
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
     & $claudePath -p $prompt --allowedTools $allowedTools 2>&1
 } -ArgumentList $claudePath, $prompt, $allowedTools, $DataDir
 
@@ -117,7 +132,7 @@ $jobState = $job.State
 Remove-Job $job -Force
 
 Log "----- claude output -----"
-if ($output) { $output | Out-String | Out-File -Append -FilePath $logFile }
+if ($output) { $output | Out-String | Out-File -Append -Encoding utf8 -FilePath $logFile }
 Log "----- end output -----"
 
 $exitCode = if ($jobState -eq "Completed") { 0 } else { 1 }
