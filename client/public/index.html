@@ -145,11 +145,17 @@ tr.more-row td{padding:4px 12px 14px}
 .empty-warn{margin-top:10px;color:var(--warn);font-size:13px}
 .key i{display:inline-block;width:3px;height:12px;border-radius:2px;margin-right:6px;vertical-align:-2px}
 
-.viewsw{display:flex;gap:2px;margin-left:auto;background:var(--surface2);padding:3px;border-radius:8px}
+.viewsw{display:flex;gap:2px;background:var(--surface2);padding:3px;border-radius:8px}
 .vbtn{appearance:none;border:0;background:none;font:inherit;font-size:12.5px;font-weight:600;
   color:var(--ink2);padding:5px 12px;border-radius:6px;cursor:pointer}
 .vbtn[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
 .vbtn:hover{color:var(--ink)}
+
+/* Groups the sort <select> with the Detail/Grid toggle at the toolbar's
+   trailing edge - one wrapper claims the row's free space so the two
+   controls sit together instead of drifting apart. */
+.toolbar-right{display:flex;align-items:center;gap:10px;margin-left:auto}
+.sortsel{width:auto;min-width:150px}
 
 /* Dense grid: the same records as one wide, fully-editable table -
    maximum information density, everything visible without a click. */
@@ -429,7 +435,7 @@ function applyConfig(){
       ", refreshed daily. Edit anything — it saves for every device."
     : "No tracked searches configured yet — run the job-search-setup skill to add one.";
 }
-var ui={tab:"dashboard",q:"",filter:"All",selected:{},expanded:{},view:"detail"};
+var ui={tab:"dashboard",q:"",filter:"All",selected:{},expanded:{},view:"detail",leadSort:"priority",appSort:"applied-desc"};
 
 // Fields shown in leads' and applications' facts cards. ROLE_FIELDS is
 // facts about the opportunity itself (stable once entered - comp doesn't
@@ -502,12 +508,68 @@ function factsCardsHtml(item,isApp,compact){
 }
 try{var s=localStorage.getItem("bjs.tab");if(s)ui.tab=s;}catch(e){}
 try{var vw0=localStorage.getItem("bjs.view");if(vw0)ui.view=vw0;}catch(e){}
+try{var ls0=localStorage.getItem("bjs.leadSort");if(ls0)ui.leadSort=ls0;}catch(e){}
+try{var as0=localStorage.getItem("bjs.appSort");if(as0)ui.appSort=as0;}catch(e){}
 
 function viewSwitchHtml(){
   return '<div class="viewsw">'+
     '<button class="vbtn" data-view="detail" aria-pressed="'+(ui.view!=="grid")+'">Detail</button>'+
     '<button class="vbtn" data-view="grid" aria-pressed="'+(ui.view==="grid")+'">Grid</button>'+
   '</div>';
+}
+
+// Sort controls: one <select> drives both Grid and Detail, since both
+// render from the same sorted array (see leadsTab/appsTab) - there's no
+// separate "grid order" and "detail order" to keep in sync.
+//
+// "priority" is the longstanding leads default - not-a-fit sinks to the
+// bottom regardless of location tier (it's been screened out, so it
+// shouldn't compete with active leads for the top-of-list spots the geo
+// ranking is trying to surface), then geo tier, then newest found as the
+// tiebreak. The flat options exist for when you're hunting for something
+// specific by name/place/date rather than triaging what's new.
+var LEAD_SORTS=[
+  ["priority","Priority"],
+  ["found-desc","Newest found"],
+  ["found-asc","Oldest found"],
+  ["location-asc","Location A-Z"],
+  ["company-asc","Company A-Z"]
+];
+function leadComparator(sortKey){
+  if(sortKey==="found-desc")return function(a,b){return String(b.found).localeCompare(String(a.found));};
+  if(sortKey==="found-asc")return function(a,b){return String(a.found).localeCompare(String(b.found));};
+  if(sortKey==="location-asc")return function(a,b){return String(a.location).localeCompare(String(b.location));};
+  if(sortKey==="company-asc")return function(a,b){return String(a.company).localeCompare(String(b.company));};
+  return function(a,b){
+    var na=a.status==="Not a fit"?1:0, nb=b.status==="Not a fit"?1:0;
+    if(na!==nb)return na-nb;
+    var d=rank(a)-rank(b); if(d)return d;
+    return String(b.found).localeCompare(String(a.found));
+  };
+}
+
+// Applications have no location or "found" date to sort by - just when you
+// applied and who to. The API returns them oldest-first (ORDER BY id, no
+// explicit sort was ever applied client-side), so defaulting this control to
+// "Newest applied" is a small deliberate change, not a no-op - it's the more
+// useful default for a tab you open to see what's freshest.
+var APP_SORTS=[
+  ["applied-desc","Newest applied"],
+  ["applied-asc","Oldest applied"],
+  ["company-asc","Company A-Z"]
+];
+function appComparator(sortKey){
+  if(sortKey==="applied-asc")return function(a,b){return String(a.dateApplied).localeCompare(String(b.dateApplied));};
+  if(sortKey==="company-asc")return function(a,b){return String(a.company).localeCompare(String(b.company));};
+  return function(a,b){return String(b.dateApplied).localeCompare(String(a.dateApplied));};
+}
+
+function sortSelectHtml(kind){
+  var opts=kind==="leads"?LEAD_SORTS:APP_SORTS;
+  var current=(kind==="leads"?ui.leadSort:ui.appSort)||opts[0][0];
+  return '<select class="sortsel" data-sort="'+kind+'" aria-label="Sort by">'+
+    opts.map(function(o){return '<option value="'+o[0]+'"'+(o[0]===current?' selected':'')+'>'+esc(o[1])+'</option>';}).join("")+
+  '</select>';
 }
 
 function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){
@@ -791,15 +853,7 @@ function leadsTab(key){
     if(ui.filter!=="All"&&l.status!==ui.filter)return false;
     if(!q)return true;
     return (l.company+" "+l.title+" "+l.location).toLowerCase().indexOf(q)>=0;
-  }).sort(function(a,b){
-    // Not a fit sinks to the bottom regardless of location tier - it's
-    // been screened out, so it shouldn't compete with active leads for
-    // the top-of-list spots the geo ranking below is trying to surface.
-    var na=a.status==="Not a fit"?1:0, nb=b.status==="Not a fit"?1:0;
-    if(na!==nb)return na-nb;
-    var d=rank(a)-rank(b); if(d)return d;
-    return String(b.found).localeCompare(String(a.found));
-  });
+  }).sort(leadComparator(ui.leadSort));
   var tierVar={"p-high":"var(--pri-high)","p-med":"var(--pri-med)"};
   var geoKeyHtml=(state.settings.priority_locations||[]).map(function(r){
     return '<span><i style="background:'+(tierVar[r.tier]||"var(--ink3)")+'"></i>'+esc(r.label)+'</span>';
@@ -808,8 +862,13 @@ function leadsTab(key){
     '<div class="search"><input type="search" id="q" placeholder="Filter '+esc(TRACKS[key].label)+'&hellip;" value="'+esc(ui.q)+'"></div>'+
     '<div class="chips">'+["All"].concat(LEAD_STATUS.filter(function(s){return s!=="Applied";})).map(function(f){
       return '<button class="chip" data-filter="'+esc(f)+'" aria-pressed="'+(ui.filter===f)+'">'+esc(f)+'</button>';
-    }).join("")+'</div>'+viewSwitchHtml()+'</div>'+
-    '<div class="key">'+geoKeyHtml+'<span>Closest roles sorted first</span>'+
+    }).join("")+'</div>'+
+    '<div class="toolbar-right">'+sortSelectHtml("leads")+viewSwitchHtml()+'</div></div>'+
+    '<div class="key">'+geoKeyHtml+
+      // Only true under the default sort - a flat sort by found/location/
+      // company means proximity no longer decides the order, so the legend
+      // shouldn't claim it does.
+      (ui.leadSort==="priority"?'<span>Closest roles sorted first</span>':'')+
       '<span class="key-run">'+runStampHtml(key)+'</span></div>';
 
   if(!all.length){
@@ -912,10 +971,10 @@ function leadDetailHtml(l,key){
 }
 
 function appsTab(){
-  var A=state.applications;
+  var A=state.applications.slice().sort(appComparator(ui.appSort));
   var h='<div class="toolbar"><button class="btn primary" id="addapp">Add application</button>'+
     '<span style="font-size:13px;color:var(--ink3)">Your own pipeline &mdash; the scheduled searches never touch this tab.</span>'+
-    viewSwitchHtml()+'</div>';
+    '<div class="toolbar-right">'+sortSelectHtml("applications")+viewSwitchHtml()+'</div></div>';
   if(!A.length){
     return h+'<div class="card empty"><strong>No applications logged</strong>'+
       'When you apply to something, add it here to track the conversation. Days-since and the follow-up list update themselves.</div>';
@@ -1197,6 +1256,14 @@ function setApplicationStatus(id,value){
   }).catch(function(){setSaved("Couldn't save — try again","bad");});
 }
 document.addEventListener("change",function(e){
+  var so=e.target.closest("[data-sort]");
+  if(so){
+    var kind=so.getAttribute("data-sort");
+    if(kind==="leads"){ui.leadSort=so.value;try{localStorage.setItem("bjs.leadSort",ui.leadSort);}catch(err){}}
+    else{ui.appSort=so.value;try{localStorage.setItem("bjs.appSort",ui.appSort);}catch(err){}}
+    render();
+    return;
+  }
   if(e.target.matches("select[data-id],input[data-id]"))commit(e.target);
 });
 document.addEventListener("focusout",function(e){
