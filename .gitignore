@@ -18,3 +18,7 @@ node_modules/
 # client/public/local-config.example.js). Never commit a real deployment's
 # URL into the tracked template that other installers fork.
 client/public/local-config.js
+
+# Wrangler local dev secrets (API_TOKEN etc.) - never commit
+server/.dev.vars
+client/.dev.vars

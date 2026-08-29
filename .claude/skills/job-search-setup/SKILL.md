@@ -171,6 +171,18 @@ anyOf: [...substrings], allOf?: [...substrings]}` - first match wins,
 text, `allOf` (optional) needs all of them present too (used for something
 like "remote AND a US indicator", not just "remote" alone).
 
+Three further optional settings, only worth sending if the installer wants
+something other than the defaults: `overview_label` and `applications_label`
+rename the two built-in tabs (default "Overview" / "Applications"), and
+`stale_run_hours` (default 36) sets how long a track's scheduled search can
+go without reporting a run before the page flags that tab as stale. Raise it
+for a search scheduled less often than daily - a weekly search left at 36
+would show a warning nearly all week.
+
+Posting `tracks` also creates each new track's `search_runs` row, so its tab
+shows "No run recorded yet" until its first scheduled run reports in. That's
+expected on a fresh setup, not a problem to chase.
+
 If `TRACKER_URL`/`TRACKER_API_TOKEN` aren't set, skip this step and tell the
 installer to come back to it (re-running this skill is fine, or they can run
 the curls above by hand) once they've deployed the webpage and set those

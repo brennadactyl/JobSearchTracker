@@ -71,6 +71,13 @@ h1,h2,h3{font-family:"Bricolage Grotesque","IBM Plex Sans",sans-serif;margin:0;l
 .tab .n{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--ink3);
   background:var(--surface2);padding:1px 6px;border-radius:9px}
 .tab[aria-selected="true"] .n{color:var(--accent);background:var(--accent-soft)}
+/* Only shown when a track's scheduled search is stale or errored - see
+   runState()/tabsHtml(). Deliberately a bare dot rather than a count badge:
+   it's a "look here" marker, and the actual explanation lives one click
+   away on the tab itself. */
+.tab .tabwarn{width:6px;height:6px;border-radius:50%;flex:none;margin-left:-2px}
+.tab .tabwarn.stale{background:var(--warn)}
+.tab .tabwarn.error{background:var(--crit)}
 .tab:focus-visible,.btn:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible{
   outline:2px solid var(--accent);outline-offset:2px}
 
@@ -118,6 +125,24 @@ tr.more-row td{padding:4px 12px 14px}
 .geo.p-med{background:var(--pri-med-soft);color:var(--pri-med)}
 .key{display:flex;gap:15px;flex-wrap:wrap;align-items:center;font-size:12.5px;
   color:var(--ink3);padding:0 0 11px}
+/* Pushes the run stamp to the trailing edge on a wide row, but it's the
+   last flex item either way, so a wrapped narrow layout just drops it onto
+   its own line instead of stranding it mid-row. */
+.key-run{margin-left:auto}
+
+/* "When did this search last run" - see runStampHtml(). Its whole job is to
+   distinguish a genuine zero-result day from a search that quietly stopped
+   firing, so the stale/error states have to read as warnings, not as more
+   grey metadata. */
+.runstamp{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink2)}
+.runstamp .rdot{width:6px;height:6px;border-radius:50%;flex:none;background:var(--good)}
+.runstamp.none{color:var(--ink3)}
+.runstamp.stale{color:var(--warn);font-weight:500}
+.runstamp.stale .rdot{background:var(--warn)}
+.runstamp.error{color:var(--crit);font-weight:500}
+.runstamp.error .rdot{background:var(--crit)}
+.legend-run{margin-left:auto;padding-left:12px}
+.empty-warn{margin-top:10px;color:var(--warn);font-size:13px}
 .key i{display:inline-block;width:3px;height:12px;border-radius:2px;margin-right:6px;vertical-align:-2px}
 
 .viewsw{display:flex;gap:2px;margin-left:auto;background:var(--surface2);padding:3px;border-radius:8px}
@@ -341,17 +366,51 @@ var TOKEN=localStorage.getItem("tracker_token")||"";
 // ../server/ deploy's URL and redeploys - see the gate-init check below for
 // what a visitor sees in the meantime.
 var API_BASE=(typeof LOCAL_API_BASE!=="undefined"?LOCAL_API_BASE:"");
-var state={updated:null,leads:[],applications:[],tracks:[],settings:{display_title:"Job Search Tracker",priority_locations:[]}};
+// Mirrors DEFAULT_SETTINGS in ../../server/src/api.js - the same
+// intentional duplication as LEAD_STATUS/APP_STATUS above (no build step
+// ties client and server together). Only used when the API omits a key;
+// a configured deployment overwrites all of these.
+function defaultSettings(){
+  return {display_title:"Job Search Tracker",overview_label:"Overview",
+    applications_label:"Applications",stale_run_hours:36,priority_locations:[]};
+}
+var state={updated:null,leads:[],applications:[],tracks:[],settings:defaultSettings()};
 
-// Turns the API's tracks[] (rows: key/label/full_description/sort_order)
-// into the {key:{label,full}} shape the rest of the page indexes by, in
-// display order.
+// Turns the API's tracks[] (rows: key/label/full_description/sort_order,
+// plus the nested last_run from search_runs) into the {key:{...}} shape the
+// rest of the page indexes by, in display order.
 function buildTracks(list){
   var t={};
   (list||[]).slice().sort(function(a,b){
     return (a.sort_order-b.sort_order)||String(a.key).localeCompare(String(b.key));
-  }).forEach(function(tr){ t[tr.key]={label:tr.label,full:tr.full_description}; });
+  }).forEach(function(tr){
+    t[tr.key]={label:tr.label,full:tr.full_description,run:tr.last_run||null};
+  });
   return t;
+}
+
+// The whole tab bar as data, in render order: the two built-in tabs (which
+// aren't tracks - nothing runs on a schedule to fill them) followed by one
+// per configured track. Everything the tab bar and render() need is on
+// these rows, so neither has to special-case a tab by hardcoded id: `kind`
+// says which panel to draw, `label` comes from config either way. Adding a
+// track to the DB adds a tab; renaming one renames it.
+function buildTabs(){
+  var s=state.settings||{};
+  var tabs=[
+    {id:"dashboard",kind:"overview",label:s.overview_label||"Overview",n:null},
+    {id:"applications",kind:"applications",label:s.applications_label||"Applications",
+     n:state.applications.length},
+  ];
+  Object.keys(TRACKS).forEach(function(k){
+    tabs.push({id:k,kind:"track",label:TRACKS[k].label,
+      // The tab badge is a "what hasn't been triaged yet" count, so it only
+      // counts New leads - not the whole track (Reviewing/Not a fit are
+      // things you've already looked at, and Applied leads have moved to
+      // the Applications tab entirely, see setLeadStatus()).
+      n:state.leads.filter(function(l){return l.search===k&&l.status==="New";}).length});
+  });
+  return tabs;
 }
 
 // Applies state.tracks/state.settings (from /api/data) to TRACKS and the
@@ -453,7 +512,70 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){
 function daysSince(d){if(!d)return null;var t=Date.parse(d);if(isNaN(t))return null;
   return Math.max(0,Math.floor((Date.now()-t)/86400000));}
 
+function hoursSince(d){if(!d)return null;var t=Date.parse(d);if(isNaN(t))return null;
+  return Math.max(0,(Date.now()-t)/3600000);}
+
 function today(){return new Date().toISOString().slice(0,10);}
+
+// ---- Scheduled-run status (see server migrations/0007_add_search_runs.sql)
+//
+// Each track carries the last run its scheduled search recorded. This is the
+// only thing on the page that can tell "the search ran and genuinely found
+// nothing" apart from "the search stopped running" - every other signal
+// (lead counts, the tabs, meta.updated) looks identical in both cases.
+
+// "ok" | "stale" | "error" | "never". "never" is deliberately not treated as
+// a problem: it's the honest state of a freshly configured track that hasn't
+// hit its first scheduled run yet, and flagging that would mean every new
+// install opens covered in warnings.
+function runState(run){
+  if(!run||!run.at)return "never";
+  if(run.status==="error")return "error";
+  var h=hoursSince(run.at);
+  var limit=Number(state.settings&&state.settings.stale_run_hours)||36;
+  return (h===null||h>limit)?"stale":"ok";
+}
+
+// Coarse on purpose - the useful distinctions are "today", "yesterday", and
+// "long enough ago that something is wrong", not exact minutes.
+function relWhen(iso){
+  var h=hoursSince(iso);
+  if(h===null)return "";
+  if(h<1)return "just now";
+  if(h<24)return Math.round(h)+"h ago";
+  var d=Math.floor(h/24);
+  return d===1?"yesterday":d+"d ago";
+}
+
+// What the run did, in one clause. Counts come from the run record itself
+// rather than being recomputed from leads[], so a day that added nothing
+// still reads as a real result ("found nothing new") instead of a blank.
+function runSummary(run){
+  if(!run||!run.at)return "";
+  if(run.status==="error")return run.note||"the run reported an error";
+  var bits=[];
+  if(run.leads_added)bits.push(run.leads_added+" new");
+  if(run.screened_added)bits.push(run.screened_added+" screened out");
+  if(run.delisted)bits.push(run.delisted+" delisted");
+  return bits.length?bits.join(", "):"found nothing new";
+}
+
+// The one-line "when did this search last run" stamp shown above a track's
+// list and in the Overview panel.
+function runStampHtml(key){
+  var tr=TRACKS[key]; if(!tr)return "";
+  var run=tr.run, st=runState(run);
+  if(st==="never"){
+    return '<span class="runstamp none" title="This track has no recorded run yet - '+
+      'its first scheduled search will fill this in">No run recorded yet</span>';
+  }
+  var when=relWhen(run.at);
+  var title="Last run "+esc(run.at)+(run.on?" (local date "+esc(run.on)+")":"");
+  return '<span class="runstamp '+st+'" title="'+title+'">'+
+    '<i class="rdot"></i>Ran '+esc(when)+
+    (run.on?' <span class="mono">'+esc(run.on)+'</span>':'')+
+    ' &middot; '+esc(runSummary(run))+'</span>';
+}
 
 // Evaluates state.settings.priority_locations (see migrations/
 // 0003_add_tracks_and_settings.sql) - an ordered list of {tier, label, anyOf,
@@ -519,7 +641,9 @@ function boot(){
     if(!state.leads)state.leads=[];
     if(!state.applications)state.applications=[];
     if(!Array.isArray(state.tracks))state.tracks=[];
-    if(!state.settings)state.settings={display_title:"Job Search Tracker",priority_locations:[]};
+    var d=defaultSettings();
+    if(!state.settings)state.settings=d;
+    else for(var sk in d){if(state.settings[sk]==null)state.settings[sk]=d[sk];}
     applyConfig();
     document.getElementById("gate").classList.add("hidden");
     document.getElementById("app").classList.remove("hidden");
@@ -532,18 +656,20 @@ function boot(){
 }
 
 function tabsHtml(){
-  var t=[{id:"dashboard",label:"Overview",n:null},
-         {id:"applications",label:"Applications",n:state.applications.length}];
-  Object.keys(TRACKS).forEach(function(k){
-    // The tab badge is a "what hasn't been triaged yet" count, so it only
-    // counts New leads - not the whole track (Reviewing/Not a fit are
-    // things you've already looked at, and Applied leads have moved to
-    // the Applications tab entirely, see setLeadStatus()).
-    t.push({id:k,label:TRACKS[k].label,n:state.leads.filter(function(l){return l.search===k&&l.status==="New";}).length});
-  });
-  return t.map(function(x){
-    return '<button class="tab" role="tab" data-tab="'+x.id+'" aria-selected="'+(ui.tab===x.id)+'">'+
-      esc(x.label)+(x.n!==null?'<span class="n">'+x.n+'</span>':'')+'</button>';
+  return buildTabs().map(function(x){
+    // Only a track tab can carry a run warning, and only stale/error earn
+    // one - see runState() on why "never ran" stays quiet.
+    var warn="";
+    if(x.kind==="track"){
+      var st=runState(TRACKS[x.id]&&TRACKS[x.id].run);
+      if(st==="stale"||st==="error"){
+        warn='<i class="tabwarn '+st+'" title="'+
+          (st==="error"?"The last scheduled run reported an error":
+                        "This search hasn’t run recently")+'"></i>';
+      }
+    }
+    return '<button class="tab" role="tab" data-tab="'+esc(x.id)+'" aria-selected="'+(ui.tab===x.id)+'">'+
+      esc(x.label)+warn+(x.n!==null?'<span class="n">'+x.n+'</span>':'')+'</button>';
   }).join("");
 }
 
@@ -590,8 +716,21 @@ function dashboard(){
     '<div class="tile"><div class="k">Gone quiet</div><div class="v mono">'+stale+'</div><div class="f">applied 14+ days ago</div></div>'+
   '</div>';
 
+  // Whether every scheduled search is still firing is the one thing the
+  // lead counts above genuinely cannot show - a search that stopped running
+  // and a search that found nothing produce the same unchanged numbers.
+  var keys=Object.keys(TRACKS);
+  var bad=keys.filter(function(k){var s=runState(TRACKS[k].run);return s==="stale"||s==="error";});
+  var never=keys.filter(function(k){return runState(TRACKS[k].run)==="never";});
+  var subline;
+  if(!keys.length)subline="No tracks configured yet";
+  else if(bad.length)subline=bad.length+" of "+keys.length+" haven’t reported a clean run recently";
+  else if(never.length===keys.length)subline="Waiting on the first recorded run";
+  else subline="All "+keys.length+" reporting on schedule";
+  h+='<div class="sec"><h2>Daily searches</h2><p>'+esc(subline)+'</p></div>';
+
   h+='<div class="card" style="padding:19px"><div class="bars">';
-  Object.keys(TRACKS).forEach(function(k){
+  keys.forEach(function(k){
     var rows=state.leads.filter(function(l){return l.search===k;});
     var byStatus=LEAD_STATUS.map(function(st){
       return {s:st,n:rows.filter(function(r){return r.status===st;}).length};});
@@ -603,7 +742,8 @@ function dashboard(){
         return b.n?'<i style="width:'+(b.n/tot*100)+'%;background:'+cols[b.s]+'"></i>':"";}).join("")+'</div>'+
       '<div class="legend">'+byStatus.filter(function(b){return b.n;}).map(function(b){
         return '<span><b style="background:'+cols[b.s]+'"></b>'+esc(b.s)+' '+b.n+'</span>';}).join("")+
-      (rows.length?"":'<span style="color:var(--ink3)">No postings found yet</span>')+'</div></div>';
+      (rows.length?"":'<span style="color:var(--ink3)">No postings found yet</span>')+
+      '<span class="legend-run">'+runStampHtml(k)+'</span></div></div>';
   });
   h+='</div></div>';
 
@@ -653,11 +793,19 @@ function leadsTab(key){
     '<div class="chips">'+["All"].concat(LEAD_STATUS.filter(function(s){return s!=="Applied";})).map(function(f){
       return '<button class="chip" data-filter="'+esc(f)+'" aria-pressed="'+(ui.filter===f)+'">'+esc(f)+'</button>';
     }).join("")+'</div>'+viewSwitchHtml()+'</div>'+
-    '<div class="key">'+geoKeyHtml+'<span>Closest roles sorted first</span></div>';
+    '<div class="key">'+geoKeyHtml+'<span>Closest roles sorted first</span>'+
+      '<span class="key-run">'+runStampHtml(key)+'</span></div>';
 
   if(!all.length){
+    // Which of the two "nothing here" stories this is depends entirely on
+    // the run record - an empty track whose search ran this morning is a
+    // real result; an empty track whose search hasn't run in a week isn't.
+    var st0=runState(TRACKS[key].run);
     return h+'<div class="card empty"><strong>No postings yet</strong>The '+esc(TRACKS[key].label).toLowerCase()+
-      ' search hasn&rsquo;t turned up a verified opening yet. An empty day is a real result &mdash; nothing gets padded in here.</div>';
+      ' search hasn&rsquo;t turned up a verified opening yet. An empty day is a real result &mdash; nothing gets padded in here.'+
+      (st0==="stale"||st0==="error"
+        ? '<div class="empty-warn">But this search hasn&rsquo;t reported a clean run recently &mdash; check the scheduled task before reading this as a genuine zero.</div>'
+        : '')+'</div>';
   }
   if(!rows.length) return h+'<div class="card empty"><strong>Nothing matches</strong>Try a different filter.</div>';
 
@@ -845,15 +993,22 @@ function appDetailHtml(a){
 }
 
 function render(){
+  var tabs=buildTabs();
+  // ui.tab is restored from localStorage, so it can name a track that has
+  // since been removed from config (POST /api/config replaces the whole
+  // track list). Fall back to the first tab rather than rendering a track
+  // panel for a key TRACKS no longer has.
+  var current=tabs.filter(function(t){return t.id===ui.tab;})[0];
+  if(!current){current=tabs[0]; ui.tab=current.id;}
   document.getElementById("tabs").innerHTML=tabsHtml();
   var p=document.getElementById("panel");
   // Re-rendering replaces the master-detail list wholesale, which would
   // otherwise reset its scroll position to the top on every click -
   // including just selecting a different row. Preserve it across the swap.
   var oldList=p.querySelector(".md-list"), scrollTop=oldList?oldList.scrollTop:null;
-  if(ui.tab==="dashboard")p.innerHTML=dashboard();
-  else if(ui.tab==="applications")p.innerHTML=appsTab();
-  else p.innerHTML=leadsTab(ui.tab);
+  if(current.kind==="overview")p.innerHTML=dashboard();
+  else if(current.kind==="applications")p.innerHTML=appsTab();
+  else p.innerHTML=leadsTab(current.id);
   var newList=p.querySelector(".md-list");
   if(newList){
     if(scrollTop!==null){

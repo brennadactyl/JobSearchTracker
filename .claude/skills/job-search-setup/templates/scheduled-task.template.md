@@ -55,6 +55,33 @@
    ```
 
    `"search"` must be `"{{TRACK_KEY}}"`. `reason` is a short, specific, human-readable explanation (e.g. "outside scope: London, UK", "404 - closed", "duplicate of req 7829580003", "below target level") - this is what makes the entry useful later, don't leave it vague. Same success/failure check as step 9 (an `"added"` count means it worked).
-10. Report: if there are new verified postings, list each (company, title, location, URL) as "New today - verified live", and say whether the webpage sync succeeded. Mention the screened-out count too, if any. If nothing new either way, say so plainly - don't pad.
+9c. RECORD THE RUN. **Do this every single run, without exception - including runs that found nothing, runs where every candidate was screened out, and runs where steps 8/9/9b were skipped or failed.** This is the one step with no "skip it if there's nothing to report" clause, and the reason is that a run finding nothing writes nothing anywhere else: no leads, no screened rows, no delistings. Without this call, a search that silently stopped running (expired token, disabled scheduled task, machine asleep) looks identical on the tracker webpage to a genuine zero-result day, and can go unnoticed for weeks.
+
+   ```
+   curl -s -X POST "$TRACKER_URL/api/runs" \
+     -H "Authorization: Bearer $TRACKER_API_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"search":"{{TRACK_KEY}}","status":"ok","leadsAdded":0,"screenedAdded":0,"delisted":0,"on":"<today YYYY-MM-DD>","note":"..."}'
+   ```
+
+   `"search"` must be `"{{TRACK_KEY}}"`. `leadsAdded` / `screenedAdded` are
+   the `"added"` counts the step-9 and step-9b calls actually returned (0 if
+   that step was skipped); `delisted` is how many leads step 8 marked dead.
+   `on` is today's **local** date - the server can't derive it, and without
+   it a morning run records tomorrow's date. `note` is one short line
+   summarising the run for the webpage (e.g. "no new postings; 34 screened
+   out").
+
+   Send `"status":"error"` instead of `"ok"` if the run couldn't do its job
+   properly - the tracker was unreachable, search/fetch tooling failed
+   broadly enough that the zero result isn't trustworthy, or a required file
+   was missing - and put the reason in `note`. A wrongly-cheerful "ok" is
+   worse than no record at all: it's what stops the webpage from flagging a
+   search that has quietly broken.
+
+   A `404` with `"unknown track"` means the track key here and the tracker's
+   configured tracks have drifted apart - report that plainly, it means this
+   track's findings have nowhere to land.
+10. Report: if there are new verified postings, list each (company, title, location, URL) as "New today - verified live", and say whether the webpage sync succeeded. Mention the screened-out count too, if any. Say whether the step-9c run record was accepted. If nothing new either way, say so plainly - don't pad.
 
 Never add an unverified link to any output.

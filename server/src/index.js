@@ -17,6 +17,15 @@
  *                            (search, url) pair (DB-enforced UNIQUE constraint
  *                            + INSERT OR IGNORE - atomic, race-free); never
  *                            touches existing status/notes
+ *   POST /api/runs           requires Bearer token -> body: { search, status?, leadsAdded?,
+ *                            screenedAdded?, delisted?, note?, at?, on? }
+ *                            records that one track's scheduled search just
+ *                            finished. Called at the end of EVERY run,
+ *                            including ones that found nothing - that's the
+ *                            case no other table can distinguish from the
+ *                            search never having fired. 404s on a track key
+ *                            that isn't configured rather than creating an
+ *                            orphan row. See migrations/0007_add_search_runs.sql.
  *   POST /api/screened       requires Bearer token -> body: { screened: [...] }
  *                            appends postings the search decided NOT to add
  *                            as a lead (dead-on-arrival, outside the US,
@@ -47,12 +56,19 @@
  *                            client's "remove" control; leads are never
  *                            deleted, only re-statused)
  *   GET  /api/config         requires Bearer token -> { tracks[], settings }
- *                            - the per-installer config (track tabs, display
- *                            title, priority-location rules) that the client
- *                            renders off instead of a baked-in TRACKS object,
- *                            so this same code serves any installer.
- *   POST /api/config         requires Bearer token -> body: { tracks?, display_title?, priority_locations? }
- *                            - sets that config (see handleSetConfig in api.js)
+ *                            - the per-installer config (track tabs, tab
+ *                            labels, display title, priority-location rules,
+ *                            staleness threshold) that the client renders off
+ *                            instead of a baked-in TRACKS object, so this
+ *                            same code serves any installer. Each track
+ *                            carries its own `last_run` (from search_runs).
+ *   POST /api/config         requires Bearer token -> body: { tracks?, display_title?,
+ *                            overview_label?, applications_label?, stale_run_hours?,
+ *                            priority_locations? }
+ *                            - sets that config (see handleSetConfig in api.js).
+ *                            Writing `tracks` also keeps search_runs 1:1 with
+ *                            it - new tracks gain a "never ran" row, removed
+ *                            tracks lose theirs.
  *   OPTIONS *                 CORS preflight for any of the above -> 204 + CORS_HEADERS
  *
  * Schema: see ../migrations/. Handlers: see ./api.js.
@@ -66,6 +82,7 @@ import {
   CORS_HEADERS,
   handleAddLeads,
   handleAddScreened,
+  handleRecordRun,
   handleUpdate,
   handleSetLeadStatus,
   handleSetApplicationStatus,
@@ -113,6 +130,11 @@ export default {
     if (url.pathname === "/api/leads" && request.method === "POST") {
       if (!authorized(request, env)) return unauthorized();
       return handleAddLeads(request, env);
+    }
+
+    if (url.pathname === "/api/runs" && request.method === "POST") {
+      if (!authorized(request, env)) return unauthorized();
+      return handleRecordRun(request, env);
     }
 
     if (url.pathname === "/api/screened" && request.method === "POST") {

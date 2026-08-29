@@ -233,7 +233,7 @@
         <g>
           <rect x="590" y="280" width="260" height="90" rx="9" fill="var(--surface)" stroke="var(--line-strong)" stroke-width="1.3" />
           <text x="610" y="308" font-family="Archivo, sans-serif" font-weight="700" font-size="15" fill="currentColor">D1 database</text>
-          <text x="610" y="328" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">leads, applications — SQLite</text>
+          <text x="610" y="328" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">leads, applications, runs — SQLite</text>
           <text x="610" y="343" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">one row per posting, atomic</text>
           <text x="610" y="358" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">writes — no shared blob to race</text>
         </g>
@@ -308,6 +308,7 @@
           <tr><td class="mono">/api/data</td><td class="mono">GET</td><td>current leads + applications + screened postings + track/display config</td></tr>
           <tr><td class="mono">/api/leads</td><td class="mono">POST</td><td>add new postings, deduped on (search, url)</td></tr>
           <tr><td class="mono">/api/screened</td><td class="mono">POST</td><td>record a posting the search ruled out (dead, outside US, wrong level, duplicate) so it isn't re-verified next run</td></tr>
+          <tr><td class="mono">/api/runs</td><td class="mono">POST</td><td>record that a track's scheduled search finished &mdash; called on <em>every</em> run, including ones that found nothing, so the page can tell a genuine zero-result day from a search that stopped firing</td></tr>
           <tr><td class="mono">/api/update</td><td class="mono">POST</td><td>edit a lead's status/notes, or add/edit an application</td></tr>
           <tr><td class="mono">/api/delete-application</td><td class="mono">POST</td><td>remove one application row</td></tr>
           <tr><td class="mono">/api/config</td><td class="mono">GET/POST</td><td>read/set track labels, display title, priority-location rules</td></tr>

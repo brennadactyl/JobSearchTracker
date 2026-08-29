@@ -25,11 +25,15 @@ over CORS. Neither is a Claude-specific artifact - the whole pipeline runs
 through the standalone `claude` CLI with no desktop app or special tooling
 required. Search results reach the tracker via a `curl` POST to the API;
 every edit is one D1 row write, not a shared blob, so a headless sync and a
-browser edit landing at the same moment can't clobber each other. Track
-labels, the page title, and which locations count as top-priority are config
-the API stores itself (`/api/config`), not anything baked into the client -
-one deployed client + server pair works for anyone's tracks, and either half
-can be redeployed/updated independently of the other.
+browser edit landing at the same moment can't clobber each other. Every tab
+the page draws, its label, the page title, and which locations count as
+top-priority are config the API stores itself (`/api/config`), not anything
+baked into the client - one deployed client + server pair works for anyone's
+tracks, and either half can be redeployed/updated independently of the other.
+Each track also records when its search last ran (`/api/runs`), surfaced on
+its tab and on the Overview: a search that finds nothing writes nothing, so
+without that record a search that quietly stopped firing looks exactly like a
+genuine zero-result day.
 
 ## Architecture
 

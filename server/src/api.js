@@ -93,22 +93,59 @@ export const STAGE_DATE_MAP = {
   "Withdrawn": "dateWithdrawn",
 };
 
+// Settings held in `meta` that the client renders off. Every one of these is
+// optional in the DB - DEFAULT_SETTINGS below is what a deployment that has
+// never posted config falls back to, which is also what keeps a fresh
+// install's page readable before setup has run.
+export const SETTING_KEYS = [
+  "display_title", "overview_label", "applications_label", "stale_run_hours",
+];
+
+export const DEFAULT_SETTINGS = {
+  display_title: "Job Search Tracker",
+  // The two tabs that aren't tracks. They're rows in neither `tracks` nor
+  // `search_runs` (nothing runs on a schedule to fill them), but their
+  // labels still come from config rather than being frozen into the client,
+  // so the whole tab bar is built from one data-driven list - see
+  // buildTabs() in ../../client/public/index.html.
+  overview_label: "Overview",
+  applications_label: "Applications",
+  // How long a track's last run can be before the client flags it as stale.
+  // 36h rather than 24h so a daily search that slips a few hours (a laptop
+  // asleep at 08:00, a long run) doesn't cry wolf every morning.
+  stale_run_hours: 36,
+  priority_locations: [],
+};
+
 // Reads the per-deployment config (see migrations/0003_add_tracks_and_settings.sql):
 // the tracks a track tab exists for, plus display settings. This is what
 // lets one Worker deployment serve any installer's tracks/branding/priority
-// locations without editing page.html - the page fetches this (bundled into
+// locations without editing the client - the page fetches this (bundled into
 // /api/data) and renders off it instead of a baked-in TRACKS object.
+//
+// Each track carries its own `last_run` (see
+// migrations/0007_add_search_runs.sql) nested on it rather than arriving as a
+// separate top-level runs[] the client would have to re-join by key: the
+// table is 1:1 with `tracks` by construction, and every consumer wants them
+// together. LEFT JOIN, not JOIN - a track whose search_runs row somehow went
+// missing must still render a tab (as "never ran"), never vanish from the UI.
 export async function getTracksAndSettings(env) {
   const [tracksRes, settingsRows] = await Promise.all([
     env.DB.prepare(
-      "SELECT key, label, full_description, sort_order FROM tracks ORDER BY sort_order, key"
+      `SELECT t.key, t.label, t.full_description, t.sort_order,
+              r.last_run_at, r.last_run_on, r.status AS last_run_status,
+              r.leads_added, r.screened_added, r.delisted, r.note
+       FROM tracks t LEFT JOIN search_runs r ON r.track_key = t.key
+       ORDER BY t.sort_order, t.key`
     ).all(),
     env.DB.prepare(
-      "SELECT key, value FROM meta WHERE key IN ('display_title', 'priority_locations')"
-    ).all(),
+      `SELECT key, value FROM meta WHERE key IN (${["priority_locations", ...SETTING_KEYS]
+        .map(() => "?")
+        .join(", ")})`
+    ).bind("priority_locations", ...SETTING_KEYS).all(),
   ]);
 
-  const settings = { display_title: "Job Search Tracker", priority_locations: [] };
+  const settings = { ...DEFAULT_SETTINGS };
   for (const row of settingsRows.results) {
     if (row.key === "priority_locations") {
       try {
@@ -116,12 +153,97 @@ export async function getTracksAndSettings(env) {
       } catch {
         settings.priority_locations = [];
       }
+    } else if (row.key === "stale_run_hours") {
+      const n = Number(row.value);
+      if (Number.isFinite(n) && n > 0) settings.stale_run_hours = n;
     } else {
       settings[row.key] = row.value;
     }
   }
 
-  return { tracks: tracksRes.results, settings };
+  const tracks = tracksRes.results.map((row) => ({
+    key: row.key,
+    label: row.label,
+    full_description: row.full_description,
+    sort_order: row.sort_order,
+    last_run: {
+      at: row.last_run_at || "",
+      on: row.last_run_on || "",
+      status: row.last_run_status || "",
+      leads_added: row.leads_added || 0,
+      screened_added: row.screened_added || 0,
+      delisted: row.delisted || 0,
+      note: row.note || "",
+    },
+  }));
+
+  return { tracks, settings };
+}
+
+// Records that one track's scheduled search finished - see
+// migrations/0007_add_search_runs.sql for why this is an explicit call rather
+// than something inferred from /api/leads. Called unconditionally at the end
+// of every run, including runs that found nothing, since "found nothing" is
+// exactly the case the tab can't otherwise distinguish from "didn't run".
+//
+// Rejects a `search` with no matching track instead of upserting it: an
+// unknown key here means the run's track key and the configured tracks have
+// drifted apart (a typo in a scheduled-task prompt, or a track renamed in
+// config without updating the prompt), and that lead-losing misconfiguration
+// is worth surfacing loudly in the run's own output. Silently accepting it
+// would create an orphan row that no tab ever displays - the failure mode
+// this whole table exists to prevent.
+export async function handleRecordRun(request, env) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "invalid JSON body" }, 400);
+  }
+
+  const key = typeof body.search === "string" ? body.search : "";
+  if (!key) return json({ error: "missing search (track key)" }, 400);
+
+  const track = await env.DB.prepare("SELECT key FROM tracks WHERE key = ?").bind(key).first();
+  if (!track) return json({ error: `unknown track "${key}" - not in the configured tracks` }, 404);
+
+  const now = new Date();
+  // `at` is an instant the server can trust; a caller-supplied one is only
+  // honoured if it parses, so a malformed clientside date can't poison the
+  // staleness math into reading "ran in 2087" and never warning again.
+  let at = now.toISOString();
+  if (typeof body.at === "string" && body.at && !isNaN(Date.parse(body.at))) {
+    at = new Date(body.at).toISOString();
+  }
+  // `on` is the caller's *local* date - the worker can't derive it (see the
+  // note in migrations/0007). Falls back to the UTC date, which is right for
+  // any run scheduled outside the hours where the two disagree.
+  const on = typeof body.on === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.on)
+    ? body.on
+    : at.slice(0, 10);
+
+  const count = (v) => (Number.isFinite(Number(v)) && Number(v) >= 0 ? Math.floor(Number(v)) : 0);
+  const status = body.status === "error" ? "error" : "ok";
+
+  await env.DB.prepare(
+    `INSERT INTO search_runs
+       (track_key, last_run_at, last_run_on, status, leads_added, screened_added, delisted, note)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(track_key) DO UPDATE SET
+       last_run_at = excluded.last_run_at, last_run_on = excluded.last_run_on,
+       status = excluded.status, leads_added = excluded.leads_added,
+       screened_added = excluded.screened_added, delisted = excluded.delisted,
+       note = excluded.note`
+  )
+    .bind(
+      key, at, on, status,
+      count(body.leadsAdded), count(body.screenedAdded), count(body.delisted),
+      typeof body.note === "string" ? body.note.slice(0, 500) : ""
+    )
+    .run();
+
+  const row = await env.DB.prepare("SELECT * FROM search_runs WHERE track_key = ?").bind(key).first();
+  return json({ ok: true, run: row });
 }
 
 export async function handleGetConfig(env) {
@@ -149,22 +271,48 @@ export async function handleSetConfig(request, env) {
        ON CONFLICT(key) DO UPDATE SET label = excluded.label,
          full_description = excluded.full_description, sort_order = excluded.sort_order`
     );
+    // search_runs is kept 1:1 with tracks in the same transaction as the
+    // track write itself (see migrations/0007_add_search_runs.sql): a new
+    // track gets an empty "never ran" row so it has one from the moment its
+    // tab exists, and a removed track's run row goes with it. INSERT OR
+    // IGNORE, not a plain INSERT - re-posting an unchanged track list is the
+    // normal case (setup writes the whole list every time) and must not wipe
+    // the run history of tracks that were already there.
+    const runStmt = env.DB.prepare("INSERT OR IGNORE INTO search_runs (track_key) VALUES (?)");
+    const placeholders = valid.map(() => "?").join(", ");
+    const keys = valid.map((t) => t.key);
     const batch = [
-      env.DB.prepare("DELETE FROM tracks WHERE key NOT IN (" + valid.map(() => "?").join(", ") + ")").bind(
-        ...valid.map((t) => t.key)
-      ),
+      env.DB.prepare(`DELETE FROM tracks WHERE key NOT IN (${placeholders})`).bind(...keys),
+      env.DB.prepare(`DELETE FROM search_runs WHERE track_key NOT IN (${placeholders})`).bind(...keys),
       ...valid.map((t, i) =>
         stmt.bind(t.key, t.label || t.key, t.full_description || "", Number.isInteger(t.sort_order) ? t.sort_order : i)
       ),
+      ...keys.map((k) => runStmt.bind(k)),
     ];
     await env.DB.batch(batch);
   }
 
-  if (typeof body.display_title === "string" && body.display_title) {
+  // display_title, overview_label, applications_label - the three names the
+  // tab bar and header render from (see DEFAULT_SETTINGS). Empty strings are
+  // ignored rather than stored, so clearing one falls back to the default
+  // instead of producing a blank tab.
+  const textSettings = SETTING_KEYS.filter((k) => k !== "stale_run_hours");
+  for (const key of textSettings) {
+    if (typeof body[key] === "string" && body[key]) {
+      await env.DB.prepare(
+        `INSERT INTO meta (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+      ).bind(key, body[key]).run();
+    }
+  }
+
+  if (body.stale_run_hours != null) {
+    const n = Number(body.stale_run_hours);
+    if (!Number.isFinite(n) || n <= 0) return json({ error: "stale_run_hours must be a positive number" }, 400);
     await env.DB.prepare(
-      `INSERT INTO meta (key, value) VALUES ('display_title', ?)
+      `INSERT INTO meta (key, value) VALUES ('stale_run_hours', ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-    ).bind(body.display_title).run();
+    ).bind(String(n)).run();
   }
 
   if (Array.isArray(body.priority_locations)) {
