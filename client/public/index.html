@@ -145,16 +145,22 @@ tr.more-row td{padding:4px 12px 14px}
 .empty-warn{margin-top:10px;color:var(--warn);font-size:13px}
 .key i{display:inline-block;width:3px;height:12px;border-radius:2px;margin-right:6px;vertical-align:-2px}
 
-.viewsw{display:flex;gap:2px;background:var(--surface2);padding:3px;border-radius:8px}
+/* Detail/Grid is "how the data is displayed" - kept separate from and to
+   the right of the data-scoping controls (search/filter/sort), which read
+   left-to-right as one group. It claims the toolbar row's trailing free
+   space itself, so whatever precedes it (with or without a sort control)
+   just flows normally. */
+.viewsw{display:flex;gap:2px;margin-left:auto;background:var(--surface2);padding:3px;border-radius:8px}
 .vbtn{appearance:none;border:0;background:none;font:inherit;font-size:12.5px;font-weight:600;
   color:var(--ink2);padding:5px 12px;border-radius:6px;cursor:pointer}
 .vbtn[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
 .vbtn:hover{color:var(--ink)}
 
-/* Groups the sort <select> with the Detail/Grid toggle at the toolbar's
-   trailing edge - one wrapper claims the row's free space so the two
-   controls sit together instead of drifting apart. */
-.toolbar-right{display:flex;align-items:center;gap:10px;margin-left:auto}
+/* Sort sits with search/filter - it scopes which rows show and in what
+   order, the same job as those controls, not the view switcher's job of
+   how a row renders once selected. */
+.sortwrap{display:flex;align-items:center;gap:7px}
+.sort-label{font-size:12.5px;font-weight:600;color:var(--ink3)}
 .sortsel{width:auto;min-width:150px}
 
 /* Dense grid: the same records as one wide, fully-editable table -
@@ -564,10 +570,10 @@ function appComparator(sortKey){
   return function(a,b){return String(b.dateApplied).localeCompare(String(a.dateApplied));};
 }
 
-function sortSelectHtml(kind){
+function sortSelectHtml(kind,id){
   var opts=kind==="leads"?LEAD_SORTS:APP_SORTS;
   var current=(kind==="leads"?ui.leadSort:ui.appSort)||opts[0][0];
-  return '<select class="sortsel" data-sort="'+kind+'" aria-label="Sort by">'+
+  return '<select class="sortsel" id="'+esc(id)+'" data-sort="'+kind+'">'+
     opts.map(function(o){return '<option value="'+o[0]+'"'+(o[0]===current?' selected':'')+'>'+esc(o[1])+'</option>';}).join("")+
   '</select>';
 }
@@ -863,7 +869,8 @@ function leadsTab(key){
     '<div class="chips">'+["All"].concat(LEAD_STATUS.filter(function(s){return s!=="Applied";})).map(function(f){
       return '<button class="chip" data-filter="'+esc(f)+'" aria-pressed="'+(ui.filter===f)+'">'+esc(f)+'</button>';
     }).join("")+'</div>'+
-    '<div class="toolbar-right">'+sortSelectHtml("leads")+viewSwitchHtml()+'</div></div>'+
+    '<div class="sortwrap"><label class="sort-label" for="leadSort">Sort</label>'+sortSelectHtml("leads","leadSort")+'</div>'+
+    viewSwitchHtml()+'</div>'+
     '<div class="key">'+geoKeyHtml+
       // Only true under the default sort - a flat sort by found/location/
       // company means proximity no longer decides the order, so the legend
@@ -974,7 +981,8 @@ function appsTab(){
   var A=state.applications.slice().sort(appComparator(ui.appSort));
   var h='<div class="toolbar"><button class="btn primary" id="addapp">Add application</button>'+
     '<span style="font-size:13px;color:var(--ink3)">Your own pipeline &mdash; the scheduled searches never touch this tab.</span>'+
-    '<div class="toolbar-right">'+sortSelectHtml("applications")+viewSwitchHtml()+'</div></div>';
+    '<div class="sortwrap"><label class="sort-label" for="appSort">Sort</label>'+sortSelectHtml("applications","appSort")+'</div>'+
+    viewSwitchHtml()+'</div>';
   if(!A.length){
     return h+'<div class="card empty"><strong>No applications logged</strong>'+
       'When you apply to something, add it here to track the conversation. Days-since and the follow-up list update themselves.</div>';
