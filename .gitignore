@@ -5,9 +5,11 @@ Thumbs.db
 # Personal data silo — never committed. See private.example/README.md.
 /private/
 
-# Wrangler local cache/build output - never commit
-server/.wrangler/
-client/.wrangler/
+# Wrangler local cache/build output - never commit. Unanchored so it catches
+# any depth, not just the two dirs that have a wrangler.toml today: a stray
+# worker/.wrangler/ survived the server/ rename and sat untracked in every
+# git status, holding a cached wrangler-account.json.
+.wrangler/
 
 # npm install output, if anyone runs it locally (server/package.json and
 # client/package.json are mainly for the Deploy to Cloudflare button, which
