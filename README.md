@@ -58,7 +58,7 @@ scripts/
 server/                        API only - Cloudflare Worker + D1, no HTML served
   src/index.js                  routing + CORS preflight
   src/api.js                    D1-backed API handlers + CORS headers
-  migrations/                   D1 schema, applied via `wrangler d1 migrations apply`
+  migrations/0001_schema.sql    the whole D1 schema, applied via `wrangler d1 migrations apply`
   wrangler.toml                  deploy config
   package.json                   lets the Deploy to Cloudflare button chain migrations + deploy
   README.md                      one-time deploy instructions + API reference

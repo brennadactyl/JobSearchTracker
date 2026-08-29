@@ -25,12 +25,12 @@
  *                            case no other table can distinguish from the
  *                            search never having fired. 404s on a track key
  *                            that isn't configured rather than creating an
- *                            orphan row. See migrations/0007_add_search_runs.sql.
+ *                            orphan row. See migrations/0001_schema.sql.
  *   POST /api/screened       requires Bearer token -> body: { screened: [...] }
  *                            appends postings the search decided NOT to add
  *                            as a lead (dead-on-arrival, outside the US,
  *                            wrong level, duplicate) - same dedup shape as
- *                            /api/leads. See migrations/0006_add_screened_table.sql.
+ *                            /api/leads. See migrations/0001_schema.sql.
  *   POST /api/update         requires Bearer token -> body: { type: "lead"|"application", ... }
  *                            updates one lead's status/notes, or upserts one
  *                            application record. Generic field-whitelist

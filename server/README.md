@@ -24,7 +24,7 @@ your notes) lives only in D1 once deployed.
   `/api/screened`, `/api/runs`, `/api/update`, `/api/delete-application`, `/api/config`),
   their shared helpers, and `CORS_HEADERS` (applied to every response via
   the shared `json()` helper).
-- `migrations/` - D1 schema, see below.
+- `migrations/0001_schema.sql` - the entire D1 schema in one file, see below.
 
 ## One-time setup
 
@@ -128,17 +128,34 @@ cd server
 wrangler deploy
 ```
 
-Schema changes are tracked migrations in `server/migrations/` (Wrangler
-records which ones have run, so `apply` is always safe to re-run - it only
-executes files it hasn't seen). To add a schema change:
+The whole schema lives in one file, `migrations/0001_schema.sql`, which
+creates every table a fresh database needs in a single pass and seeds
+nothing. It replaced a seven-file migration history that had accumulated
+around one bad early migration - since there has only ever been one
+deployment, no database needed those files to reach the current state, and
+collapsing them fixed a real bug that had made setting up a fresh database
+impossible. Anything that consulted the old numbered files (`0004_add_lead_delisted.sql`
+and friends, referenced from code comments) now points here.
+
+Schema changes from here are still tracked migrations - Wrangler records
+which files have run, so `apply` is always safe to re-run, executing only
+what it hasn't seen. To add one:
 ```bat
 cd server
 wrangler d1 migrations create job-search-tracker-db <short-name>
 ```
-Edit the generated file, then apply it the same way as step 4 above:
+Edit the generated file - using real `ALTER TABLE` statements - then apply it
+the same way as step 4 above:
 ```bat
 wrangler d1 migrations apply job-search-tracker-db --remote
 ```
+
+**Do not add a column by editing `0001_schema.sql`.** Against any database
+that has already run it, an edit there does nothing at all: Wrangler skips
+files it has already applied, and `CREATE TABLE IF NOT EXISTS` is a no-op
+against a table that exists, so the column silently never appears while the
+file claims otherwise. That exact trap is what produced the history this file
+replaced.
 
 A schema/API change only requires redeploying `server/` - `client/` doesn't
 need a redeploy unless it also needs to use the new field/route. Keep the API

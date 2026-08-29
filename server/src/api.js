@@ -61,8 +61,8 @@ export const EXTRA_FIELDS = [
 ];
 
 // When an application first reaches a given pipeline stage (see
-// migrations/0005_add_application_stage_dates.sql) - applications only,
-// leads have no equivalent columns, so this must never be added to
+// migrations/0001_schema.sql) - applications only, leads have no
+// equivalent columns, so this must never be added to
 // EXTRA_FIELDS above (that list is shared by both tables' UPDATE/INSERT
 // statements below).
 export const APP_STAGE_DATE_FIELDS = [
@@ -117,15 +117,15 @@ export const DEFAULT_SETTINGS = {
   priority_locations: [],
 };
 
-// Reads the per-deployment config (see migrations/0003_add_tracks_and_settings.sql):
+// Reads the per-deployment config (see migrations/0001_schema.sql):
 // the tracks a track tab exists for, plus display settings. This is what
 // lets one Worker deployment serve any installer's tracks/branding/priority
 // locations without editing the client - the page fetches this (bundled into
 // /api/data) and renders off it instead of a baked-in TRACKS object.
 //
-// Each track carries its own `last_run` (see
-// migrations/0007_add_search_runs.sql) nested on it rather than arriving as a
-// separate top-level runs[] the client would have to re-join by key: the
+// Each track carries its own `last_run` (see migrations/0001_schema.sql)
+// nested on it rather than arriving as a separate top-level runs[] the
+// client would have to re-join by key: the
 // table is 1:1 with `tracks` by construction, and every consumer wants them
 // together. LEFT JOIN, not JOIN - a track whose search_runs row somehow went
 // missing must still render a tab (as "never ran"), never vanish from the UI.
@@ -181,8 +181,8 @@ export async function getTracksAndSettings(env) {
 }
 
 // Records that one track's scheduled search finished - see
-// migrations/0007_add_search_runs.sql for why this is an explicit call rather
-// than something inferred from /api/leads. Called unconditionally at the end
+// migrations/0001_schema.sql for why this is an explicit call rather than
+// something inferred from /api/leads. Called unconditionally at the end
 // of every run, including runs that found nothing, since "found nothing" is
 // exactly the case the tab can't otherwise distinguish from "didn't run".
 //
@@ -216,7 +216,7 @@ export async function handleRecordRun(request, env) {
     at = new Date(body.at).toISOString();
   }
   // `on` is the caller's *local* date - the worker can't derive it (see the
-  // note in migrations/0007). Falls back to the UTC date, which is right for
+  // note in migrations/0001_schema.sql). Falls back to the UTC date, which is right for
   // any run scheduled outside the hours where the two disagree.
   const on = typeof body.on === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.on)
     ? body.on
@@ -272,7 +272,7 @@ export async function handleSetConfig(request, env) {
          full_description = excluded.full_description, sort_order = excluded.sort_order`
     );
     // search_runs is kept 1:1 with tracks in the same transaction as the
-    // track write itself (see migrations/0007_add_search_runs.sql): a new
+    // track write itself (see migrations/0001_schema.sql): a new
     // track gets an empty "never ran" row so it has one from the moment its
     // tab exists, and a removed track's run row goes with it. INSERT OR
     // IGNORE, not a plain INSERT - re-posting an unchanged track list is the
@@ -376,7 +376,7 @@ export async function handleAddLeads(request, env) {
 
 // Records postings the search looked at and decided NOT to add as a lead
 // (dead-on-arrival, outside the US, wrong level/role-type, duplicate) - see
-// migrations/0006_add_screened_table.sql. Same INSERT-OR-IGNORE-on-(search,
+// migrations/0001_schema.sql. Same INSERT-OR-IGNORE-on-(search,
 // url) shape as handleAddLeads above, but no touchUpdated() call: screened
 // items don't show up on the tracker page, so they shouldn't bump its
 // "last updated" banner.
@@ -428,7 +428,7 @@ export async function handleUpdate(request, env) {
 
   if (body.type === "lead") {
     // delistedOn is set/cleared by the scheduled searches (see
-    // migrations/0004_add_lead_delisted.sql) - kept separate from `status`
+    // migrations/0001_schema.sql) - kept separate from `status`
     // so it never overwrites the installer's own application-progress field.
     const fields = ["status", "notes", "delistedOn", ...EXTRA_FIELDS];
     const setClause = fields.map((f) => `${f} = COALESCE(?, ${f})`).join(", ");

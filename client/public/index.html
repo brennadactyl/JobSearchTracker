@@ -452,7 +452,7 @@ var TRACKING_FIELDS=[
 var APP_ROLE_FIELDS=ROLE_FIELDS.concat([["link","Link"]]);
 
 // One date per APP_STATUS pipeline stage an application has reached (see
-// migrations/0005_add_application_stage_dates.sql) - "Applied" isn't here,
+// migrations/0001_schema.sql) - "Applied" isn't here,
 // it already has dateApplied. commit() auto-stamps the matching entry with
 // today's date the first time status moves to it (only if not already
 // set), but every field here stays a normal editable date input - same
@@ -517,7 +517,7 @@ function hoursSince(d){if(!d)return null;var t=Date.parse(d);if(isNaN(t))return 
 
 function today(){return new Date().toISOString().slice(0,10);}
 
-// ---- Scheduled-run status (see server migrations/0007_add_search_runs.sql)
+// ---- Scheduled-run status (see server migrations/0001_schema.sql)
 //
 // Each track carries the last run its scheduled search recorded. This is the
 // only thing on the page that can tell "the search ran and genuinely found
@@ -577,8 +577,8 @@ function runStampHtml(key){
     ' &middot; '+esc(runSummary(run))+'</span>';
 }
 
-// Evaluates state.settings.priority_locations (see migrations/
-// 0003_add_tracks_and_settings.sql) - an ordered list of {tier, label, anyOf,
+// Evaluates state.settings.priority_locations (see the server's
+// migrations/0001_schema.sql) - an ordered list of {tier, label, anyOf,
 // allOf} rules, first match wins. Was a hard-coded Seattle/Portland lookup;
 // now it's whatever an installer's config says, with the search-substring
 // semantics unchanged (anyOf: at least one substring present; allOf,
@@ -676,7 +676,7 @@ function tabsHtml(){
 // A lead's original posting can be confirmed taken down independent of
 // `status` (which is the installer's own application-progress field) - so
 // an "Applied" lead can still show as delisted without status being touched
-// or overwritten. See migrations/0004_add_lead_delisted.sql.
+// or overwritten. See migrations/0001_schema.sql.
 function delistedBadge(l){
   return l.delistedOn?' <span class="pill bad" title="Original posting confirmed no longer live">Delisted '+esc(l.delistedOn)+'</span>':"";
 }
