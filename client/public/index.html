@@ -129,6 +129,16 @@ tr.more-row td{padding:4px 12px 14px}
    last flex item either way, so a wrapped narrow layout just drops it onto
    its own line instead of stranding it mid-row. */
 .key-run{margin-left:auto}
+/* Sort lives in this quiet row (see leadsTab/appsTab), not the primary
+   toolbar - strips the bordered-control look .sortsel has up there down to
+   something that reads as part of the same muted line as the run stamp
+   and geo legend, while staying a real <select> (native arrow, full
+   keyboard/click target) rather than something disguised as plain text. */
+.key .sortwrap{gap:5px}
+.key .sort-label{font-weight:400}
+.key select.sortsel{background:none;border:1px solid transparent;color:var(--ink3);
+  font-size:12.5px;padding:1px 3px;min-width:0}
+.key select.sortsel:hover,.key select.sortsel:focus-visible{border-color:var(--line)}
 
 /* "When did this search last run" - see runStampHtml(). Its whole job is to
    distinguish a genuine zero-result day from a search that quietly stopped
@@ -869,9 +879,13 @@ function leadsTab(key){
     '<div class="chips">'+["All"].concat(LEAD_STATUS.filter(function(s){return s!=="Applied";})).map(function(f){
       return '<button class="chip" data-filter="'+esc(f)+'" aria-pressed="'+(ui.filter===f)+'">'+esc(f)+'</button>';
     }).join("")+'</div>'+
-    '<div class="sortwrap"><label class="sort-label" for="leadSort">Sort</label>'+sortSelectHtml("leads","leadSort")+'</div>'+
     viewSwitchHtml()+'</div>'+
-    '<div class="key">'+geoKeyHtml+
+    // The controls people touch constantly (search, status, view mode)
+    // stay full-weight above. Sort and this row's other contents are all
+    // settings/context you glance at, not fiddle with per-visit, so they
+    // share one quieter line instead of competing for the same attention.
+    '<div class="key"><div class="sortwrap"><label class="sort-label" for="leadSort">Sort</label>'+sortSelectHtml("leads","leadSort")+'</div>'+
+      geoKeyHtml+
       // Only true under the default sort - a flat sort by found/location/
       // company means proximity no longer decides the order, so the legend
       // shouldn't claim it does.
@@ -981,8 +995,11 @@ function appsTab(){
   var A=state.applications.slice().sort(appComparator(ui.appSort));
   var h='<div class="toolbar"><button class="btn primary" id="addapp">Add application</button>'+
     '<span style="font-size:13px;color:var(--ink3)">Your own pipeline &mdash; the scheduled searches never touch this tab.</span>'+
-    '<div class="sortwrap"><label class="sort-label" for="appSort">Sort</label>'+sortSelectHtml("applications","appSort")+'</div>'+
-    viewSwitchHtml()+'</div>';
+    viewSwitchHtml()+'</div>'+
+    // Same tiering as leadsTab: Add/search-equivalent controls stay
+    // full-weight above, Sort (the one setting this tab has) drops to its
+    // own quiet line rather than crowding the primary row.
+    '<div class="key"><div class="sortwrap"><label class="sort-label" for="appSort">Sort</label>'+sortSelectHtml("applications","appSort")+'</div></div>';
   if(!A.length){
     return h+'<div class="card empty"><strong>No applications logged</strong>'+
       'When you apply to something, add it here to track the conversation. Days-since and the follow-up list update themselves.</div>';
