@@ -1,54 +1,81 @@
 ---
 name: job-search-setup
-description: Onboards an installer of this job-search tracker (or adds a track to an existing install) - reads their resume(s), asks about desired role tracks/target companies/locations, generates the per-track daily-search prompt and baseline doc, configures the tracker webpage's title/tracks/priority-locations via /api/config, and registers the scheduled tasks. Use when a user wants to set up this repo for themselves, or add/change a tracked search.
+description: Onboards a person into this job-search tracker (or adds a track to an existing one) - provisions their account, reads their resume(s), asks about desired role tracks/target companies/locations, writes their per-track baseline doc, posts their search config and page config to /api/config, and registers their scheduled tasks. Use when someone wants to set up this repo for themselves, add a second person to an existing deployment, or add/change a tracked search.
 ---
 
 # Job search setup
 
 This repo's tooling (`scripts/`, `server/`, `client/`) is generic - it has no
 opinion on whose job search this is, how many tracks they want, or what
-locations matter to them. The personal parts live entirely in one private
-data folder (see `../../../private.example/README.md` for the expected
-layout) and in the tracker API's D1-backed config (see
-`../../../server/README.md`'s `/api/config` section). This skill is what
-fills those in conversationally, instead of the installer hand-authoring
-prompt files and JSON.
+locations matter to them. Almost all of the personal part lives in the
+tracker API's D1-backed config, keyed by user id (see
+`../../../server/README.md`'s `/api/config` section); what's left on disk is
+resumes, the per-track notes doc the search edits as it runs, and logs (see
+`../../../private.example/README.md`). This skill is what fills those in
+conversationally, instead of hand-authoring JSON.
 
-Runs the same way for a brand-new install (no `scheduled-tasks/` yet) and for
-adding one more track to an existing install - check what's already there
-(step 1) and only ask about what's missing. Also runs the same way whether
-this repo got here via `git clone` or via `/plugin install` - the one place
-that differs is step 7 (registering scheduled tasks), which needs to know
-which one it is.
+One deployment holds any number of people. Run this the same way for the
+first person, for a second person joining an existing deployment, and for
+adding one more track to someone who already has some - check what's already
+there (step 1) and only ask about what's missing. It also runs the same way
+whether this repo got here via `git clone` or via `/plugin install` - the one
+place that differs is step 7 (registering scheduled tasks), which needs to
+know which one it is.
 
 ## One identifier per track
 
 Pick **one lowercase-hyphenated slug per track** (e.g. `engineering`,
-`data-science`, `technical-pm`) and use it as *all four* of: the
-`scheduled-tasks/<key>.md` filename, the `docs/tracked_<key>_postings.md`
-filename, the D1 `tracks.key` / `search` value sent to `/api/leads`, and the
-`-Task` value passed to `run-search.ps1`. (This repo's own first three
-tracks predate this skill and split that into two different values - `SWE`/
-`TPM`/`CPM` for the tracker vs. `engineering`/`technical-pm`/`product` for
-the files - purely for historical reasons. Don't replicate that split for
-new tracks; one slug is simpler and there's no reason left not to.)
+`data-science`, `technical-pm`) and use it as *all three* of: the
+`docs/tracked_<key>_postings.md` filename, the D1 `tracks.key` / `search`
+value sent to `/api/leads`, and the `-Task` value passed to
+`run-search.ps1`. Track keys only have to be unique per person - two people
+can both have a `SWE`, and their leads, tabs and run history stay separate.
+(This repo's own first three tracks predate this skill and split that into
+two different values - `SWE`/`TPM`/`CPM` for the tracker vs.
+`engineering`/`technical-pm`/`product` for the files - purely for historical
+reasons. Don't replicate that split for new tracks; one slug is simpler and
+there's no reason left not to.)
 
 ## Steps
 
-### 1. Establish the data dir and see what already exists
+### 1. Establish who this is, and see what already exists
+
+One deployment can hold several people's job searches, each keyed by a GUID
+user id. So the first question is *whose* search this is.
 
 - Data dir is `$JOB_SEARCH_DATA_DIR` if set, else `private/` next to this
-  repo (create it with `docs/`, `resumes/`, `reference/`, `scheduled-tasks/`
-  subfolders if it doesn't exist yet).
-- List `<data dir>/scheduled-tasks/*.md` - each file's basename is an
-  existing track's key. If any exist, this is an "add a track" run for
-  whatever tracks are missing; don't touch the existing files.
-- Check `TRACKER_URL` and `TRACKER_API_TOKEN` are set (needed for step 6 and
-  for the daily searches themselves - see `../../../server/README.md` if
-  they still need to deploy the API, and `../../../client/README.md` for the
-  webpage). If missing, keep going (steps 2-5 don't need
-  them) but tell the installer they'll need to set those and re-run step 6
-  before the searches can sync anywhere.
+  repo. Inside it, each person has their own folder named by their user id,
+  holding `docs/`, `resumes/`, `reference/`, `logs/` and `tracker.json`.
+- **Existing person?** Ask for their name and find their folder (their id is
+  in `tracker.json`, or `GET /api/me` with their token returns it). Read
+  `GET /api/config` with their token - the tracks it returns are what they
+  already have, so this is an "add a track" run for whatever's missing.
+- **New person?** They need an account before anything else can be stored
+  against them. That takes the deployment's `ADMIN_TOKEN` (a worker secret -
+  whoever runs the Cloudflare account has it):
+
+  ```
+  curl -s -X POST "$TRACKER_URL/api/users" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+    -d '{"name":"Their Name","password":"<a long password they choose>"}'
+  ```
+
+  It returns their `id`. Create `<data dir>/<id>/` with `docs/`, `resumes/`,
+  `reference/` subfolders, then mint the long-lived token their scheduled
+  searches will use and write it alongside:
+
+  ```
+  curl -s -X POST "$TRACKER_URL/api/login" -H "Content-Type: application/json" \
+    -d '{"name":"Their Name","password":"<the password>","label":"scheduled-search"}'
+  ```
+
+  Write `{"url": "<tracker url>", "token": "<the token it returned>"}` to
+  `<data dir>/<id>/tracker.json`. Never put the password in that file, or
+  anywhere else on disk - it's only ever typed into the webpage's sign-in.
+- If you don't have `TRACKER_URL`, or the deployment doesn't exist yet, keep
+  going (steps 2-5 don't need it) but tell the installer they'll need
+  `../../../server/README.md`'s setup done and step 6 re-run before the
+  searches can sync anywhere.
 
 ### 2. Get the resume(s)
 
@@ -95,10 +122,10 @@ the resume where reasonable, then confirm):
 
 Once per setup (applies to every track, new and existing):
 - **Geographic scope** - the hard filter on what's in-scope at all (e.g. "US
-  only", "UK and EU", "no restriction"). This becomes each track's step-5
-  exclusion rule (`{{GEO_SCOPE_LINE}}` / `{{GEO_SCOPE_PARAGRAPH}}`) - if "no
-  restriction", drop that rule's exclusionary language rather than leaving a
-  filter that excludes nothing.
+  only", "UK and EU", "no restriction"). This becomes the `geo_scope_line`
+  setting, written as a full paragraph with worked examples of what's
+  excluded. If "no restriction", leave it empty rather than writing a filter
+  that excludes nothing.
 - **Priority locations** - one or two tiers of locations that should sort to
   the top within that scope (e.g. "Seattle metro, or remote in the US" as
   top tier, "Portland" as medium). This becomes both the `priority_locations`
@@ -108,38 +135,83 @@ Once per setup (applies to every track, new and existing):
   avoid.
 - **Display title** for the tracker page (e.g. "Jordan's Job Search").
 
-### 4. Generate the files
+### 4. Write the per-track doc, and draft the track's config
 
-For each new track, fill `templates/scheduled-task.template.md` and
-`templates/tracked-postings.template.md` (read them first - they're
-commented with what each placeholder means via their surrounding prose) and
-write the results to `<data dir>/scheduled-tasks/<key>.md` and
-`<data dir>/docs/tracked_<key>_postings.md`. Notes on specific placeholders:
+There is no prompt file to generate any more. The daily prompt is composed by
+the worker from the track's config in D1 (see
+`../../../server/src/prompt.js`), so this step produces *config*, posted in
+step 6 - plus one real file:
 
-- `{{SCHEDULE_TIME}}` is informational only (the real schedule comes from
-  `setup-scheduler.ps1` in step 7) - pick a plausible value, e.g. stagger
-  new tracks 30 minutes apart starting from the next free half-hour after
-  existing tracks.
-- `{{SIBLING_TRACKS_NOTE}}` / `{{SIBLING_DOCS_NOTE}}`: when there's more than
-  one track total (existing + new), a sentence naming the others and saying
-  not to merge them (see this repo's own `private.example` for the tone);
-  empty string when this is the only track.
-- `{{SCOPE_CLAUSE}}` (used inline in step 7 of the scheduled-task template):
-  something like `" AND US-based"`, or empty string for "no restriction".
-- `{{FIT_CLAUSE}}`: the optional track-specific fit caveat from step 3,
-  phrased as `" AND a real fit (...)"`, or empty string.
+- Fill `templates/tracked-postings.template.md` (read it first - it's
+  commented with what each placeholder means) and write it to
+  `<data dir>/<user id>/docs/tracked_<key>_postings.md`. This one stays a
+  file because the search itself edits it: it accumulates fetch-reliability
+  notes run over run. If it already exists, ask before overwriting - it holds
+  real history, not something to regenerate casually.
 - `{{LOCATION_TIER_ROWS}}`: one Markdown table row per priority tier, e.g.
   `| Top | Seattle, Bellevue, ... - or remote within scope | teal stripe +
-  "Seattle area" / "Remote US" tag, sorted to the top of its tab |`.
-- If a target file already exists (re-running for a track that's already
-  set up), ask before overwriting - these docs accumulate real search
-  history run over run, not something to regenerate casually.
+  "Seattle area" / "Remote US" tag, sorted to the top of its tab |`. Keep
+  these in step with the `priority_locations` you'll post in step 6.
+
+Then draft the track's config fields for step 6. Most of them are **prose
+the prompt uses verbatim**, not keywords the worker expands - write them as
+the finished sentence you want the search to read:
+
+- `role_search_line` - the titles/seniority to search for, as it will appear
+  mid-sentence ("Senior/Staff Software Engineer, Backend Engineer, or
+  Distributed Systems roles").
+- `target_companies` - a JSON array of names, joined with commas into the
+  prompt. Pass a plain string instead when the list has structure worth
+  keeping ("gaming first (...), then creator platforms (...), then the
+  expanded net in the doc") - it's used as written.
+- `search_note` - anything qualifying that company list. This is where "none
+  of these are industry-only searches, surface any matching role at them"
+  goes.
+- `resume_line` - the whole "read the resume" instruction: which file, any
+  fallback file (**say so explicitly if the primary is a `.docx`** - a
+  headless run often can't read those), and how this track frames that
+  resume. Each track frames the same resume differently; that framing lives
+  here, not in a shared setting.
+- `fit_clause` / `fit_disqualifier` - a short requirement and its mirror in
+  the disqualified list ("a real fit (...)" / "poor fit"). Both empty when
+  the track has no fit filter beyond the role line.
+- `fit_filter_step` - only for a track that's a genuine pivot, where fit is
+  the hard part and one clause won't carry it. Set, it becomes a whole
+  screening step of its own before the capture step. Keep it to verifiable
+  mismatches (a skill, level, or region they genuinely don't have) - see the
+  warning in step 3 about over-literal fit caveats.
+- `doc_file` / `doc_summary` - the doc you just wrote, and what it contains.
+- `doc_update_line`, `report_line`, `leads_note`, `screened_examples` - only
+  when the defaults won't do. Leave them empty otherwise; the composed prompt
+  has sensible generic versions.
+- `schedule_time` - `HH:mm` local. This *is* the schedule now (step 7 reads
+  it), so stagger it: 30 minutes after the last existing track across all
+  users on that machine, since they share one CLI.
+
+Once per person, the settings half (`geo_scope_line`, `scope_clause`,
+`scope_disqualifier`, `location_guidance`, `footer_note`, `pronouns`) - also
+verbatim prose. Write `geo_scope_line` and `location_guidance` as full
+paragraphs with worked examples ("a role that is only London, Bangalore,
+... is excluded"; `"Remote (U.S.)"` vs `"USA - Remote"`), not one-word
+scopes. The generic fallbacks are deliberately weak; the examples are what
+make these actually filter.
 
 ### 5. Confirm with the installer
 
-Show the generated file(s) (or a summary if long) before moving on -
-cheaper to fix a wrong target company or location tier now than after it's
-pushed live and scheduled.
+Show the doc you wrote and the config you drafted (or a summary if long)
+before moving on - cheaper to fix a wrong target company or location tier now
+than after it's pushed live and scheduled.
+
+After step 6 has posted it, fetch the composed prompt and show them that too:
+
+```
+curl -s "$TRACKER_URL/api/prompt/<key>" -H "Authorization: Bearer $USER_TOKEN"
+```
+
+This is the actual text their search will run every morning, assembled from
+what you just posted. It's the fastest way to catch a `resume_line` naming a
+file that isn't there, a fit filter that reads harsher than intended, or a
+geo scope that says nothing.
 
 ### 6. Push config to the tracker API
 
@@ -148,19 +220,21 @@ pushed live and scheduled.
 only the new track(s) would delete every existing one. So:
 
 ```
-curl -s "$TRACKER_URL/api/config" -H "Authorization: Bearer $TRACKER_API_TOKEN"
+curl -s "$TRACKER_URL/api/config" -H "Authorization: Bearer $USER_TOKEN"
 ```
 
-Take its `tracks` array, add/update entries for the track(s) from this run
-(`key`, `label`, `full_description` = the role search line or a short
-description, `sort_order` = next available index), and POST the full merged
-list back along with `display_title` and `priority_locations` (only include
-`display_title`/`priority_locations` if this run is setting or changing
-them - omitting a field leaves it as-is):
+The token decides whose config this is, so use *that person's* token
+throughout - there's no user id in the request. Take its `tracks` array,
+add/update entries for the track(s) from this run (`key`, `label`,
+`full_description` = the role search line or a short description,
+`sort_order` = next available index, plus the search-config fields drafted in
+step 4), and POST the full merged list back along with `display_title` and
+`priority_locations` (only include `display_title`/`priority_locations` if
+this run is setting or changing them - omitting a field leaves it as-is):
 
 ```
 curl -s -X POST "$TRACKER_URL/api/config" \
-  -H "Authorization: Bearer $TRACKER_API_TOKEN" \
+  -H "Authorization: Bearer $USER_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"tracks":[...merged list...],"display_title":"...","priority_locations":[...]}'
 ```
@@ -170,6 +244,11 @@ anyOf: [...substrings], allOf?: [...substrings]}` - first match wins,
 `anyOf` needs at least one substring present in the (lowercased) location
 text, `allOf` (optional) needs all of them present too (used for something
 like "remote AND a US indicator", not just "remote" alone).
+
+Send the prose settings from step 4 in the same call: `geo_scope_line`,
+`scope_clause`, `scope_disqualifier`, `location_guidance`, `footer_note`,
+`pronouns`. They're per person, so a second person's settings never disturb
+the first's.
 
 Three further optional settings, only worth sending if the installer wants
 something other than the defaults: `overview_label` and `applications_label`
@@ -183,10 +262,9 @@ Posting `tracks` also creates each new track's `search_runs` row, so its tab
 shows "No run recorded yet" until its first scheduled run reports in. That's
 expected on a fresh setup, not a problem to chase.
 
-If `TRACKER_URL`/`TRACKER_API_TOKEN` aren't set, skip this step and tell the
+If there's no deployment to post to yet, skip this step and tell the
 installer to come back to it (re-running this skill is fine, or they can run
-the curls above by hand) once they've deployed the webpage and set those
-environment variables.
+the curls above by hand) once they've deployed the API and the webpage.
 
 ### 7. Register the scheduled tasks
 
@@ -212,11 +290,20 @@ unset), just run `scripts/setup-scheduler.ps1` from the repo root (or with
 `-DataDir` pointing at a non-default data dir) - no copy needed, the clone
 itself is already a stable location.
 
-Either way, `setup-scheduler.ps1` discovers every `scheduled-tasks/*.md`
-file itself - nothing to pass it about which tracks exist. It will warn
-about any prerequisite that's still missing (the `claude` CLI,
-`CLAUDE_CODE_OAUTH_TOKEN`, `TRACKER_URL`/`TRACKER_API_TOKEN`) rather than
-fail outright, so it's safe to run even mid-setup.
+Either way, `setup-scheduler.ps1` discovers people by their
+`<data dir>\<user id>\tracker.json` and asks each one's account what tracks
+it has - nothing to pass it about which tracks exist. Add `-User <user id>`
+to set up only this person; without it, it processes everyone on the
+machine, which is also fine (its cleanup only ever touches the people it
+processed). It warns about any missing prerequisite (the `claude` CLI,
+`CLAUDE_CODE_OAUTH_TOKEN`, unreadable config) rather than failing outright,
+so it's safe to run mid-setup.
+
+Note the schedule now comes from each track's `schedule_time` in D1, not from
+this script - so a time change is a config post, not a re-registration. When
+a machine runs more than one person's searches, stagger across all of them:
+they share one CLI and one Claude account (the machine owner's), and each run
+takes several minutes.
 
 Re-run this step (the copy + `setup-scheduler.ps1`) any time after a plugin
 update, so the stable copy and the registered tasks stay current.
@@ -227,10 +314,10 @@ Suggest running one new track immediately rather than waiting for its
 scheduled time:
 
 ```powershell
-scripts\run-search.ps1 -Task <key>
+scripts\run-search.ps1 -Task <key> -User <user id>
 ```
 
-Then check `<data dir>\logs\<key>.log` for what happened, and confirm on the
+Then check `<data dir>\<user id>\logs\<key>.log` for what happened, and confirm on the
 tracker webpage that the new track's tab shows up *and* now reports when it
 last ran. A tab still reading "No run recorded yet" after a completed run
 means the prompt's step 9c (`POST /api/runs`) didn't land - worth chasing,

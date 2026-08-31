@@ -53,12 +53,14 @@ docs/
   architecture.svg           the diagram above
   architecture.html           full architecture write-up (open in a browser)
 scripts/
-  run-search.ps1              runs one track (any key with a matching scheduled-tasks/<key>.md)
-  setup-scheduler.ps1          registers every track it finds as a daily Windows Scheduled Task
+  run-search.ps1              runs one track for one person (fetches its prompt from the API)
+  setup-scheduler.ps1          registers every person's tracks as daily Windows Scheduled Tasks
 server/                        API only - Cloudflare Worker + D1, no HTML served
-  src/index.js                  routing + CORS preflight
-  src/api.js                    D1-backed API handlers + CORS headers
-  migrations/0001_schema.sql    the whole D1 schema, applied via `wrangler d1 migrations apply`
+  src/index.js                  routing, session resolution, CORS preflight
+  src/auth.js                   passwords, session tokens, who a token belongs to
+  src/api.js                    request handlers + CORS headers
+  src/prompt.js                 composes each track's daily search prompt from its config
+  migrations/                   the D1 schema, applied via `wrangler d1 migrations apply`
   wrangler.toml                  deploy config
   package.json                   lets the Deploy to Cloudflare button chain migrations + deploy
   README.md                      one-time deploy instructions + API reference
@@ -105,14 +107,18 @@ note after each step if you'd rather do it the traditional way instead.
    one), and accept the defaults - it forks the API code into your own
    GitHub, provisions the D1 database, and deploys, all in Cloudflare's own
    build environment. You'll land on your new Worker's dashboard; from
-   **Settings → Variables and Secrets**, add a secret named `API_TOKEN` with
-   any long random value you pick (this is the token the searches and the
-   client both authenticate with - no CLI needed to set it). Then set it,
-   plus your Worker's URL, on every machine that runs searches:
-   ```bat
-   setx TRACKER_URL "https://job-search-tracker.<your-subdomain>.workers.dev"
-   setx TRACKER_API_TOKEN "<the secret value you just picked>"
+   **Settings → Variables and Secrets**, add a secret named `ADMIN_TOKEN`
+   with any long random value you pick (no CLI needed to set it). This isn't
+   a login - it's the operator credential that creates accounts, since there
+   is no sign-up page. Then create your own account with it:
+   ```bash
+   curl -s -X POST "https://job-search-tracker.<your-subdomain>.workers.dev/api/users" \
+     -H "Authorization: Bearer <the ADMIN_TOKEN you just set>" \
+     -H "Content-Type: application/json" \
+     -d '{"name":"Your Name","password":"a-long-password-you-pick"}'
    ```
+   Keep the `id` it returns - that's your user id, and step 4 puts your
+   search data under it.
 
    Then the client:
 
@@ -129,8 +135,9 @@ note after each step if you'd rather do it the traditional way instead.
    deployment has no API URL configured". See
    [client/README.md](client/README.md).
 
-   Now open the client's URL. It asks only for the `API_TOKEN` you picked
-   above, and remembers it in that browser.
+   Now open the client's URL and sign in with the name and password from the
+   account you created above. It remembers you in that browser until you log
+   out.
 
    **The page will be empty at this point, and that's correct** - no track
    tabs, just Overview and Applications. A fresh database ships with no
@@ -157,14 +164,15 @@ note after each step if you'd rather do it the traditional way instead.
    ```powershell
    .\scripts\setup-scheduler.ps1
    ```
-   It discovers every track from `private\scheduled-tasks\*.md` itself -
-   nothing to tell it about how many you have.
+   It discovers each person by their `private\<user-id>\tracker.json` and
+   asks their account what tracks it has - nothing to tell it about how many
+   you have, or how many people share the machine.
 6. **Test one run before trusting the schedule** - the previous step prints
    the exact command for whichever tracks it just registered, e.g.:
    ```bat
    schtasks /Run /TN JobSearch-Engineering
    ```
-   Check `private\logs\<track>.log` for what happened, then reload the
+   Check `private\<user-id>\logs\<track>.log` for what happened, then reload the
    tracker page: that track's tab should now show when it last ran and what
    it found. Until a track's first run reports in it reads "No run recorded
    yet", which is also what you'll see on a brand-new install.
@@ -177,11 +185,41 @@ up - it's hosted on Cloudflare, independent of any machine being on.
 ## Running a search manually
 
 ```powershell
-.\scripts\run-search.ps1 -Task <track key>
+.\scripts\run-search.ps1 -Task <track key> -User <user id>
 ```
 
-`<track key>` is whatever you named a track when setting it up (matches a
-`private\scheduled-tasks\<key>.md` file) - e.g. `engineering`.
+`<track key>` is whatever you named a track when setting it up - e.g.
+`engineering`. `<user id>` is the GUID whose folder under `private\` holds
+that person's resumes and credentials; omit it only on a single-user machine
+set up before per-user folders existed.
+
+To see exactly what that run will do, without running it:
+
+```bash
+curl -s "$TRACKER_URL/api/prompt/<track key>" -H "Authorization: Bearer <their token>"
+```
+
+## Adding another person
+
+One deployment holds any number of job searches, each with its own tracks,
+leads, page title and location rules, and its own sign-in. To add someone:
+
+1. Create their account with the `ADMIN_TOKEN` (same `POST /api/users` call
+   as step 3 of Setup above). It returns their user id.
+2. Run the [job-search-setup](.claude/skills/job-search-setup/) skill for
+   them - it makes `private\<their id>\`, mints the token their scheduled
+   runs use, reads their resume, asks about their tracks and locations,
+   posts their config, and registers their scheduled tasks without touching
+   anyone else's.
+
+They sign in on the same tracker URL with their own name and password.
+Their searches run on whichever machine holds their folder, under that
+machine's Claude account - so stagger everyone's `schedule_time`, since each
+run takes several minutes and they share one CLI.
+
+Note what this does and doesn't protect: the API keeps each person's data
+strictly separate, but whoever administers the Cloudflare account can read
+any of it directly in D1. This is for people who are fine with that.
 
 ## Things worth not relearning
 

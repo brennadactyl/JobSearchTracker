@@ -1,17 +1,16 @@
 # Private data folder - expected layout
 
 This repo (the "tooling") never contains personal data. Everything specific to
-you - resumes, candidate profile, target companies, search results - lives in
-a separate folder that is **not** part of this git repo (see `.gitignore` ->
-`/private/`). The live tracker's own data (leads, applications, track
-config) lives in its Cloudflare D1 database once you deploy `../server/` -
-not in this folder either.
+a person - resumes, their per-track notes, search logs, their tracker
+credential - lives in a separate folder that is **not** part of this git repo
+(see `.gitignore` -> `/private/`). Their leads, applications, page config and
+the search config itself live in the Cloudflare D1 database once `../server/`
+is deployed, keyed by their user id - not in this folder.
 
-**Recommended: let Claude fill this folder in for you.** Point it at
-`../.claude/skills/job-search-setup/` with your resume(s) in hand - it reads
-them, asks what tracks/companies/locations you want, and generates everything
-below. The rest of this doc describes the result, for reference or for
-authoring it by hand instead.
+**Recommended: let Claude fill this folder in.** Point it at
+`../.claude/skills/job-search-setup/` with a resume in hand - it provisions the
+account, creates the folder, and generates everything below. The rest of this
+doc describes the result, for reference or for authoring it by hand instead.
 
 Point the scripts at this folder via `-DataDir`, or set it once as an
 environment variable:
@@ -26,54 +25,79 @@ there if you'd rather not manage a separate location).
 
 ## Required structure
 
-One track = one `scheduled-tasks/<key>.md` + one `docs/tracked_<key>_postings.md`,
-where `<key>` is a lowercase-hyphenated slug you pick (e.g. `engineering`,
-`data-science`) - it's also the value used as the tracker's `search` field and
-the `-Task` argument to `run-search.ps1`. Have as many tracks as you want, not
-a fixed number:
+**One folder per person, named by their user id** - the GUID that
+`POST /api/users` returned when their account was created. One machine can run
+several people's searches this way, and nothing in one person's folder says
+anything about anyone else's:
 
 ```
 private/
-  docs/
-    tracked_<key>_postings.md   candidate profile, target companies, fetch-reliability notes - one per track (found/screened postings live in the tracker DB, not here)
-  resumes/
-    <your resume files>.docx
-  reference/
-    <resume text extract, historical tracker xlsx, etc.>
-  scheduled-tasks/
-    <key>.md                    the filled-in daily prompt for that track - one per track
-  logs/                         created automatically by run-search.ps1
+  <user-id>/
+    tracker.json                  {"url": "...", "token": "..."} - their own API URL and session token
+    docs/
+      tracked_<key>_postings.md   per-track notes: fit reasoning, target companies,
+                                  fetch-reliability findings. The search edits this
+                                  as it runs, which is why it's a file and not config.
+    resumes/
+      <their resume files>.docx
+    reference/
+      <resume text extract, historical tracker xlsx, etc.>
+    logs/                         created automatically by run-search.ps1
+  <another-user-id>/
+    ...
 ```
 
-(This repo's own example tracks use `engineering` / `technical-pm` / `product`
-as keys, with `docs/tracked_job_postings.md` / `tracked_pm_postings.md` /
-`tracked_cpm_postings.md` as their doc filenames - those doc names predate the
-one-key-for-everything convention above; a fresh track's doc should just be
-`tracked_<key>_postings.md`, matching its scheduled-task file.)
+`<key>` is a lowercase-hyphenated slug per track (e.g. `engineering`,
+`data-science`) - the same value used as the tracker's `search` field and the
+`-Task` argument to `run-search.ps1`. Keys only have to be unique per person:
+two people can both have a `SWE`.
 
-`scheduled-tasks/*.md` are the actual prompts run each day - they're personal
-(they reference your name, resume paths, and target companies), which is why
-they live here rather than in the repo. Each one syncs new postings to the
-tracker API over HTTP (`curl` + a bearer token) - see `../server/README.md`
-for deploying that API and getting `TRACKER_URL` / `TRACKER_API_TOKEN`. (The
-webpage itself is a separate deployable, `../client/` - the search scripts
-never talk to it directly, only to the API.)
+### tracker.json
 
-Each prompt also ends by POSTing to `/api/runs` to record that it ran, and
-that step is unconditional - it fires even on a day that found nothing. Keep
-it if you edit a prompt by hand: it's the only thing that distinguishes a
-genuinely quiet day from a search that stopped running, since a run finding
-nothing otherwise writes nothing anywhere. The generated prompts include it
-already (step 9c); a prompt authored by hand without it leaves that track's
-tab stuck reading "No run recorded yet" forever.
+Each person's own credential, which is why it lives beside their data rather
+than in a machine-wide environment variable - an environment variable can only
+hold one person's token.
+
+```json
+{ "url": "https://your-api-worker.your-subdomain.workers.dev", "token": "<their session token>" }
+```
+
+Mint the token once with `POST /api/login` and a `"label"` of
+`"scheduled-search"` (see `../server/README.md`), so it can be revoked on its
+own without disturbing whatever browsers they're signed in on. **Their
+password never goes in this file, or anywhere else on disk** - it's only ever
+typed into the webpage's sign-in.
+
+A machine set up before multi-user support - no per-user folders, `docs/` and
+`resumes/` directly in the data dir, `TRACKER_URL`/`TRACKER_API_TOKEN` in the
+environment - still works: both scripts fall back to that layout when they
+find no `<user-id>/tracker.json`.
+
+## No prompt files
+
+Earlier versions kept the daily search prompt as `scheduled-tasks/<key>.md`
+here, one hand-maintained file per track. Those are gone. The prompt is now
+composed by the worker from that track's config in D1 and fetched at run time
+(`GET /api/prompt/<key>` - see `../server/src/prompt.js`), which is what lets
+one machine run several people's searches without holding several people's
+search config, and what keeps the API's own calling convention defined in one
+place rather than copied into every prompt file.
+
+To change what a search does - target companies, the role line, the fit
+filter, which resume it reads, what time it runs - change that track's config
+(`POST /api/config`, or re-run the setup skill). To see exactly what a search
+will run:
+
+```
+curl -s "$TRACKER_URL/api/prompt/<key>" -H "Authorization: Bearer <their token>"
+```
 
 ## Moving to a new machine
 
-This private folder isn't distributed via GitHub. Copy it yourself - a
-zip transfer, a private cloud-synced folder, an external drive, or a separate
+This private folder isn't distributed via GitHub. Copy it yourself - a zip
+transfer, a private cloud-synced folder, an external drive, or a separate
 *private* git remote if you want version history for it too. Then, on the new
-machine: clone this repo, put the private folder wherever you like, set
-`JOB_SEARCH_DATA_DIR` (or pass `-DataDir`) to point at it, and set
-`TRACKER_URL` / `TRACKER_API_TOKEN` (same values as any other machine - the
-tracker (client + API) and its data are already deployed centrally on
-Cloudflare, not per-machine).
+machine: clone this repo, put the private folder wherever you like, and set
+`JOB_SEARCH_DATA_DIR` (or pass `-DataDir`). The credentials travel with the
+folder in each person's `tracker.json`; the tracker and its data are already
+deployed centrally on Cloudflare, not per-machine.

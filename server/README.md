@@ -16,15 +16,27 @@ vice versa, as long as both are compatible with the API described below.
 No personal data lives in this repo - the actual data (company names, URLs,
 your notes) lives only in D1 once deployed.
 
+One deployment holds **any number of people's job searches**. Every row
+carries a `user_id`, and every request is scoped to whoever's token made it,
+so two people share a worker and a database while seeing entirely separate
+tracks, leads, applications, page titles and location rules.
+
 ## Code layout
 
 - `src/index.js` - routing only (which path/method maps to which handler),
-  no logic of its own. Also owns the CORS preflight (`OPTIONS`) response.
-- `src/api.js` - the D1-backed API handlers (`/api/data`, `/api/leads`,
-  `/api/screened`, `/api/runs`, `/api/update`, `/api/delete-application`, `/api/config`),
-  their shared helpers, and `CORS_HEADERS` (applied to every response via
-  the shared `json()` helper).
-- `migrations/0001_schema.sql` - the entire D1 schema in one file, see below.
+  no logic of its own. Resolves the caller's session once, up front, and
+  hands every handler a `Db` already scoped to that person. Also owns the
+  CORS preflight (`OPTIONS`) response.
+- `src/auth.js` - passwords (PBKDF2 via Web Crypto), session tokens, and
+  looking a bearer token up to a user. The only file that touches either.
+- `src/api.js` - the request handlers: parsing, validation, and response
+  shaping, plus `CORS_HEADERS` (applied to every response via the shared
+  `json()` helper). No D1 access of its own.
+- `src/db.js` - all D1 access for a person's own data. Every instance is
+  bound to one user id at construction, so no query can forget to filter.
+- `src/prompt.js` - composes a track's daily search prompt from its config.
+- `migrations/` - `0001_schema.sql` creates every table; `0002_multi_user.sql`
+  adds accounts and gives every table an owner. See below.
 
 ## One-time setup
 
@@ -46,21 +58,18 @@ Cloudflare's own environment.
    `deploy` script (`wrangler d1 migrations apply DB --remote && wrangler
    deploy`) runs the schema migrations and deploys in one step.
 3. It lands you on your new Worker's dashboard. Go to **Settings → Variables
-   and Secrets** and add a secret named `API_TOKEN` - any long random value
+   and Secrets** and add a secret named `ADMIN_TOKEN` - any long random value
    you pick (a password generator, or `-join ((48..57)+(97..122)|Get-Random
    -Count 40|%{[char]$_})` in PowerShell, works fine). This is done through
-   the dashboard UI, no CLI needed.
+   the dashboard UI, no CLI needed. It is **not** a login: it's the operator
+   credential that creates accounts and resets passwords, nothing else.
 4. Your Worker's URL is shown on that same dashboard page (something like
    `https://job-search-tracker.<your-subdomain>.workers.dev`). You'll need it
-   for two places: the client's own gate screen (see
-   [`../client/README.md`](../client/README.md)), and as an environment
-   variable on every machine that runs searches:
-   ```bat
-   setx TRACKER_API_TOKEN "the-secret-value-you-picked"
-   setx TRACKER_URL "https://job-search-tracker.<your-subdomain>.workers.dev"
-   ```
-   Open a new terminal afterward.
-5. Now deploy the client - see [`../client/README.md`](../client/README.md).
+   for the client (see [`../client/README.md`](../client/README.md)) and in
+   each person's `tracker.json` on whatever machine runs their searches.
+5. **Create your account** - see [Accounts](#accounts) below. A fresh database
+   has none, and there is no sign-up page.
+6. Now deploy the client - see [`../client/README.md`](../client/README.md).
    It's a separate one-click deploy; this worker alone has no webpage.
 
 ### Manual setup (alternative, or for updating an existing deployment)
@@ -86,19 +95,19 @@ Cloudflare's own environment.
    ```bat
    wrangler d1 migrations apply job-search-tracker-db --remote
    ```
-   One file, one pass - it creates every table and seeds nothing. Your tracks,
-   page title and priority locations are set later via `/api/config` (the
-   `job-search-setup` skill does it), so the page is deliberately empty until
-   then rather than pre-filled with someone else's job search.
+   Every table, no seed data, and no accounts. Your tracks, page title and
+   priority locations are set later via `/api/config` (the `job-search-setup`
+   skill does it), so the page is deliberately empty until then rather than
+   pre-filled with someone else's job search.
 
-5. **Set the access token** (skip if you already have one from an earlier
-   setup - it carries over). Pick a long random value yourself:
+5. **Set the admin token.** This creates accounts and resets passwords; it is
+   not a login and nothing else accepts it. Pick a long random value:
    ```powershell
    -join ((48..57)+(97..122)|Get-Random -Count 40|%{[char]$_})
    ```
    Then:
    ```bat
-   wrangler secret put API_TOKEN
+   wrangler secret put ADMIN_TOKEN
    ```
 
 6. **Deploy:**
@@ -108,15 +117,61 @@ Cloudflare's own environment.
    Prints your live URL, something like
    `https://job-search-tracker.<your-subdomain>.workers.dev`.
 
-7. **Set the token and URL locally** so the headless search scripts can use
-   them:
-   ```bat
-   setx TRACKER_API_TOKEN "the-token-from-step-5"
-   setx TRACKER_URL "https://job-search-tracker.<your-subdomain>.workers.dev"
-   ```
-   Open a new terminal afterward.
+7. **Create your account** and mint the token your scheduled searches will
+   use - see [Accounts](#accounts) below.
 
 8. **Deploy the client** - see [`../client/README.md`](../client/README.md).
+
+## Accounts
+
+There is no sign-up page, and deliberately so: this is a handful of people
+who know each other, not a service. Accounts are created by whoever operates
+the deployment, using the `ADMIN_TOKEN` secret.
+
+**Create someone (or reset their password)** - same call either way, because
+nothing else in the system can hash a password:
+
+```bash
+curl -s -X POST "$TRACKER_URL/api/users" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"Their Name","password":"a-long-password-they-pick"}'
+```
+
+Returns `{"id": "<guid>", "name": "...", "created": true|false}`. The id is
+what every row of theirs is keyed by; it never changes, so a password reset
+or a rename leaves their data alone. Passwords must be at least 12
+characters - `/api/login` has no rate limiting in front of it, so length is
+the whole defence (see [Security](#security-notes)).
+
+**Sign in** - the webpage does this for them. Do it by hand once per machine
+that runs their searches, to mint the long-lived token for the scheduled
+runs:
+
+```bash
+curl -s -X POST "$TRACKER_URL/api/login" -H "Content-Type: application/json" \
+  -d '{"name":"Their Name","password":"...","label":"scheduled-search"}'
+```
+
+Returns `{"token": "...", "user": {...}}`. Put that token, with the worker
+URL, in `<data dir>/<their id>/tracker.json` (see
+[`../private.example/README.md`](../private.example/README.md)). The password
+itself never goes on disk.
+
+**Revoke one credential.** `label` is why sessions are worth having: a
+browser signing out kills only its own token, and you can drop a leaked
+scheduled-search token without disturbing anyone's browser.
+
+```bash
+wrangler d1 execute job-search-tracker-db --remote \
+  --command "DELETE FROM sessions WHERE user_id = '<guid>' AND label = 'scheduled-search'"
+```
+
+**See who exists, and what they hold:**
+
+```bash
+wrangler d1 execute job-search-tracker-db --remote \
+  --command "SELECT u.name, s.label, s.created_at FROM users u LEFT JOIN sessions s ON s.user_id = u.id ORDER BY u.name"
+```
 
 ## Updating after code changes
 
@@ -132,7 +187,48 @@ cd server
 wrangler deploy
 ```
 
-The whole schema lives in one file, `migrations/0001_schema.sql`, which
+### Migrating an existing deployment to multi-user
+
+`0002_multi_user.sql` gives every table an owner and replaces the old shared
+`API_TOKEN` with accounts. Against a database that already has data, run it
+in this order - it's designed so the already-registered scheduled searches
+never stop working:
+
+1. **Back up first.** `wrangler d1 export job-search-tracker-db --remote
+   --output backup.sql`.
+2. `wrangler d1 migrations apply job-search-tracker-db --remote` - creates
+   `users`/`sessions` and assigns every existing row to one account named
+   `owner`, with login disabled (SQL can't hash a password).
+3. `wrangler secret put ADMIN_TOKEN` - a fresh value, not the old `API_TOKEN`.
+4. Keep the running searches authenticating by turning the token they already
+   have into a session:
+   ```bash
+   wrangler d1 execute job-search-tracker-db --remote \
+     --command "INSERT INTO sessions (id, user_id, created_at, label) VALUES ('<the current API_TOKEN value>', 'ab266b6c-00cc-45d1-92ac-cdad412c1558', date('now'), 'legacy scheduled search')"
+   ```
+   Nothing on the search machine changes, and the credential stays revocable
+   by deleting that one row later.
+5. `wrangler deploy`, then deploy the client. Steps 2-4 finish before any new
+   code is live, so no request 401s in between.
+6. Give the account a real name and password:
+   ```bash
+   wrangler d1 execute job-search-tracker-db --remote \
+     --command "UPDATE users SET name = 'Your Name' WHERE name = 'owner'"
+   curl -s -X POST "$TRACKER_URL/api/users" -H "Authorization: Bearer $ADMIN_TOKEN" \
+     -H "Content-Type: application/json" -d '{"name":"Your Name","password":"..."}'
+   ```
+   Then sign in on the webpage.
+7. Delete the old `API_TOKEN` secret - its value now lives only as that
+   session row.
+8. Move each track's search config into D1 and retire the prompt files. Post
+   the config (the `job-search-setup` skill does this), then **diff before
+   deleting anything**: `curl -s "$TRACKER_URL/api/prompt/<key>" -H
+   "Authorization: Bearer <token>"` against the `.md` it replaces. Expect
+   only wording normalizations; anything else means config is missing.
+
+### The schema files
+
+The base schema lives in one file, `migrations/0001_schema.sql`, which
 creates every table a fresh database needs in a single pass and seeds
 nothing. It replaced a seven-file migration history that had accumulated
 around one bad early migration - since there has only ever been one
@@ -167,14 +263,62 @@ additive (new optional fields, new routes) where you can, so old clients
 don't break against a newer server; note any breaking change clearly in the
 commit and in this README's API section below.
 
+
 ## API (used by the search scripts, see ../private.example/README.md, and by the client, see ../client/)
 
-- `GET /api/data` - Bearer token required - returns `{ updated, leads[], applications[], screened[] }`
-- `POST /api/leads` - Bearer token required - body `{ "leads": [ {search, company, title, location, url, found, verified, fit, team, setup, comp} ] }` - appends only leads not already present for the same `(search, url)` pair (DB-enforced, atomic); never touches existing status/notes. `team`/`setup`/`comp` are optional (omit rather than send empty) and only meaningful when the posting states them - other Details fields (referral, resume, lastContact, nextAction*, link) are accepted too but are user-entered only, never sent by the search scripts.
-- `POST /api/screened` - Bearer token required - body `{ "screened": [ {search, url, company, title, location, reason, date} ] }` - records a posting the search looked at and decided NOT to add as a lead (dead-on-arrival, outside the US, wrong level/role-type, duplicate), so the next run's dedup check (against `GET /api/data`'s `screened[]`) skips it without re-verifying. Same `(search, url)`-deduped, atomic append as `/api/leads`; `date` defaults to today if omitted. No read-back/UI for this list today - it exists purely so scheduled runs don't re-spend a verification attempt on something already ruled out.
-- `POST /api/runs` - Bearer token required - body `{ "search": "SWE", "status": "ok"|"error", "leadsAdded": 0, "screenedAdded": 0, "delisted": 0, "on": "YYYY-MM-DD", "note": "..." }` - records that one track's scheduled search just finished, as one row per track in `search_runs`. **Called at the end of every run, including runs that found nothing** - that's the whole point: a run that finds nothing writes no leads, no screened rows and no `meta.updated` bump, so without this a search that quietly stopped firing is indistinguishable from a genuine zero-result day. `on` is the caller's *local* date (the worker only knows UTC, and a morning run is already the next UTC day); `status: "error"` marks a run that couldn't do its job, which the client surfaces as a warning. 404s on a `search` that isn't a configured track rather than creating a row no tab will ever show.
-- `POST /api/update` - Bearer token required - body `{ "type": "lead", "id": ..., "status": "...", "notes": "...", "delistedOn": "..." }` or `{ "type": "application", ... }`. `delistedOn` is set by the scheduled searches (a `YYYY-MM-DD` when a previously-live posting is confirmed taken down, or `""` to clear it if later found live again) - kept separate from `status` so a lead can be, say, "Applied" and delisted at the same time without either field overwriting the other. All fields are optional per call (only what's passed gets updated).
-- `POST /api/delete-application` - Bearer token required - body `{ "id": ... }` - removes one application row (leads are never deleted, only re-statused)
-- `GET /api/config` - Bearer token required - returns `{ tracks: [{key, label, full_description, sort_order, last_run}], settings: {display_title, overview_label, applications_label, stale_run_hours, priority_locations} }` - the per-installer config the client renders its tabs/title/geo-priority labels from, instead of a baked-in TRACKS object. Every tab the page draws comes from here: one row per track, plus `overview_label`/`applications_label` for the two built-in tabs. Each track's `last_run` is its `search_runs` row (`{at, on, status, leads_added, screened_added, delisted, note}`; all-empty means never recorded). `stale_run_hours` (default 36) is how old a run can be before the client flags that track as stale. `priority_locations` is an ordered list of `{tier: "p-high"|"p-med", label, anyOf: [...], allOf?: [...]}` rules (substring match against the lowercased location, first match wins).
-- `POST /api/config` - Bearer token required - body `{ tracks?, display_title?, overview_label?, applications_label?, stale_run_hours?, priority_locations? }` - sets any of the above. `tracks`, if present, replaces the whole track list (existing leads/applications keep their `search` value even if its track is removed - they just lose their tab, they're never deleted) and keeps `search_runs` 1:1 with it: a new track gains a "never ran" row, a removed track loses its row, and re-posting an unchanged list leaves existing run history intact.
-- `OPTIONS *` - CORS preflight for any route above - no auth, returns `204` + `CORS_HEADERS`. Every real response (including error responses) carries `CORS_HEADERS` too (`Access-Control-Allow-Origin: *` - the Bearer token, not origin, is the actual access boundary for this self-hosted, single-installer-per-deployment API).
+Every route except the three marked otherwise needs `Authorization: Bearer
+<session token>`, and every one of them is **scoped to whoever that token
+belongs to**. There is no user id in any request: another person's lead id,
+application id or track key simply doesn't resolve, and comes back as a 404.
+
+### Auth
+
+- `POST /api/login` - **no auth** - body `{ name, password, label? }` -> `{ token, user: { id, name } }`, or `401` for both a wrong password and an unknown name (told apart, they'd enumerate who has an account). `label` records what the token is for (`"browser"`, `"scheduled-search"`) so it can be revoked by purpose later; defaults to `"browser"`. Tokens don't expire - the shared token they replaced didn't either, and a headless search that had to re-authenticate on a schedule would be a new failure mode for no gain.
+- `POST /api/logout` - revokes **only the token that made the request**, so signing out of a browser leaves the scheduled search's credential alone.
+- `POST /api/users` - **`ADMIN_TOKEN` as the Bearer, not a session** - body `{ name, password }` -> creates an account with a fresh GUID, or sets an existing name's password (`201` vs `200`, `{id, name, created}`). Doubles as password reset because nothing else can run PBKDF2. Minimum 12 characters. See [Accounts](#accounts).
+- `GET /api/me` -> `{ id, name }` - who this token belongs to.
+
+### Data
+
+- `GET /api/data` - returns `{ user, updated, leads[], applications[], screened[], tracks[], settings }` - everything the page renders, for this person only. `user` is `{id, name}`, so the page can say whose search it's showing.
+- `POST /api/leads` - body `{ "leads": [ {search, company, title, location, url, found, verified, fit, team, setup, comp} ] }` - appends only leads not already present for the same `(user, search, url)` triple (DB-enforced, atomic); never touches existing status/notes. Two people tracking the same posting are two independent rows. `team`/`setup`/`comp` are optional (omit rather than send empty) and only meaningful when the posting states them - other Details fields (referral, resume, lastContact, nextAction*, link) are accepted too but are user-entered only, never sent by the search scripts.
+- `POST /api/screened` - body `{ "screened": [ {search, url, company, title, location, reason, date} ] }` - records a posting the search looked at and decided NOT to add as a lead (dead-on-arrival, out of scope, wrong level, duplicate), so the next run's dedup check skips it without re-verifying. Same `(user, search, url)`-deduped, atomic append as `/api/leads`; `date` defaults to today.
+- `POST /api/runs` - body `{ "search": "SWE", "status": "ok"|"error", "leadsAdded": 0, "screenedAdded": 0, "delisted": 0, "on": "YYYY-MM-DD", "note": "..." }` - records that one track's scheduled search just finished. **Called at the end of every run, including runs that found nothing** - that's the whole point: a run that finds nothing writes no leads, no screened rows and no `updated` bump, so without this a search that quietly stopped firing is indistinguishable from a genuine zero-result day. `on` is the caller's *local* date (the worker only knows UTC, and a morning run is already the next UTC day); `status: "error"` marks a run that couldn't do its job, which the client surfaces as a warning. 404s on a `search` that isn't one of *this person's* configured tracks.
+- `POST /api/update` - body `{ "type": "lead", "id": ..., "status": "...", "notes": "...", "delistedOn": "..." }` or `{ "type": "application", ... }`. `delistedOn` is set by the scheduled searches (a `YYYY-MM-DD` when a previously-live posting is confirmed taken down, or `""` to clear it if later found live again) - kept separate from `status` so a lead can be, say, "Applied" and delisted at the same time without either field overwriting the other. All fields are optional per call.
+- `POST /api/leads/:id/status` - body `{ status }` - validates against `LEAD_STATUS`; if the new status is "Applied", atomically also creates the matching application row unless one already exists.
+- `POST /api/applications/:id/status` - body `{ status }` - validates against `APP_STATUS`; stamps the matching Stage history date if that column is still empty.
+- `POST /api/delete-application` - body `{ "id": ... }` - removes one application row (leads are never deleted, only re-statused).
+
+### Config and prompts
+
+- `GET /api/config` -> `{ tracks: [{key, label, full_description, sort_order, last_run, ...search config}], settings }` - this person's config: the track tabs, labels, display title, priority-location rules and staleness threshold the client renders from, plus the per-track search config and prose settings the prompt is composed from. Each track's `last_run` is its `search_runs` row (`{at, on, status, leads_added, screened_added, delisted, note}`; all-empty means never recorded).
+- `POST /api/config` - body `{ tracks?, display_title?, overview_label?, applications_label?, stale_run_hours?, priority_locations?, geo_scope_line?, scope_clause?, scope_disqualifier?, location_guidance?, footer_note?, pronouns? }`. `tracks`, if present, **replaces this person's whole track list** (existing leads keep their `search` value even if its track is removed - they just lose their tab, they're never deleted) and keeps `search_runs` 1:1 with it. It never touches anyone else's tracks. Each track entry may carry its search config: `role_search_line`, `target_companies` (array, or a string when the list has prose structure), `search_note`, `resume_line`, `fit_clause`, `fit_disqualifier`, `fit_filter_step`, `leads_note`, `doc_file`, `doc_summary`, `doc_update_line`, `intro_note`, `report_line`, `screened_examples`, `schedule_time`.
+- `GET /api/prompt/:key` -> **`text/plain`** - the daily search prompt for that track, composed from the config above (see `src/prompt.js`). This is what `run-search.ps1` pipes into the CLI, and the fastest way to check what a search will actually do. 404s on a key this person doesn't have.
+- `OPTIONS *` - CORS preflight for any route above - no auth, returns `204` + `CORS_HEADERS`. Every real response (including error responses) carries `CORS_HEADERS` too (`Access-Control-Allow-Origin: *` - the session token, not the origin, is the access boundary, and it is never a cookie, so there's nothing here for a hostile origin to ride on).
+
+### Config fields are mostly prose, on purpose
+
+Most of the per-track config is the finished sentence the prompt uses, not a
+keyword the worker expands into one. That's a decision the migration forced:
+the hand-maintained prompt files these replaced had drifted from the template
+that generated them, and the drift carried real weight - a resume line naming
+a `.txt` fallback because the machine can't read `.docx`, a sentence widening
+a company list beyond its apparent industry, worked examples of what counts
+as out of scope. Reducing those to keywords and regenerating the sentences
+lost them silently. Only the fields the app itself reads (`key`, `label`,
+`sort_order`, `schedule_time`, `target_companies`) are structured.
+
+## Security notes
+
+- **`/api/login` has no rate limiting.** A guessable password is brute-forcible
+  over the internet in a way the old 32-byte shared token wasn't. PBKDF2 at
+  100k iterations makes each attempt cost real worker CPU - which is also its
+  own small denial-of-service surface - and the 12-character minimum is the
+  rest of the defence. A per-name attempt throttle is a sensible follow-up.
+- **Isolation is app-level, not privacy from the operator.** Whoever holds
+  the Cloudflare account can read every user's rows directly in D1. This is
+  for people who are fine with that; it is not a multi-tenant SaaS boundary.
+- **Tokens never expire.** Revoke by deleting the `sessions` row (see
+  [Accounts](#accounts)). Losing a laptop means revoking its session, not
+  rotating one secret shared by every machine and person - which is what the
+  old model would have required.

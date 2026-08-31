@@ -21,14 +21,15 @@ URL has to live outside that directory, not be filtered out of it.
 
 One deployed client always talks to one server - the API URL is a
 **deploy-time setting**, not something a visitor types in (there's no field
-for it on the gate; only the token is a runtime, per-visitor value).
+for it on the gate; the name and password are the runtime, per-visitor
+values).
 
 `public/index.html` reads it from `local-config.js` - **gitignored, never
 committed**, same treatment as this repo's private job data (an API URL
-isn't a secret the way the token is, but it's still *your* deployment's own
-detail, not something that belongs in the tracked template other installers
-fork from). **Required, not optional:** without it, the gate shows "This
-deployment has no API URL configured" instead of a way to sign in.
+isn't a secret the way a credential is, but it's still *your* deployment's
+own detail, not something that belongs in the tracked template other
+installers fork from). **Required, not optional:** without it, the gate shows
+"This deployment has no API URL configured" instead of a way to sign in.
 
 ```bat
 cd client\public
@@ -38,9 +39,25 @@ Edit the copy, set `LOCAL_API_BASE` to your `../server/` deploy's URL, then
 deploy (`wrangler deploy` from `client/` - it uploads whatever's on disk,
 `local-config.js` included, regardless of it not being in git).
 
-Once entered, the token is remembered in `localStorage` (`tracker_token` -
-per-browser, never sent anywhere but to `LOCAL_API_BASE`), so a second
-device/browser needs the same one-time entry.
+## Signing in
+
+The gate asks for a **name and password**. It posts them once to
+`/api/login`, which returns a session token; that token is what every later
+request carries, and the password is never stored and never sent again. The
+token lives in `localStorage` (`tracker_token`, alongside `tracker_name` for
+prefilling the gate next time) - per-browser, never sent anywhere but to
+`LOCAL_API_BASE` - so each device signs in once.
+
+**Log out** (in the header) revokes that token on the server, not just
+locally, and clears the view preferences with it, so the next person to sign
+in on the same browser doesn't land on someone else's tab. It leaves that
+person's other sessions alone - notably the long-lived one their scheduled
+searches use, which keeps running.
+
+Accounts are created by whoever operates the deployment; there's no sign-up
+here. See [`../server/README.md`](../server/README.md)'s Accounts section.
+One deployment can serve several people - each sees only their own tracks,
+leads, applications, page title and location rules.
 
 ## One-time setup
 
@@ -69,7 +86,8 @@ Cloudflare's own environment.
    redeploy it if you set that up) - see "How it finds its API" above. Skip
    this and the deployed page shows "This deployment has no API URL
    configured" instead of a sign-in screen.
-5. Open the client and enter your server's `API_TOKEN`. Click Enter - it's
+5. Open the client and sign in with the name and password of the account you
+   created in [`../server/README.md`](../server/README.md)'s setup - it's
    remembered in this browser for next time.
 6. **Expect an empty page here.** A newly created database has no tracks,
    title or location rules of its own - the schema seeds nothing - so you'll
