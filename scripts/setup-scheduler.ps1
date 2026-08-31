@@ -116,6 +116,11 @@ Write-Host "`n== Registering scheduled tasks ==" -ForegroundColor Cyan
 $ownedPrefixes = @()
 $registered = @()
 
+# Shared across everyone on the machine, not reset per person: they all run
+# through this machine's one Claude CLI, so two people's unscheduled tracks
+# both landing on 08:00 is the collision this is here to avoid.
+$auto = [datetime]"08:00"
+
 foreach ($person in $people) {
     $label = if ($person.Id) { $person.Id } else { "single-user" }
     try {
@@ -132,14 +137,16 @@ foreach ($person in $people) {
 
     # Task names are prefixed per person so two people's tracks can share a
     # key ("SWE") without colliding, and so cleanup can tell whose is whose.
-    $prefix = if ($person.Id) { "JobSearch-$($person.Id.Substring(0, 8))-" } else { "JobSearch-" }
+    # Substring guarded: a data-dir folder someone named by hand rather than
+    # by GUID could be shorter than 8 characters, and an unguarded Substring
+    # would throw and abort the whole run under ErrorActionPreference=Stop.
+    $prefix = if ($person.Id) {
+        $short = if ($person.Id.Length -ge 8) { $person.Id.Substring(0, 8) } else { $person.Id }
+        "JobSearch-$short-"
+    } else { "JobSearch-" }
     $ownedPrefixes += $prefix
 
-    # Auto-stagger anything without a configured time, starting at 08:00 and
-    # 30 minutes apart. Searches take several minutes each and every person's
-    # runs share this machine's one Claude CLI, so overlapping them helps
-    # nobody.
-    $auto = [datetime]"08:00"
+    # Auto-stagger anything without a configured time, 30 minutes apart.
     foreach ($track in ($config.tracks | Sort-Object sort_order, key)) {
         $time = $track.schedule_time
         if (-not $time -or $time -notmatch '^\d{2}:\d{2}$') {
@@ -147,9 +154,24 @@ foreach ($person in $people) {
             $auto = $auto.AddMinutes(30)
         }
         $name = $prefix + (ConvertTo-TaskSuffix $track.key)
+        # Two keys differing only by separator ("technical-pm" / "technical_pm")
+        # produce one suffix, and schtasks /F would silently overwrite - one of
+        # the two searches would just stop running.
+        if ($registered -contains $name) {
+            Write-Warning "  $($track.key) collides with an already-registered task name ($name) - skipped. Rename one of the track keys."
+            continue
+        }
         $userArg = if ($person.Id) { " -User $($person.Id)" } else { "" }
         $action = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$runScript`" -Task $($track.key)$userArg -DataDir `"$DataDir`""
+        # /TR has a 261-character limit and native exes don't trip
+        # ErrorActionPreference, so a too-long path (or any other failure)
+        # would otherwise print the same cheerful line as a success and leave
+        # a track silently unscheduled.
         schtasks /Create /TN $name /TR $action /SC DAILY /ST $time /F | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "  FAILED to register $name (schtasks exit $LASTEXITCODE). Action string is $($action.Length) chars; /TR's limit is 261."
+            continue
+        }
         Write-Host "  $name - daily at $time ($label / $($track.key))"
         $registered += $name
     }
@@ -159,7 +181,18 @@ if ($ownedPrefixes.Count -gt 0) {
     $stale = Get-ScheduledTask -TaskName "JobSearch-*" -ErrorAction SilentlyContinue | Where-Object {
         $taskName = $_.TaskName
         $mine = $false
-        foreach ($p in $ownedPrefixes) { if ($taskName.StartsWith($p)) { $mine = $true } }
+        foreach ($p in $ownedPrefixes) {
+            # The legacy single-user prefix is a bare "JobSearch-", which is
+            # also a prefix of every per-user name ("JobSearch-ab266b6c-Swe").
+            # Matching on it alone would claim - and then delete - every other
+            # person's tasks, which is precisely what this scoping exists to
+            # prevent. Reachable whenever the legacy branch fires on a machine
+            # that also has per-user folders: a -DataDir pointing elsewhere, a
+            # tracker.json mid-write, or a half-migrated machine that still
+            # has the old environment variables set.
+            if ($p -eq "JobSearch-" -and $taskName -match '^JobSearch-[0-9a-f]{8}-') { continue }
+            if ($taskName.StartsWith($p)) { $mine = $true }
+        }
         $mine -and ($registered -notcontains $taskName)
     }
     if ($stale) {

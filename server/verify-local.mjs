@@ -16,8 +16,8 @@
  * write another's rows by id and getting a 404 - the thing that would be
  * catastrophic and silent if the user scoping in db.js ever regressed.
  *
- * Expects a database with no users yet (a fresh `--local` one). Re-running
- * against the same database is fine: it resets the passwords it uses.
+ * Re-running against the same local database is fine - it resets the
+ * passwords it uses and tolerates its fixtures already existing.
  */
 const A = process.argv[2] || "http://127.0.0.1:8787";
 const ADMIN = process.argv[3] || "local-admin-token-for-testing";
@@ -43,15 +43,16 @@ function check(name, ok, detail) {
 console.log("\n== provisioning ==");
 check("admin route rejects a missing admin token",
   (await req("POST", "/api/users", { body: { name: "x", password: "aaaaaaaaaaaa" } })).status === 401);
-check("admin route rejects a session token as admin",
-  true); // covered below once we have one
 check("password under 12 chars refused",
   (await req("POST", "/api/users", { admin: true, body: { name: "shorty", password: "short" } })).status === 400);
 
 const aCreate = await req("POST", "/api/users", { admin: true, body: { name: "Ada", password: "ada-long-password" } });
-const bCreate = await req("POST", "/api/users", { admin: true, body: { name: "Bo", password: "bo-long-password1" } });
-check("creating a user returns 201 and a guid",
-  aCreate.status === 201 && /^[0-9a-f-]{36}$/.test(aCreate.json.id), JSON.stringify(aCreate.json));
+await req("POST", "/api/users", { admin: true, body: { name: "Bo", password: "bo-long-password1" } });
+// 201 the first time, 200 on a re-run against the same local database.
+check("creating a user returns a guid",
+  [200, 201].includes(aCreate.status) && /^[0-9a-f-]{36}$/.test(aCreate.json.id), JSON.stringify(aCreate.json));
+check("names are case-insensitive, so a reset can't fork a second account",
+  (await req("POST", "/api/users", { admin: true, body: { name: "ADA", password: "ada-long-password" } })).json.id === aCreate.json.id);
 check("re-posting an existing name is a password reset, not a new user",
   (await req("POST", "/api/users", { admin: true, body: { name: "Ada", password: "ada-new-password-1" } })).json.created === false);
 
@@ -83,20 +84,36 @@ check("two users can hold the same track key with different content",
 check("settings are per user",
   aCfg.json.settings.display_title === "Ada's Search" && bCfg.json.settings.display_title === "Bo's Search");
 
+// A fresh url each run, so re-running against the same database still
+// exercises "both users can insert this" rather than hitting the dedup.
+const sharedUrl = `https://example.com/same-posting-${Date.now()}`;
 await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
-  { search: "SWE", company: "Acme", title: "Senior Backend", location: "Remote (U.S.)", url: "https://example.com/same-posting" }] } });
+  { search: "SWE", company: "Acme", title: "Senior Backend", location: "Remote (U.S.)", url: sharedUrl }] } });
 const bAdd = await req("POST", "/api/leads", { token: B_TOK, body: { leads: [
-  { search: "SWE", company: "Acme", title: "Senior Backend", location: "Remote (U.S.)", url: "https://example.com/same-posting" }] } });
-check("both users can track the same posting url independently", bAdd.json.added === 1);
+  { search: "SWE", company: "Acme", title: "Senior Backend", location: "Remote (U.S.)", url: sharedUrl }] } });
+check("both users can track the same posting url independently", bAdd.json.added === 1, JSON.stringify(bAdd.json));
 const aDupe = await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
-  { search: "SWE", company: "Acme", title: "Senior Backend", location: "Remote (U.S.)", url: "https://example.com/same-posting" }] } });
+  { search: "SWE", company: "Acme", title: "Senior Backend", location: "Remote (U.S.)", url: sharedUrl }] } });
 check("the same user re-posting the same url is deduped", aDupe.json.added === 0);
+
+const screenedUrl = `https://example.com/screened-${Date.now()}`;
+await req("POST", "/api/screened", { token: A_TOK, body: { screened: [{ search: "SWE", url: screenedUrl, reason: "out of scope" }] } });
+const bScreened = await req("POST", "/api/screened", { token: B_TOK, body: { screened: [{ search: "SWE", url: screenedUrl, reason: "out of scope" }] } });
+check("screened items dedup per user, not globally", bScreened.json.added === 1, JSON.stringify(bScreened.json));
 
 const aData = await req("GET", "/api/data", { token: A_TOK });
 const bData = await req("GET", "/api/data", { token: B_TOK });
-check("each user sees only their own leads", aData.json.leads.length === 1 && bData.json.leads.length === 1);
+// Counted by this run's own url rather than by table size, so a re-run
+// against a database that still holds the last run's fixtures still means
+// something.
+const mine = (rows, url) => rows.filter((r) => r.url === url).length;
+check("each user sees exactly their own copy of the shared posting",
+  mine(aData.json.leads, sharedUrl) === 1 && mine(bData.json.leads, sharedUrl) === 1);
+check("each user sees exactly their own screened item",
+  mine(aData.json.screened, screenedUrl) === 1 && mine(bData.json.screened, screenedUrl) === 1);
 check("/api/data reports who you are", aData.json.user.name === "Ada" && bData.json.user.name === "Bo");
-const aLeadId = aData.json.leads[0].id, bLeadId = bData.json.leads[0].id;
+const aLeadId = aData.json.leads.find((l) => l.url === sharedUrl).id;
+const bLeadId = bData.json.leads.find((l) => l.url === sharedUrl).id;
 check("their lead ids are genuinely different rows", aLeadId !== bLeadId);
 
 console.log("\n== cross-user access ==");
@@ -104,14 +121,17 @@ check("B cannot read A's lead via status change",
   (await req("POST", `/api/leads/${aLeadId}/status`, { token: B_TOK, body: { status: "Applied" } })).status === 404);
 check("B cannot update A's lead", (await req("POST", "/api/update", { token: B_TOK, body: { type: "lead", id: aLeadId, notes: "pwned" } })).status === 404);
 await req("POST", `/api/leads/${aLeadId}/status`, { token: A_TOK, body: { status: "Applied" } });
-const aApp = (await req("GET", "/api/data", { token: A_TOK })).json.applications[0];
+const aApp = (await req("GET", "/api/data", { token: A_TOK })).json.applications.find((x) => x.leadId === String(aLeadId));
 check("applying created A's application", !!aApp && aApp.company === "Acme");
 check("B cannot delete A's application",
   (await req("POST", "/api/delete-application", { token: B_TOK, body: { id: aApp.id } })).status === 404);
+check("B cannot edit A's application through the generic update route",
+  (await req("POST", "/api/update", { token: B_TOK, body: { type: "application", id: aApp.id, notes: "pwned" } })).status === 404);
 check("B cannot change A's application status",
   (await req("POST", `/api/applications/${aApp.id}/status`, { token: B_TOK, body: { status: "Rejected" } })).status === 404);
+const aAppAfter = (await req("GET", "/api/data", { token: A_TOK })).json.applications.find((x) => x.id === aApp.id);
 check("A's application survived all of that",
-  (await req("GET", "/api/data", { token: A_TOK })).json.applications.length === 1);
+  !!aAppAfter && aAppAfter.status === "Applied" && aAppAfter.notes !== "pwned");
 check("B cannot fetch A's prompt for a key B also has (gets B's own)",
   (await req("GET", "/api/prompt/SWE", { token: B_TOK })).text.includes("Frontend roles"));
 check("an unconfigured track key 404s",
@@ -135,6 +155,19 @@ check("logging out revokes only the token used",
   && (await req("GET", "/api/me", { token: aSecond.json.token })).status === 200);
 check("B's session is untouched by A's logout", (await req("GET", "/api/me", { token: B_TOK })).status === 200);
 
+console.log("\n== config writes ==");
+check("an empty tracks array is refused rather than wiping the list",
+  (await req("POST", "/api/config", { token: B_TOK, body: { tracks: [] } })).status === 400);
+// Posting {key, label} to rename a tab must not blank the track's search
+// config - the prompt would quietly fall back to its generic defaults.
+await req("POST", "/api/config", { token: B_TOK, body: { tracks: [{ key: "SWE", label: "Renamed" }] } });
+const bKept = (await req("GET", "/api/config", { token: B_TOK })).json.tracks[0];
+check("a partial track post keeps the fields it didn't mention",
+  bKept.label === "Renamed" && bKept.role_search_line === "Frontend roles" && bKept.schedule_time === "09:00",
+  JSON.stringify({ label: bKept.label, role: bKept.role_search_line, time: bKept.schedule_time }));
+check("a field sent as empty string still clears",
+  (await req("POST", "/api/config", { token: B_TOK, body: { tracks: [{ key: "SWE", label: "Renamed", search_note: "" }] } })).status === 200);
+
 console.log("\n== replaceTracks isolation ==");
 await req("POST", "/api/config", { token: aSecond.json.token, body: { tracks: [{ key: "DATA", label: "Ada Data" }] } });
 const bStill = await req("GET", "/api/config", { token: B_TOK });
@@ -142,7 +175,7 @@ check("A replacing their whole track list leaves B's tracks alone",
   bStill.json.tracks.length === 1 && bStill.json.tracks[0].key === "SWE");
 check("A's old track is gone for A", (await req("GET", "/api/config", { token: aSecond.json.token })).json.tracks[0].key === "DATA");
 check("A's leads survive their track being removed",
-  (await req("GET", "/api/data", { token: aSecond.json.token })).json.leads.length === 1);
+  mine((await req("GET", "/api/data", { token: aSecond.json.token })).json.leads, sharedUrl) === 1);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

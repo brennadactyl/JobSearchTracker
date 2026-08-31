@@ -168,12 +168,19 @@ wrangler d1 execute job-search-tracker-db --remote \
   --command "DELETE FROM sessions WHERE user_id = '<guid>' AND label = 'scheduled-search'"
 ```
 
-**See who exists, and what they hold:**
+**See who exists, and what they hold.** `sessions.id` is a SHA-256 of the
+token, not the token, so this (and a `d1 export`) shows what exists without
+handing out anything usable:
 
 ```bash
 wrangler d1 execute job-search-tracker-db --remote \
   --command "SELECT u.name, s.label, s.created_at FROM users u LEFT JOIN sessions s ON s.user_id = u.id ORDER BY u.name"
 ```
+
+Sessions have no expiry and nothing prunes them, so a person who signs in
+from a lot of browsers accumulates rows. Harmless, but that's the query to
+notice it with, and a `DELETE FROM sessions WHERE user_id = '<guid>'` signs
+that person out everywhere.
 
 ## Updating after code changes
 
@@ -192,35 +199,55 @@ wrangler deploy
 ### Migrating an existing deployment to multi-user
 
 `0002_multi_user.sql` gives every table an owner and replaces the old shared
-`API_TOKEN` with accounts. Against a database that already has data, run it
-in this order - it's designed so the already-registered scheduled searches
-never stop working:
+`API_TOKEN` with accounts.
+
+> **The window between migrating and deploying is not safe, and it fails
+> quietly.** Once the migration has run, the *old* Worker code is talking to
+> the *new* schema, and its writes don't work: `INSERT OR IGNORE` into `leads`
+> and `screened` no longer matches the new UNIQUE constraint, so it inserts
+> nothing and returns `{"added": 0}` - a success-shaped response a scheduled
+> search will happily report a clean run on, having thrown away everything it
+> found that morning. `/api/runs` and any status edit 500 outright, and an
+> application added by hand lands with an empty `user_id` and is invisible
+> afterwards. So: **disable the scheduled tasks first, and do steps 2-5 back
+> to back**, outside every track's `schedule_time`.
 
 1. **Back up first.** `wrangler d1 export job-search-tracker-db --remote
-   --output backup.sql`.
+   --output backup.sql`. Then stop the searches for the duration:
+   ```powershell
+   Get-ScheduledTask -TaskName "JobSearch-*" | Disable-ScheduledTask
+   ```
 2. `wrangler d1 migrations apply job-search-tracker-db --remote` - creates
    `users`/`sessions` and assigns every existing row to one account named
    `owner`, with login disabled (SQL can't hash a password).
 3. `wrangler secret put ADMIN_TOKEN` - a fresh value, not the old `API_TOKEN`.
 4. Keep the running searches authenticating by turning the token they already
-   have into a session:
-   ```bash
-   wrangler d1 execute job-search-tracker-db --remote \
-     --command "INSERT INTO sessions (id, user_id, created_at, label) VALUES ('<the current API_TOKEN value>', 'ab266b6c-00cc-45d1-92ac-cdad412c1558', date('now'), 'legacy scheduled search')"
+   have into a session. `sessions.id` holds the SHA-256 of a token, not the
+   token, so insert the hash:
+   ```powershell
+   $t = "<the current API_TOKEN value>"
+   $h = [Convert]::ToBase64String([System.Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($t)))
+   wrangler d1 execute job-search-tracker-db --remote --command "INSERT INTO sessions (id, user_id, created_at, label) VALUES ('$h', 'ab266b6c-00cc-45d1-92ac-cdad412c1558', date('now'), 'legacy scheduled search')"
    ```
-   Nothing on the search machine changes, and the credential stays revocable
-   by deleting that one row later.
-5. `wrangler deploy`, then deploy the client. Steps 2-4 finish before any new
-   code is live, so no request 401s in between.
-6. Give the account a real name and password:
+   Nothing on the search machine changes - it keeps sending the same token -
+   and the credential stays revocable by deleting that one row later.
+5. `wrangler deploy`, then deploy the client. Re-enable the scheduled tasks
+   (`Get-ScheduledTask -TaskName "JobSearch-*" | Enable-ScheduledTask`) once
+   both are live.
+6. Give the account a real name and password. **The two names must match** -
+   `POST /api/users` with a name that doesn't match an existing account
+   creates a new empty one rather than setting the password on this one.
+   (Case doesn't matter: `users.name` is `COLLATE NOCASE`.)
    ```bash
    wrangler d1 execute job-search-tracker-db --remote \
      --command "UPDATE users SET name = 'Your Name' WHERE name = 'owner'"
    curl -s -X POST "$TRACKER_URL/api/users" -H "Authorization: Bearer $ADMIN_TOKEN" \
      -H "Content-Type: application/json" -d '{"name":"Your Name","password":"..."}'
    ```
+   Check it returned `"created": false`. If it says `true`, the names didn't
+   match and you now have a second, empty account - delete it and retry.
    Then sign in on the webpage.
-7. Delete the old `API_TOKEN` secret - its value now lives only as that
+7. Delete the old `API_TOKEN` secret - its value now works only as that
    session row.
 8. Move each track's search config into D1 and retire the prompt files. Post
    the config (the `job-search-setup` skill does this), then **diff before
@@ -314,7 +341,7 @@ lost them silently. Only the fields the app itself reads (`key`, `label`,
 
 There's no CI and no test suite, but there is one property worth checking
 before every deploy: **two people's data cannot reach each other.**
-`verify-local.mjs` is 34 checks of exactly that - one user trying to read and
+`verify-local.mjs` is 40 checks of exactly that - one user trying to read and
 write another's leads, applications, tracks, runs and prompts by id, and
 getting a 404 each time - plus the auth behaviour around it (password reset,
 indistinguishable login failures, per-token revocation).

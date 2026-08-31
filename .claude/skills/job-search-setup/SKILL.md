@@ -79,7 +79,7 @@ user id. So the first question is *whose* search this is.
 
 ### 2. Get the resume(s)
 
-- Ask the installer to place their resume file(s) in `<data dir>/resumes/`
+- Ask the installer to place their resume file(s) in `<data dir>/<user id>/resumes/`
   if they haven't already (any format - `.docx`, `.pdf`, `.txt`).
 - Read it. Plain text/Markdown: read directly. PDF: use the Read tool
   (supports PDF). `.docx`: use the `docx` skill to extract text, or ask the

@@ -235,8 +235,11 @@ has settled.
    stays revocable by deleting that one row.
 5. `wrangler deploy` the server, then the client. Steps 2-4 finish before any
    new code is live, so no request window 401s.
-6. `POST /api/users` with `ADMIN_TOKEN` to set the first user's password; sign
-   in from the browser.
+6. Rename the backfill account (`UPDATE users SET name = ...`), then
+   `POST /api/users` with `ADMIN_TOKEN` **using that same name** to set its
+   password; sign in from the browser. A name that doesn't match creates a
+   second, empty account instead - check the response says
+   `"created": false`. `server/README.md` has the exact commands.
 7. Delete the `API_TOKEN` secret - its value now lives only as that session row.
 8. Provision user 2 and run the setup skill for them.
 

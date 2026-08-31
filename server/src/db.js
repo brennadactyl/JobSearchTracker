@@ -369,6 +369,20 @@ export class Db {
    */
   async replaceTracks(tracks) {
     const cols = [...TRACK_DISPLAY_FIELDS, ...TRACK_CONFIG_FIELDS];
+
+    // A field the payload doesn't mention keeps its stored value, rather than
+    // being overwritten with ''. `tracks` replaces the *list* - which tracks
+    // exist - but a caller posting `{key, label}` to rename a tab is not
+    // asking to erase that track's target companies, resume line and schedule.
+    // Without this they'd be silently blanked, and the next morning's prompt
+    // would fall back to its generic defaults and still look fine. Clearing a
+    // field is done by sending it as "".
+    const existing = {};
+    const current = await this.d1
+      .prepare(`SELECT key, ${TRACK_CONFIG_FIELDS.join(", ")} FROM tracks WHERE user_id = ?`)
+      .bind(this.userId)
+      .all();
+    for (const row of current.results) existing[row.key] = row;
     const stmt = this.d1.prepare(
       `INSERT INTO tracks (user_id, key, ${cols.join(", ")})
        VALUES (?, ?, ${cols.map(() => "?").join(", ")})
@@ -400,7 +414,9 @@ export class Db {
             // target_companies is the one structured field: accept an array
             // and store it as JSON, or pass through a string that already is.
             if (f === "target_companies" && Array.isArray(t[f])) return JSON.stringify(t[f]);
-            return typeof t[f] === "string" ? t[f] : "";
+            if (typeof t[f] === "string") return t[f];
+            const kept = existing[t.key] && existing[t.key][f];
+            return typeof kept === "string" ? kept : "";
           })
         )
       ),

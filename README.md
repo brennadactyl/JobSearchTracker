@@ -170,7 +170,7 @@ note after each step if you'd rather do it the traditional way instead.
 6. **Test one run before trusting the schedule** - the previous step prints
    the exact command for whichever tracks it just registered, e.g.:
    ```bat
-   schtasks /Run /TN JobSearch-Engineering
+   schtasks /Run /TN JobSearch-ab266b6c-Engineering
    ```
    Check `private\<user-id>\logs\<track>.log` for what happened, then reload the
    tracker page: that track's tab should now show when it last ran and what

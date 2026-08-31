@@ -19,10 +19,18 @@
  * Web Crypto, so this file adds nothing to install or audit.
  */
 
+// 100k rather than the ~600k OWASP suggests for PBKDF2-SHA256, deliberately:
+// this runs inside a Worker request, where CPU time is both metered and
+// capped, and a login is already the slowest thing this API does. The
+// `iterations` column is stored per user so this can be raised later without
+// invalidating anyone's password.
 const PBKDF2_ITERATIONS = 100000;
 const DERIVED_BITS = 256;
 const SALT_BYTES = 16;
 const TOKEN_BYTES = 32;
+
+// Used when no account matches the name given at login - see verifyPassword.
+const DUMMY_SALT = "AAAAAAAAAAAAAAAAAAAAAA==";
 
 /** @typedef {{id: string, name: string, password_hash: string, password_salt: string, iterations: number, created_at: string}} User */
 
@@ -85,7 +93,16 @@ export async function verifyPassword(password, user) {
   // An empty stored hash means login is disabled (the state the migration's
   // backfill row starts in, before POST /api/users sets a real password). Fail
   // closed rather than treating "no password" as "any password".
-  if (!user || !user.password_hash || !user.password_salt) return false;
+  //
+  // Derive anyway before failing. Returning early here would make a login for
+  // a name that doesn't exist measurably faster than one with a wrong
+  // password - ~15ms against ~48ms, trivially separable over the network -
+  // which hands out exactly the "does this person have an account here?"
+  // answer that the identical error message is there to withhold.
+  if (!user || !user.password_hash || !user.password_salt) {
+    await hashPassword(password, DUMMY_SALT, PBKDF2_ITERATIONS);
+    return false;
+  }
   const { hash } = await hashPassword(password, user.password_salt, user.iterations || PBKDF2_ITERATIONS);
   return timingSafeEqual(hash, user.password_hash);
 }
@@ -93,6 +110,21 @@ export async function verifyPassword(password, user) {
 /** @returns {string} a new bearer token - 32 random bytes, base64url */
 export function newSessionToken() {
   return toBase64Url(crypto.getRandomValues(new Uint8Array(TOKEN_BYTES)));
+}
+
+/**
+ * What actually goes in `sessions.id`. The token itself is never stored: 32
+ * random bytes need no salt or stretching to be unguessable, but storing them
+ * as-is would mean a `d1 export`, a backup file, or the audit query in the
+ * README each hand over working credentials for every signed-in device. A
+ * plain SHA-256 costs one hash per request and makes the stored row useless
+ * to anyone who reads it.
+ * @param {string} token
+ * @returns {Promise<string>}
+ */
+export async function hashToken(token) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+  return toBase64(new Uint8Array(digest));
 }
 
 /** Pulls the bearer token out of a request, or "" if there isn't one. */
@@ -118,7 +150,7 @@ export async function getSessionUser(d1, token) {
        FROM sessions s JOIN users u ON u.id = s.user_id
        WHERE s.id = ?`
     )
-    .bind(token)
+    .bind(await hashToken(token))
     .first();
   return row || null;
 }
@@ -142,14 +174,15 @@ export async function createSession(d1, userId, label) {
   const token = newSessionToken();
   await d1
     .prepare("INSERT INTO sessions (id, user_id, created_at, label) VALUES (?, ?, ?, ?)")
-    .bind(token, userId, new Date().toISOString(), (label || "browser").slice(0, 60))
+    .bind(await hashToken(token), userId, new Date().toISOString(), (label || "browser").slice(0, 60))
     .run();
+  // The only time the token itself exists anywhere; the row holds its hash.
   return token;
 }
 
 /** @param {D1Database} d1 @param {string} token @returns {Promise<boolean>} */
 export async function deleteSession(d1, token) {
-  const result = await d1.prepare("DELETE FROM sessions WHERE id = ?").bind(token).run();
+  const result = await d1.prepare("DELETE FROM sessions WHERE id = ?").bind(await hashToken(token)).run();
   return result.meta.changes > 0;
 }
 

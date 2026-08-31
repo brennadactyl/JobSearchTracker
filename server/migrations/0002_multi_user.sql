@@ -25,7 +25,14 @@
 -- person doesn't rewrite their data.
 CREATE TABLE IF NOT EXISTS users (
   id            TEXT PRIMARY KEY,        -- GUID, from crypto.randomUUID()
-  name          TEXT NOT NULL UNIQUE,    -- login + display only
+  -- COLLATE NOCASE so "Brenna" and "brenna" are one account, not two. Someone
+  -- typing their own name into a login form will not reproduce their own
+  -- capitalisation reliably, and the failure without this is nasty: a
+  -- password reset for a name that differs by one letter silently creates a
+  -- *second*, empty account, and the person signs in to an empty tracker
+  -- while all their data sits behind the original. (ASCII-only folding, which
+  -- is all SQLite offers - fine for names typed into a sign-in box.)
+  name          TEXT NOT NULL UNIQUE COLLATE NOCASE,  -- login + display only
   -- PBKDF2-SHA256 derived bits and salt, both base64. An empty hash means
   -- login is disabled for this user: it's the state the backfill row below
   -- starts in, since SQL can't run PBKDF2 - POST /api/users sets the real one.
@@ -47,7 +54,11 @@ CREATE TABLE IF NOT EXISTS users (
 -- search holds one long-lived session, each browser holds its own, and either
 -- can be killed without disturbing the other.
 CREATE TABLE IF NOT EXISTS sessions (
-  id         TEXT PRIMARY KEY,       -- the bearer token itself: 32 random bytes, base64url
+  -- SHA-256 of the bearer token, base64 - not the token. The token is 32
+  -- random bytes and needs no stretching, but storing it as-is would make a
+  -- `d1 export`, a backup, or an admin's audit query hand over working
+  -- credentials for every signed-in device. See src/auth.js's hashToken.
+  id         TEXT PRIMARY KEY,
   user_id    TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT '',
   label      TEXT NOT NULL DEFAULT ''  -- 'browser' | 'scheduled-search' | 'legacy scheduled search'
@@ -70,8 +81,10 @@ INSERT INTO users (id, name, password_hash, password_salt, iterations, created_a
 SELECT 'ab266b6c-00cc-45d1-92ac-cdad412c1558', 'owner', '', '', 100000, date('now')
 WHERE EXISTS (SELECT 1 FROM leads)
    OR EXISTS (SELECT 1 FROM applications)
-   OR EXISTS (SELECT 1 FROM tracks)
-   OR EXISTS (SELECT 1 FROM meta);
+   OR EXISTS (SELECT 1 FROM screened)
+   OR EXISTS (SELECT 1 FROM search_runs)
+   OR EXISTS (SELECT 1 FROM meta)
+   OR EXISTS (SELECT 1 FROM tracks);
 
 -- ---------------------------------------------------------------- leads --
 
