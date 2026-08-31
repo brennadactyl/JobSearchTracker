@@ -36,7 +36,8 @@ tracks, leads, applications, page titles and location rules.
   bound to one user id at construction, so no query can forget to filter.
 - `src/prompt.js` - composes a track's daily search prompt from its config.
 - `verify-local.mjs` - the cross-user isolation checks, run against a local
-  `wrangler dev`. See [Verifying](#verifying-a-change) below.
+  `wrangler dev`. `verify-migration.mjs` - what `0002` does to a database that
+  already has data. See [Verifying](#verifying-a-change) below.
 - `migrations/` - `0001_schema.sql` creates every table; `0002_multi_user.sql`
   adds accounts and gives every table an owner. See below.
 
