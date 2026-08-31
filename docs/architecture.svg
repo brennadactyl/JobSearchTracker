@@ -39,7 +39,7 @@
     <text x="330" y="188">POST /api/leads</text>
     <text x="330" y="204" opacity="0.75">curl + Bearer token</text>
     <text x="878" y="176">fetch /api/data, /api/update</text>
-    <text x="878" y="192" opacity="0.75">cross-origin, CORS + Bearer token</text>
+    <text x="878" y="192" opacity="0.75">cross-origin, CORS + session token</text>
   </g>
 
   <!-- ===== boxes ===== -->
@@ -61,7 +61,7 @@
   <g>
     <rect x="40" y="280" width="260" height="90" rx="9" fill="#F7ECDA" stroke="#A9660E" stroke-width="1.4" />
     <text x="60" y="308" font-family="'Archivo', sans-serif" font-weight="700" font-size="15" fill="#A9660E">private/ — local only</text>
-    <text x="60" y="328" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.75">docs, resumes, prompts</text>
+    <text x="60" y="328" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.75">docs, resumes, logs</text>
     <text x="60" y="343" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.75">gitignored — never committed</text>
     <text x="60" y="358" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.75">candidate profile, target cos.</text>
   </g>
@@ -94,7 +94,7 @@
     <text x="1160" y="168" font-family="'Archivo', sans-serif" font-weight="700" font-size="15" fill="#1D2027">Browser</text>
     <text x="1160" y="188" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.65">view + edit status, notes</text>
     <text x="1160" y="203" font-family="'Source Sans 3', sans-serif" font-size="12" fill="#1D2027" opacity="0.65">mark applied, add details</text>
-    <text x="1160" y="221" font-family="'Space Mono', monospace" font-size="11" fill="#1D2027" opacity="0.65">token in localStorage</text>
+    <text x="1160" y="221" font-family="'Space Mono', monospace" font-size="11" fill="#1D2027" opacity="0.65">session token in localStorage</text>
   </g>
 
   <g>

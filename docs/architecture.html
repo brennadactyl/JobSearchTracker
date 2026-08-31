@@ -176,7 +176,7 @@
           <text x="330" y="188">POST /api/leads</text>
           <text x="330" y="204" opacity="0.75">curl + Bearer token</text>
           <text x="878" y="176">fetch /api/data, /api/update</text>
-          <text x="878" y="192" opacity="0.75">cross-origin, CORS + Bearer token</text>
+          <text x="878" y="192" opacity="0.75">cross-origin, CORS + session token</text>
         </g>
         <g font-family="Space Mono, monospace" font-size="11.5" fill="currentColor">
           <text x="734" y="260">SQL</text>
@@ -207,7 +207,7 @@
         <g>
           <rect x="40" y="280" width="260" height="90" rx="9" fill="var(--private-soft)" stroke="var(--private)" stroke-width="1.4" opacity="0.95" />
           <text x="60" y="308" font-family="Archivo, sans-serif" font-weight="700" font-size="15" fill="var(--private)">private/ — local only</text>
-          <text x="60" y="328" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.75">docs, resumes, prompts</text>
+          <text x="60" y="328" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.75">docs, resumes, logs</text>
           <text x="60" y="343" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.75">gitignored — never committed</text>
           <text x="60" y="358" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.75">candidate profile, target cos.</text>
         </g>
@@ -244,7 +244,7 @@
           <text x="1160" y="168" font-family="Archivo, sans-serif" font-weight="700" font-size="15" fill="currentColor">Browser</text>
           <text x="1160" y="188" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">view + edit status, notes</text>
           <text x="1160" y="203" font-family="Source Sans 3, sans-serif" font-size="12" fill="currentColor" opacity="0.65">mark applied, add details</text>
-          <text x="1160" y="221" font-family="Space Mono, monospace" font-size="11" fill="currentColor" opacity="0.65">token in localStorage</text>
+          <text x="1160" y="221" font-family="Space Mono, monospace" font-size="11" fill="currentColor" opacity="0.65">session token in localStorage</text>
         </g>
 
         <!-- client/ (static Worker) -->
@@ -272,11 +272,11 @@
       <div class="card">
         <p class="k">02 · Live page</p>
         <p>The tracker page (<code class="mono">client/</code>) is a separate static-assets Worker deployment from the API Worker (<code class="mono">server/</code>) - it calls the API cross-origin over <code class="mono">fetch</code>, CORS-enabled on the API side. Every edit - a status change, a note - is one D1 row update, so a browser edit and a headless sync landing at the same moment can't silently overwrite each other. Either half redeploys independently of the other.</p>
-        <p>A single bearer token gates every API route; the browser stores it (and the API's URL) in <code class="mono">localStorage</code> after first entry.</p>
+        <p>Signing in takes a name and password, exchanged once at <code class="mono">/api/login</code> for a session token; that token gates every other route, and the browser stores it in <code class="mono">localStorage</code>. The API's URL is not a runtime value - it's baked into the client deployment via <code class="mono">local-config.js</code>. One deployment serves several people: every row carries a <code class="mono">user_id</code>, and each request is scoped to whoever's token made it, so two people share a worker and a database while seeing entirely separate tracks, leads and settings.</p>
       </div>
       <div class="card private">
         <p class="k">03 · Data boundary</p>
-        <p>Everything personal — resumes, target companies, candidate profile, the prompts themselves — lives in a local <code class="mono">private/</code> folder, gitignored from day one. The <code class="mono">.claude/skills/job-search-setup/</code> skill generates it from a resume and a conversation, rather than anyone hand-authoring it.</p>
+        <p>What each search looks for — target companies, the role line, the candidate framing, the geographic scope — is config in D1, keyed by user id, and the worker composes the daily prompt from it (<code class="mono">/api/prompt/&lt;track&gt;</code>). What stays on disk is what a search reads or writes as a file: resumes, the per-track notes doc it edits as it runs, and logs, under <code class="mono">private/&lt;user-id&gt;/</code>, gitignored from day one. That split is what lets one machine run several people's searches without holding several people's search config. The <code class="mono">.claude/skills/job-search-setup/</code> skill fills both in from a resume and a conversation, rather than anyone hand-authoring them.</p>
         <p>Only the mechanism (scripts, <code class="mono">server/</code>, <code class="mono">client/</code>, schema) lives in the public GitHub repo, which is what makes it safe to clone onto another machine.</p>
       </div>
     </div>
@@ -305,13 +305,18 @@
         </thead>
         <tbody>
           <tr><td class="mono">/</td><td class="mono">GET</td><td>tracker webpage — served by the separate <code class="mono">client/</code> deployment, not this API</td></tr>
-          <tr><td class="mono">/api/data</td><td class="mono">GET</td><td>current leads + applications + screened postings + track/display config</td></tr>
-          <tr><td class="mono">/api/leads</td><td class="mono">POST</td><td>add new postings, deduped on (search, url)</td></tr>
+          <tr><td class="mono">/api/login</td><td class="mono">POST</td><td>name + password &rarr; a session token; the only route that takes a password, and the only one without a token</td></tr>
+          <tr><td class="mono">/api/logout</td><td class="mono">POST</td><td>revoke just the token that made the request, leaving that person's other sessions (the scheduled search's) alone</td></tr>
+          <tr><td class="mono">/api/users</td><td class="mono">POST</td><td>create an account or reset its password &mdash; gated by the <code class="mono">ADMIN_TOKEN</code> secret, not a session; there is no sign-up page</td></tr>
+          <tr><td class="mono">/api/me</td><td class="mono">GET</td><td>who this token belongs to</td></tr>
+          <tr><td class="mono">/api/data</td><td class="mono">GET</td><td>current leads + applications + screened postings + track/display config, for whoever the token belongs to</td></tr>
+          <tr><td class="mono">/api/leads</td><td class="mono">POST</td><td>add new postings, deduped on (user, search, url)</td></tr>
           <tr><td class="mono">/api/screened</td><td class="mono">POST</td><td>record a posting the search ruled out (dead, outside US, wrong level, duplicate) so it isn't re-verified next run</td></tr>
           <tr><td class="mono">/api/runs</td><td class="mono">POST</td><td>record that a track's scheduled search finished &mdash; called on <em>every</em> run, including ones that found nothing, so the page can tell a genuine zero-result day from a search that stopped firing</td></tr>
           <tr><td class="mono">/api/update</td><td class="mono">POST</td><td>edit a lead's status/notes, or add/edit an application</td></tr>
           <tr><td class="mono">/api/delete-application</td><td class="mono">POST</td><td>remove one application row</td></tr>
-          <tr><td class="mono">/api/config</td><td class="mono">GET/POST</td><td>read/set track labels, display title, priority-location rules</td></tr>
+          <tr><td class="mono">/api/config</td><td class="mono">GET/POST</td><td>read/set this person's track labels, display title, priority-location rules, and each track's search config</td></tr>
+          <tr><td class="mono">/api/prompt/&lt;track&gt;</td><td class="mono">GET</td><td>the daily search prompt, composed from that track's config &mdash; what the scheduled runner fetches instead of reading a prompt file off one machine</td></tr>
         </tbody>
       </table>
     </div>

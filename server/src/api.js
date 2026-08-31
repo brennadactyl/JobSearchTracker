@@ -9,12 +9,30 @@
  * This worker is API-only (no page-serving) - the client is a separate
  * deployable (see ../../client/) that calls this API cross-origin, hence
  * CORS_HEADERS below on every response. `*` rather than a specific origin:
- * this is a self-hosted, per-installer deployment (each installer runs
- * their own worker + client + D1 + bearer token, never a shared multi-
- * tenant backend), and the Bearer token - not origin - is the actual
- * access boundary, so restricting the origin would add config surface
- * without adding real security.
+ * the session token - not the origin - is the access boundary, and it is
+ * never a cookie, so there is nothing here for a hostile origin to ride on
+ * the way a cookie-authenticated API would have. Restricting the origin
+ * would add config surface (one more per-deployment value to keep in sync
+ * with wherever the client is hosted) without adding real security.
+ *
+ * ---- Auth. A person has a name and a password; they hold bearer tokens
+ * (sessions). Passwords are seen by exactly two handlers here - login and
+ * user provisioning - and everything else resolves a token to a user before
+ * this file is reached; see ./auth.js for the crypto and ../index.js for the
+ * resolution. Handlers below never check permissions themselves: they get a
+ * `db` already scoped to the calling user (see ./db.js), so "can this person
+ * touch this row" is answered by the row not existing for them.
  */
+
+import {
+  bearer,
+  createSession,
+  deleteSession,
+  getUserByName,
+  upsertUser,
+  verifyPassword,
+} from "./auth.js";
+import { buildSearchPrompt } from "./prompt.js";
 
 export const CORS_HEADERS = {
   "access-control-allow-origin": "*",
@@ -27,12 +45,6 @@ export function corsPreflight() {
   return new Response(null, { status: 204, headers: CORS_HEADERS });
 }
 
-export function authorized(request, env) {
-  const header = request.headers.get("Authorization") || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  return token && env.API_TOKEN && token === env.API_TOKEN;
-}
-
 export function unauthorized() {
   return json({ error: "unauthorized" }, 401);
 }
@@ -41,6 +53,13 @@ export function json(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
     status,
     headers: { "content-type": "application/json", ...CORS_HEADERS },
+  });
+}
+
+function text(body, status = 200) {
+  return new Response(body, {
+    status,
+    headers: { "content-type": "text/plain; charset=utf-8", ...CORS_HEADERS },
   });
 }
 
@@ -77,6 +96,110 @@ export const STAGE_DATE_MAP = {
   "Rejected": "dateRejected",
   "Withdrawn": "dateWithdrawn",
 };
+
+// Exchanges a name and password for a session token. The only handler a
+// password reaches besides handleUpsertUser, and the only place the name
+// means anything - every other route identifies the caller by token alone.
+//
+// One message for both "no such name" and "wrong password", on purpose: told
+// apart, they turn this into a way to enumerate who has an account here.
+// `label` is where the caller says what the token is for ('browser', or
+// 'scheduled-search' for the long-lived one a headless run keeps on disk), so
+// it can be revoked later by what it is rather than by guessing which opaque
+// string is which.
+export async function handleLogin(request, d1) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "invalid JSON body" }, 400);
+  }
+
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  const password = typeof body.password === "string" ? body.password : "";
+  if (!name || !password) return json({ error: "name and password are required" }, 400);
+
+  const user = await getUserByName(d1, name);
+  if (!(await verifyPassword(password, user))) {
+    return json({ error: "that name and password don't match" }, 401);
+  }
+
+  const token = await createSession(d1, user.id, typeof body.label === "string" ? body.label : "browser");
+  return json({ token, user: { id: user.id, name: user.name } });
+}
+
+// Revokes exactly the token that made the request - not every session the
+// person holds, so logging out of a browser never kills the scheduled search's
+// credential. Reaching this handler at all means the token still resolved;
+// logging out twice 401s at the routing layer, which is the same answer by a
+// different route.
+export async function handleLogout(d1, token) {
+  await deleteSession(d1, token);
+  return json({ ok: true });
+}
+
+// Creates a user, or sets an existing one's password. Gated by the ADMIN_TOKEN
+// worker secret rather than by a session: there is no self-signup here, and
+// whoever operates the deployment provisions people by hand.
+//
+// It doubles as password reset because nothing else in the system can run
+// PBKDF2 - without this, a forgotten password would mean deriving a hash
+// offline and hand-writing it into D1.
+export async function handleUpsertUser(request, env, d1) {
+  const admin = env.ADMIN_TOKEN;
+  if (!admin || bearer(request) !== admin) return unauthorized();
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "invalid JSON body" }, 400);
+  }
+
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  const password = typeof body.password === "string" ? body.password : "";
+  if (!name) return json({ error: "name is required" }, 400);
+  // Long rather than complex, and enforced here because /api/login has no rate
+  // limiting in front of it - see server/README.md.
+  if (password.length < 12) return json({ error: "password must be at least 12 characters" }, 400);
+
+  const result = await upsertUser(d1, name, password);
+  return json(result, result.created ? 201 : 200);
+}
+
+export function handleGetMe(user) {
+  return json({ id: user.id, name: user.name });
+}
+
+// Serves the daily search prompt for one track, composed from that track's D1
+// config - what run-search.ps1 fetches instead of reading a prompt file off
+// the machine it happens to be running on. text/plain because its consumer
+// pipes it straight into the CLI.
+export async function handleGetPrompt(db, user, key) {
+  const [track, config] = await Promise.all([db.getTrack(key), db.getTracksAndSettings()]);
+  if (!track) return json({ error: `unknown track "${key}" - not in the configured tracks` }, 404);
+
+  // A track that exists but has no search config at all would still compose a
+  // perfectly well-formed prompt - out of the generic fallbacks. "Companies:
+  // ." and "Read the resume." and no geographic scope, followed by the same
+  // instructions to verify postings and POST them as leads. A scheduled run
+  // would carry that out and report success.
+  //
+  // That state is reachable, and not hypothetically: it's exactly what a
+  // track looks like between the multi-user migration (which copies no search
+  // config) and the config being posted for it. Refuse instead, so the run
+  // fails loudly and visibly rather than quietly doing a hollow search.
+  if (!track.role_search_line && !track.resume_line && !track.target_companies) {
+    return json(
+      {
+        error: `track "${key}" has no search config yet - post it to /api/config before running this search`,
+      },
+      409
+    );
+  }
+
+  return text(buildSearchPrompt({ user, track, settings: config.settings }));
+}
 
 // Records that one track's scheduled search finished - see
 // migrations/0001_schema.sql for why this is an explicit call rather than
@@ -156,13 +279,19 @@ export async function handleSetConfig(request, db) {
   if (Array.isArray(body.tracks)) {
     const valid = body.tracks.filter((t) => t && typeof t.key === "string" && t.key);
     if (valid.length === 0) return json({ error: "tracks must be a non-empty array of {key, ...}" }, 400);
+    // Each track carries its display fields and, optionally, its search
+    // config (TRACK_CONFIG_FIELDS in db.js - the role line, target companies,
+    // candidate blurb and so on that prompt.js composes the daily prompt
+    // from). replaceTracks whitelists them itself; anything absent is stored
+    // as '' and simply doesn't appear in the prompt.
     await db.replaceTracks(valid);
   }
 
   // display_title, overview_label, applications_label, stale_run_hours,
-  // priority_locations - the settings DEFAULT_SETTINGS covers. db.setSettings
-  // reads only the keys it cares about, so it's a safe no-op to call even
-  // when `body` had none of them (e.g. a tracks-only config post).
+  // priority_locations, plus the prompt-only prose settings
+  // (PROMPT_SETTING_KEYS in db.js). db.setSettings reads only the keys it
+  // cares about, so it's a safe no-op to call even when `body` had none of
+  // them (e.g. a tracks-only config post).
   if (body.stale_run_hours != null) {
     const n = Number(body.stale_run_hours);
     if (!Number.isFinite(n) || n <= 0) return json({ error: "stale_run_hours must be a positive number" }, 400);
@@ -353,7 +482,7 @@ export async function handleDeleteApplication(request, db) {
   return json({ ok: true });
 }
 
-export async function handleGetData(db) {
+export async function handleGetData(db, user) {
   const [leads, applications, screened, updated, config] = await Promise.all([
     db.getAllLeads(),
     db.getAllApplications(),
@@ -362,6 +491,11 @@ export async function handleGetData(db) {
     db.getTracksAndSettings(),
   ]);
   return json({
+    // Who the token resolved to, so the page can say whose search it's
+    // showing. The client never decides this - it has no way to ask for
+    // someone else's data, since every row above is already scoped to the
+    // session that made the request.
+    user: { id: user.id, name: user.name },
     updated,
     leads,
     applications,

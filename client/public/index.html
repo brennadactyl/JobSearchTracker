@@ -55,6 +55,7 @@ h1,h2,h3{font-family:"Bricolage Grotesque","IBM Plex Sans",sans-serif;margin:0;l
 .hdr-right{display:flex;align-items:center;gap:12px}
 #themeToggle{font-size:15px;line-height:1;padding:6px 9px}
 .stamp{font-size:12px;color:var(--ink3);display:flex;align-items:center;gap:9px}
+.who{font-size:12px;color:var(--ink3)}
 .dot{width:6px;height:6px;border-radius:50%;background:var(--good);flex:none}
 .dot.off{background:var(--ink3)}
 .dot.bad{background:var(--crit)}
@@ -305,9 +306,10 @@ try{
 <div id="gate">
   <div class="card">
     <h1>Job search access</h1>
-    <p id="gateHint">Enter your access token to continue.</p>
-    <input id="tokenInput" type="password" placeholder="Token">
-    <button class="btn primary" id="tokenSubmit">Enter</button>
+    <p id="gateHint">Sign in to continue.</p>
+    <input id="nameInput" type="text" placeholder="Name" autocomplete="username">
+    <input id="passwordInput" type="password" placeholder="Password" autocomplete="current-password">
+    <button class="btn primary" id="tokenSubmit">Sign in</button>
     <div id="gateError" class="err"></div>
   </div>
 </div>
@@ -321,6 +323,8 @@ try{
       </div>
       <div class="hdr-right">
         <div class="stamp"><span class="dot" id="savedot"></span><span id="savetext">Loading</span></div>
+        <span class="who" id="whoami"></span>
+        <button class="btn ghost" id="logout" type="button" title="Sign out of this browser">Log out</button>
         <button class="btn ghost" id="themeToggle" type="button" aria-label="Switch to dark theme" title="Switch to dark theme">🌙</button>
       </div>
     </div>
@@ -379,7 +383,18 @@ var ACTIVE=["Recruiter Screen","Tech Screen","Onsite / Loop"];
 // not baked in, so this same deployed code serves any installer's tracks.
 var TRACKS={};
 
-var TOKEN=localStorage.getItem("tracker_token")||"";
+// Guarded because reading localStorage *throws* where storage is disabled
+// (a data: URL, a browser set to block site data) rather than returning null,
+// and an exception here would take the whole script down before the gate ever
+// rendered. Signing in still works in that state; it just won't be remembered.
+var TOKEN="",NAME="";
+try{
+  TOKEN=localStorage.getItem("tracker_token")||"";
+  // Display only, and remembered across sign-outs so the gate can prefill it.
+  // The server decides whose data this actually is, from the token alone - the
+  // header shows the name /api/data reports back, not this one.
+  NAME=localStorage.getItem("tracker_name")||"";
+}catch(e){}
 // The API worker's origin (e.g. "https://job-search-tracker.you.workers.dev")
 // - no trailing slash. This client is a separate deployable from the API
 // (see ../server/), served from its own origin, so it has no same-origin
@@ -701,18 +716,87 @@ function setSaved(msg,ok){
   t.textContent=msg;
 }
 
+// Exchanges name+password for a session token, which is what every later
+// request carries - the password is sent once and never stored. The name is
+// remembered (it isn't a secret) so returning to a signed-out browser only
+// means typing the password.
 function submitToken(){
   if(!API_BASE){
     document.getElementById("gateError").textContent="This deployment has no API URL configured - see public/local-config.example.js.";
     return;
   }
-  TOKEN=document.getElementById("tokenInput").value.trim();
-  if(!TOKEN){
-    document.getElementById("gateError").textContent="Enter a token.";
+  var name=document.getElementById("nameInput").value.trim();
+  var password=document.getElementById("passwordInput").value;
+  if(!name||!password){
+    document.getElementById("gateError").textContent="Enter your name and password.";
     return;
   }
-  localStorage.setItem("tracker_token",TOKEN);
-  boot();
+  document.getElementById("gateError").textContent="Signing in...";
+  fetch(API_BASE+"/api/login",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({name:name,password:password,label:"browser"})
+  }).then(function(res){
+    return res.json().then(function(body){return {status:res.status,body:body};});
+  }).then(function(r){
+    if(r.status!==200||!r.body.token){
+      document.getElementById("gateError").textContent="That name and password don't match.";
+      return;
+    }
+    TOKEN=r.body.token;
+    NAME=r.body.user&&r.body.user.name||name;
+    try{localStorage.setItem("tracker_token",TOKEN);localStorage.setItem("tracker_name",NAME);}catch(e){}
+    document.getElementById("passwordInput").value="";
+    document.getElementById("gateError").textContent="";
+    boot();
+  }).catch(function(err){
+    document.getElementById("gateError").textContent="Couldn't sign in: "+err.message;
+  });
+}
+
+// Drops this browser's credential and everything remembered about whose page
+// this was. The view preferences go too: they're per-person choices (which
+// track tab, which sort), and leaving them behind would drop the next person
+// to sign in on a tab that isn't theirs.
+function forgetSession(message){
+  TOKEN="";
+  try{
+    localStorage.removeItem("tracker_token");
+    localStorage.removeItem("bjs.tab");
+    localStorage.removeItem("bjs.view");
+    localStorage.removeItem("bjs.leadSort");
+    localStorage.removeItem("bjs.appSort");
+  }catch(e){}
+  // The in-memory copy too, not just the stored one: signing in as someone
+  // else doesn't reload the page, so without this the next person lands on
+  // whatever tab and sort the last one left behind - and it gets re-saved
+  // under their session, which is how a cleared preference comes back.
+  ui.tab="dashboard";ui.q="";ui.filter="All";ui.selected={};ui.expanded={};
+  ui.view="detail";ui.leadSort="priority";ui.appSort="applied-desc";
+  document.getElementById("gate").classList.remove("hidden");
+  document.getElementById("app").classList.add("hidden");
+  document.getElementById("gateError").textContent=message||"";
+  var pw=document.getElementById("passwordInput");
+  if(pw){pw.value="";pw.focus();}
+}
+
+// Revokes the token server-side as well, so signing out of a shared or
+// borrowed browser actually invalidates it rather than just forgetting it
+// here. The other sessions this person holds - notably the scheduled
+// search's - are untouched.
+function logout(){
+  var token=TOKEN;
+  forgetSession("");
+  if(!token||!API_BASE)return;
+  // Say so if the revoke didn't land. This browser has already forgotten the
+  // token either way - that part must not depend on the network - but the
+  // token is still live on the server, which matters on a shared machine.
+  fetch(API_BASE+"/api/logout",{method:"POST",headers:{"Authorization":"Bearer "+token}}).then(function(res){
+    if(!res.ok)throw new Error("status "+res.status);
+  }).catch(function(){
+    document.getElementById("gateError").textContent=
+      "Signed out here, but couldn't reach the server to revoke this session.";
+  });
 }
 
 function api(path,opts){
@@ -723,10 +807,9 @@ function api(path,opts){
   merged.headers=headers;
   return fetch(API_BASE+path,merged).then(function(res){
     if(res.status===401){
-      localStorage.removeItem("tracker_token");
-      document.getElementById("gate").classList.remove("hidden");
-      document.getElementById("app").classList.add("hidden");
-      document.getElementById("gateError").textContent="Invalid token.";
+      // The token was revoked (logged out elsewhere) or never valid. Same
+      // handling either way: forget it and ask for the password again.
+      forgetSession("Your session has expired - sign in again.");
       throw new Error("unauthorized");
     }
     return res.json();
@@ -744,6 +827,11 @@ function boot(){
     if(!state.settings)state.settings=d;
     else for(var sk in d){if(state.settings[sk]==null)state.settings[sk]=d[sk];}
     applyConfig();
+    if(state.user&&state.user.name){
+      NAME=state.user.name;
+      try{localStorage.setItem("tracker_name",NAME);}catch(err2){}
+    }
+    document.getElementById("whoami").textContent=NAME?"Signed in as "+NAME:"";
     document.getElementById("gate").classList.add("hidden");
     document.getElementById("app").classList.remove("hidden");
     setSaved("Saved",true);
@@ -1154,6 +1242,7 @@ function render(){
 
 document.addEventListener("click",function(e){
   if(e.target.id==="tokenSubmit"){submitToken();return;}
+  if(e.target.id==="logout"){logout();return;}
   if(e.target.closest("#themeToggle")){toggleTheme();return;}
 
   var t=e.target.closest("[data-tab]");
@@ -1225,7 +1314,7 @@ document.addEventListener("click",function(e){
 });
 
 document.addEventListener("keydown",function(e){
-  if(e.target.id==="tokenInput"&&e.key==="Enter"){submitToken();}
+  if((e.target.id==="nameInput"||e.target.id==="passwordInput")&&e.key==="Enter"){submitToken();}
 });
 
 document.addEventListener("input",function(e){
@@ -1328,9 +1417,11 @@ document.addEventListener("focusout",function(e){
 // never succeed.
 if(!API_BASE){
   document.getElementById("gateHint").textContent="This deployment has no API URL configured - see public/local-config.example.js.";
-  document.getElementById("tokenInput").classList.add("hidden");
+  document.getElementById("nameInput").classList.add("hidden");
+  document.getElementById("passwordInput").classList.add("hidden");
   document.getElementById("tokenSubmit").classList.add("hidden");
 }
+if(NAME)document.getElementById("nameInput").value=NAME;
 if(TOKEN&&API_BASE)boot(); else document.getElementById("gate").classList.remove("hidden");
 })();
 </script>
