@@ -1,16 +1,32 @@
 /**
  * The one place that knows this is D1 (SQLite). Every `env.DB.prepare(...)`
- * call in the whole worker lives here - api.js and index.js never touch D1
- * directly, only Db's methods below. That's the point: if this ever needs
- * to run on a different database, only this file changes. The rest of the
- * codebase (request parsing, validation, deciding *when* something happens)
- * doesn't know or care what's storing the rows.
+ * call for a user's own data lives here - api.js and index.js never touch D1
+ * directly for it, only Db's methods below. That's the point: if this ever
+ * needs to run on a different database, only this file changes. The rest of
+ * the codebase (request parsing, validation, deciding *when* something
+ * happens) doesn't know or care what's storing the rows.
+ *
+ * ---- Every instance belongs to one user. `new Db(env.DB, userId)` binds the
+ * repository to whoever is making the request, and every statement below
+ * filters on `this.userId`. That is deliberately not a per-method parameter:
+ * with a parameter, forgetting one argument at one call site silently returns
+ * (or overwrites) another person's rows, and nothing about the code would look
+ * wrong. Scoped at construction, there is no method left that *can* forget.
+ *
+ * A useful consequence: another user's row id simply doesn't resolve - getLead
+ * returns null, updateLead reports zero changes - so the handlers' existing
+ * "not found" paths become the cross-user access check for free, with no new
+ * branch to keep correct.
+ *
+ * Users and sessions are the exception and live in auth.js instead, because
+ * resolving *which* user is calling necessarily happens before there's a
+ * user-scoped Db to ask.
  *
  * New to JS? A "class" here is just a bundle of related functions (the
- * methods below) that share one piece of state - the D1 binding, stored as
- * `this.d1` in the constructor. `new Db(env.DB)` makes one instance; every
- * method call after that (`db.getLead(5)`) automatically has access to that
- * same `this.d1` without you passing it around everywhere.
+ * methods below) that share some state - the D1 binding and the user id,
+ * stored in the constructor. `new Db(env.DB, userId)` makes one instance;
+ * every method call after that (`db.getLead(5)`) automatically has access to
+ * both without you passing them around everywhere.
  *
  * ---- JSDoc typedefs: this project has no build step (see client/README.md),
  * so there's no TypeScript compiler. @typedef comments are the zero-build
@@ -24,6 +40,7 @@
 /**
  * @typedef {Object} Lead
  * @property {number} id
+ * @property {string} user_id
  * @property {string} search - track key, matches Track.key
  * @property {string} found - YYYY-MM-DD, date first found
  * @property {string} company
@@ -50,6 +67,7 @@
 /**
  * @typedef {Object} Application
  * @property {number} id
+ * @property {string} user_id
  * @property {string} leadId - the originating Lead.id as text, or '' if added by hand
  * @property {string} company
  * @property {string} title
@@ -77,6 +95,7 @@
 /**
  * @typedef {Object} ScreenedItem
  * @property {number} id
+ * @property {string} user_id
  * @property {string} search - track key
  * @property {string} url
  * @property {string} company
@@ -88,6 +107,7 @@
 
 /**
  * @typedef {Object} SearchRun
+ * @property {string} user_id
  * @property {string} track_key
  * @property {string} last_run_at - ISO 8601 UTC instant, or '' if never recorded
  * @property {string} last_run_on - YYYY-MM-DD, the installer's local date
@@ -104,6 +124,21 @@
  * @property {string} label
  * @property {string} full_description
  * @property {number} sort_order
+ * @property {string} role_search_line
+ * @property {string} target_companies - JSON array of company names
+ * @property {string} search_note
+ * @property {string} resume_line
+ * @property {string} fit_clause
+ * @property {string} fit_disqualifier
+ * @property {string} doc_file
+ * @property {string} doc_summary
+ * @property {string} fit_filter_step
+ * @property {string} leads_note
+ * @property {string} doc_update_line
+ * @property {string} intro_note
+ * @property {string} report_line
+ * @property {string} screened_examples
+ * @property {string} schedule_time
  */
 
 /**
@@ -117,6 +152,12 @@
  * @property {string} applications_label
  * @property {number} stale_run_hours
  * @property {Array<Object>} priority_locations
+ * @property {string} geo_scope_line
+ * @property {string} scope_clause
+ * @property {string} scope_disqualifier
+ * @property {string} location_guidance
+ * @property {string} footer_note
+ * @property {string} pronouns
  */
 
 // Same field lists api.js validates/whitelists against - re-exported from
@@ -129,15 +170,49 @@ export const APP_STAGE_DATE_FIELDS = [
   "dateRecruiterScreen", "dateTechScreen", "dateOnsite",
   "dateOffer", "dateRejected", "dateWithdrawn",
 ];
+
+// Everything on a track row that isn't its identity (key) or its ordering.
+// Split in two because the two halves have different audiences: the first is
+// read by the client to draw tabs, the second only by prompt.js to compose
+// the daily search. Both are written by POST /api/config.
+export const TRACK_DISPLAY_FIELDS = ["label", "full_description", "sort_order"];
+export const TRACK_CONFIG_FIELDS = [
+  "role_search_line", "target_companies", "search_note", "resume_line",
+  "fit_clause", "fit_disqualifier", "fit_filter_step", "leads_note",
+  "doc_file", "doc_summary", "doc_update_line", "intro_note", "report_line",
+  "screened_examples", "schedule_time",
+];
+
+// Settings the client renders from...
 export const SETTING_KEYS = [
   "display_title", "overview_label", "applications_label", "stale_run_hours",
 ];
+// ...and settings only prompt.js reads. Prose, stored verbatim: these are the
+// per-user half of the search config (the per-track half is TRACK_CONFIG_FIELDS),
+// and regenerating their sentences from keywords is exactly what would drop the
+// hand-written detail the live searches depend on.
+export const PROMPT_SETTING_KEYS = [
+  "geo_scope_line", "scope_clause", "scope_disqualifier",
+  "location_guidance", "footer_note", "pronouns",
+];
+
 export const DEFAULT_SETTINGS = {
   display_title: "Job Search Tracker",
   overview_label: "Overview",
   applications_label: "Applications",
   stale_run_hours: 36,
   priority_locations: [],
+  // No geographic restriction by default: an unconfigured deployment shouldn't
+  // silently filter out postings it was never told to exclude.
+  geo_scope_line: "",
+  scope_clause: "",
+  scope_disqualifier: "",
+  location_guidance:
+    "Write accurate location strings - the tracker derives priority from them " +
+    "automatically, so precision matters. There is no priority field to set - " +
+    "just get the location text right.",
+  footer_note: "",
+  pronouns: "they/them",
 };
 
 function today() {
@@ -145,16 +220,23 @@ function today() {
 }
 
 export class Db {
-  /** @param {D1Database} d1 */
-  constructor(d1) {
+  /**
+   * @param {D1Database} d1
+   * @param {string} userId - every statement below is filtered to this user
+   */
+  constructor(d1, userId) {
     this.d1 = d1;
+    this.userId = userId;
   }
 
   // ---------------------------------------------------------------- meta --
 
-  /** @returns {Promise<string|null>} the 'updated' timestamp, or null if never set */
+  /** @returns {Promise<string|null>} this user's 'updated' timestamp, or null if never set */
   async getUpdatedTimestamp() {
-    const row = await this.d1.prepare("SELECT value FROM meta WHERE key = 'updated'").first();
+    const row = await this.d1
+      .prepare("SELECT value FROM meta WHERE user_id = ? AND key = 'updated'")
+      .bind(this.userId)
+      .first();
     return row ? row.value : null;
   }
 
@@ -162,10 +244,10 @@ export class Db {
   async touchUpdated() {
     await this.d1
       .prepare(
-        `INSERT INTO meta (key, value) VALUES ('updated', ?)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+        `INSERT INTO meta (user_id, key, value) VALUES (?, 'updated', ?)
+         ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value`
       )
-      .bind(today())
+      .bind(this.userId, today())
       .run();
   }
 
@@ -173,19 +255,28 @@ export class Db {
 
   /** @returns {Promise<Lead[]>} */
   async getAllLeads() {
-    const res = await this.d1.prepare("SELECT * FROM leads ORDER BY id").all();
+    const res = await this.d1
+      .prepare("SELECT * FROM leads WHERE user_id = ? ORDER BY id")
+      .bind(this.userId)
+      .all();
     return res.results;
   }
 
   /** @returns {Promise<Application[]>} */
   async getAllApplications() {
-    const res = await this.d1.prepare("SELECT * FROM applications ORDER BY id").all();
+    const res = await this.d1
+      .prepare("SELECT * FROM applications WHERE user_id = ? ORDER BY id")
+      .bind(this.userId)
+      .all();
     return res.results;
   }
 
   /** @returns {Promise<ScreenedItem[]>} */
   async getAllScreened() {
-    const res = await this.d1.prepare("SELECT * FROM screened ORDER BY id").all();
+    const res = await this.d1
+      .prepare("SELECT * FROM screened WHERE user_id = ? ORDER BY id")
+      .bind(this.userId)
+      .all();
     return res.results;
   }
 
@@ -193,23 +284,30 @@ export class Db {
 
   /** @returns {Promise<{tracks: TrackWithRun[], settings: Settings}>} */
   async getTracksAndSettings() {
+    const trackCols = ["key", ...TRACK_DISPLAY_FIELDS, ...TRACK_CONFIG_FIELDS]
+      .map((f) => `t.${f}`)
+      .join(", ");
+    const settingKeys = ["priority_locations", ...SETTING_KEYS, ...PROMPT_SETTING_KEYS];
     const [tracksRes, settingsRows] = await Promise.all([
       this.d1
         .prepare(
-          `SELECT t.key, t.label, t.full_description, t.sort_order,
+          `SELECT ${trackCols},
                   r.last_run_at, r.last_run_on, r.status AS last_run_status,
                   r.leads_added, r.screened_added, r.delisted, r.note
-           FROM tracks t LEFT JOIN search_runs r ON r.track_key = t.key
+           FROM tracks t
+           LEFT JOIN search_runs r ON r.track_key = t.key AND r.user_id = t.user_id
+           WHERE t.user_id = ?
            ORDER BY t.sort_order, t.key`
         )
+        .bind(this.userId)
         .all(),
       this.d1
         .prepare(
-          `SELECT key, value FROM meta WHERE key IN (${["priority_locations", ...SETTING_KEYS]
+          `SELECT key, value FROM meta WHERE user_id = ? AND key IN (${settingKeys
             .map(() => "?")
             .join(", ")})`
         )
-        .bind("priority_locations", ...SETTING_KEYS)
+        .bind(this.userId, ...settingKeys)
         .all(),
     ]);
 
@@ -229,12 +327,10 @@ export class Db {
       }
     }
 
-    const tracks = tracksRes.results.map((row) => ({
-      key: row.key,
-      label: row.label,
-      full_description: row.full_description,
-      sort_order: row.sort_order,
-      last_run: {
+    const tracks = tracksRes.results.map((row) => {
+      const track = { key: row.key };
+      for (const f of [...TRACK_DISPLAY_FIELDS, ...TRACK_CONFIG_FIELDS]) track[f] = row[f];
+      track.last_run = {
         at: row.last_run_at || "",
         on: row.last_run_on || "",
         status: row.last_run_status || "",
@@ -242,83 +338,107 @@ export class Db {
         screened_added: row.screened_added || 0,
         delisted: row.delisted || 0,
         note: row.note || "",
-      },
-    }));
+      };
+      return track;
+    });
 
     return { tracks, settings };
   }
 
+  /** @param {string} key @returns {Promise<Track|null>} */
+  async getTrack(key) {
+    const row = await this.d1
+      .prepare("SELECT * FROM tracks WHERE user_id = ? AND key = ?")
+      .bind(this.userId, key)
+      .first();
+    return row || null;
+  }
+
   /** @param {string} key @returns {Promise<boolean>} */
   async trackExists(key) {
-    const row = await this.d1.prepare("SELECT key FROM tracks WHERE key = ?").bind(key).first();
-    return !!row;
+    return !!(await this.getTrack(key));
   }
 
   /**
-   * Replaces the whole track list in one batch (one real transaction) and
-   * keeps `search_runs` 1:1 with it - a new track gets an empty "never ran"
-   * row, a removed track's run row goes with it.
-   * @param {Array<{key: string, label?: string, full_description?: string, sort_order?: number}>} tracks
+   * Replaces this user's whole track list in one batch (one real transaction)
+   * and keeps `search_runs` 1:1 with it - a new track gets an empty "never
+   * ran" row, a removed track's run row goes with it. Scoped to this user
+   * throughout: another person's tracks are neither read, updated, nor caught
+   * by the "not in the new list" deletes.
+   * @param {Array<Partial<Track> & {key: string}>} tracks
    */
   async replaceTracks(tracks) {
+    const cols = [...TRACK_DISPLAY_FIELDS, ...TRACK_CONFIG_FIELDS];
     const stmt = this.d1.prepare(
-      `INSERT INTO tracks (key, label, full_description, sort_order) VALUES (?, ?, ?, ?)
-       ON CONFLICT(key) DO UPDATE SET label = excluded.label,
-         full_description = excluded.full_description, sort_order = excluded.sort_order`
+      `INSERT INTO tracks (user_id, key, ${cols.join(", ")})
+       VALUES (?, ?, ${cols.map(() => "?").join(", ")})
+       ON CONFLICT(user_id, key) DO UPDATE SET
+         ${cols.map((c) => `${c} = excluded.${c}`).join(", ")}`
     );
     // INSERT OR IGNORE, not a plain INSERT - re-posting an unchanged track
     // list is the normal case and must not wipe existing run history.
-    const runStmt = this.d1.prepare("INSERT OR IGNORE INTO search_runs (track_key) VALUES (?)");
+    const runStmt = this.d1.prepare(
+      "INSERT OR IGNORE INTO search_runs (user_id, track_key) VALUES (?, ?)"
+    );
     const placeholders = tracks.map(() => "?").join(", ");
     const keys = tracks.map((t) => t.key);
     const batch = [
-      this.d1.prepare(`DELETE FROM tracks WHERE key NOT IN (${placeholders})`).bind(...keys),
-      this.d1.prepare(`DELETE FROM search_runs WHERE track_key NOT IN (${placeholders})`).bind(...keys),
+      this.d1
+        .prepare(`DELETE FROM tracks WHERE user_id = ? AND key NOT IN (${placeholders})`)
+        .bind(this.userId, ...keys),
+      this.d1
+        .prepare(`DELETE FROM search_runs WHERE user_id = ? AND track_key NOT IN (${placeholders})`)
+        .bind(this.userId, ...keys),
       ...tracks.map((t, i) =>
-        stmt.bind(t.key, t.label || t.key, t.full_description || "", Number.isInteger(t.sort_order) ? t.sort_order : i)
+        stmt.bind(
+          this.userId,
+          t.key,
+          t.label || t.key,
+          t.full_description || "",
+          Number.isInteger(t.sort_order) ? t.sort_order : i,
+          ...TRACK_CONFIG_FIELDS.map((f) => {
+            // target_companies is the one structured field: accept an array
+            // and store it as JSON, or pass through a string that already is.
+            if (f === "target_companies" && Array.isArray(t[f])) return JSON.stringify(t[f]);
+            return typeof t[f] === "string" ? t[f] : "";
+          })
+        )
       ),
-      ...keys.map((k) => runStmt.bind(k)),
+      ...keys.map((k) => runStmt.bind(this.userId, k)),
     ];
     await this.d1.batch(batch);
   }
 
   /**
-   * Sets any subset of display/behavior settings. Empty strings are ignored
-   * (falls back to DEFAULT_SETTINGS) rather than stored, so clearing a field
-   * produces the default instead of a blank label.
-   * @param {Partial<{display_title: string, overview_label: string, applications_label: string, stale_run_hours: number, priority_locations: Array<Object>}>} patch
+   * Sets any subset of this user's settings. Empty strings are ignored (falls
+   * back to DEFAULT_SETTINGS) rather than stored, so clearing a field produces
+   * the default instead of a blank label.
+   * @param {Partial<Settings>} patch
    */
   async setSettings(patch) {
-    const textSettings = SETTING_KEYS.filter((k) => k !== "stale_run_hours");
+    const textSettings = [...SETTING_KEYS, ...PROMPT_SETTING_KEYS].filter((k) => k !== "stale_run_hours");
     for (const key of textSettings) {
       if (typeof patch[key] === "string" && patch[key]) {
-        await this.d1
-          .prepare(
-            `INSERT INTO meta (key, value) VALUES (?, ?)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-          )
-          .bind(key, patch[key])
-          .run();
+        await this.setSetting(key, patch[key]);
       }
     }
     if (patch.stale_run_hours != null) {
-      await this.d1
-        .prepare(
-          `INSERT INTO meta (key, value) VALUES ('stale_run_hours', ?)
-           ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-        )
-        .bind(String(patch.stale_run_hours))
-        .run();
+      await this.setSetting("stale_run_hours", String(patch.stale_run_hours));
     }
     if (Array.isArray(patch.priority_locations)) {
-      await this.d1
-        .prepare(
-          `INSERT INTO meta (key, value) VALUES ('priority_locations', ?)
-           ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-        )
-        .bind(JSON.stringify(patch.priority_locations))
-        .run();
+      await this.setSetting("priority_locations", JSON.stringify(patch.priority_locations));
     }
+  }
+
+  /** @param {string} key @param {string} value */
+  async setSetting(key, value) {
+    await this.d1
+      .prepare(
+        `INSERT INTO meta (user_id, key, value) VALUES (?, ?, ?)
+         ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value`
+      )
+      .bind(this.userId, key, value)
+      .run();
   }
 
   // ------------------------------------------------------------- runs --
@@ -332,25 +452,29 @@ export class Db {
     await this.d1
       .prepare(
         `INSERT INTO search_runs
-           (track_key, last_run_at, last_run_on, status, leads_added, screened_added, delisted, note)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(track_key) DO UPDATE SET
+           (user_id, track_key, last_run_at, last_run_on, status, leads_added, screened_added, delisted, note)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(user_id, track_key) DO UPDATE SET
            last_run_at = excluded.last_run_at, last_run_on = excluded.last_run_on,
            status = excluded.status, leads_added = excluded.leads_added,
            screened_added = excluded.screened_added, delisted = excluded.delisted,
            note = excluded.note`
       )
-      .bind(key, run.at, run.on, run.status, run.leadsAdded, run.screenedAdded, run.delisted, run.note)
+      .bind(this.userId, key, run.at, run.on, run.status, run.leadsAdded, run.screenedAdded, run.delisted, run.note)
       .run();
-    return this.d1.prepare("SELECT * FROM search_runs WHERE track_key = ?").bind(key).first();
+    return this.d1
+      .prepare("SELECT * FROM search_runs WHERE user_id = ? AND track_key = ?")
+      .bind(this.userId, key)
+      .first();
   }
 
   // ------------------------------------------------------------ leads --
 
   /**
-   * Inserts leads not already present for the same (search, url) pair -
-   * DB-enforced UNIQUE constraint + INSERT OR IGNORE, atomic and race-free.
-   * Never touches an existing row's status/notes.
+   * Inserts leads not already present for the same (user, search, url) triple
+   * - DB-enforced UNIQUE constraint + INSERT OR IGNORE, atomic and race-free.
+   * Never touches an existing row's status/notes. Two users tracking the same
+   * posting are two separate rows, by design.
    * @param {Array<Partial<Lead>>} leads
    * @returns {Promise<number>} how many were actually inserted
    */
@@ -358,11 +482,12 @@ export class Db {
     const t = today();
     const stmt = this.d1.prepare(
       `INSERT OR IGNORE INTO leads
-         (search, found, company, title, location, url, verified, fit, status, notes, ${EXTRA_FIELDS.join(", ")})
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'New', '', ${EXTRA_FIELDS.map(() => "?").join(", ")})`
+         (user_id, search, found, company, title, location, url, verified, fit, status, notes, ${EXTRA_FIELDS.join(", ")})
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'New', '', ${EXTRA_FIELDS.map(() => "?").join(", ")})`
     );
     const batch = leads.map((lead) =>
       stmt.bind(
+        this.userId,
         lead.search,
         lead.found || t,
         lead.company,
@@ -380,7 +505,10 @@ export class Db {
 
   /** @param {number|string} id @returns {Promise<Lead|null>} */
   async getLead(id) {
-    return this.d1.prepare("SELECT * FROM leads WHERE id = ?").bind(id).first();
+    return this.d1
+      .prepare("SELECT * FROM leads WHERE id = ? AND user_id = ?")
+      .bind(id, this.userId)
+      .first();
   }
 
   /**
@@ -394,7 +522,10 @@ export class Db {
     const fields = ["status", "notes", "delistedOn", ...EXTRA_FIELDS];
     const setClause = fields.map((f) => `${f} = COALESCE(?, ${f})`).join(", ");
     const values = fields.map((f) => (typeof patch[f] === "string" ? patch[f] : null));
-    const result = await this.d1.prepare(`UPDATE leads SET ${setClause} WHERE id = ?`).bind(...values, id).run();
+    const result = await this.d1
+      .prepare(`UPDATE leads SET ${setClause} WHERE id = ? AND user_id = ?`)
+      .bind(...values, id, this.userId)
+      .run();
     if (result.meta.changes === 0) return null;
     return this.getLead(id);
   }
@@ -402,18 +533,27 @@ export class Db {
   // -------------------------------------------------------- screened --
 
   /**
-   * Same INSERT-OR-IGNORE-on-(search,url) dedup shape as addLeads.
+   * Same INSERT-OR-IGNORE-on-(user, search, url) dedup shape as addLeads.
    * @param {Array<Partial<ScreenedItem>>} items
    * @returns {Promise<number>} how many were actually inserted
    */
   async addScreened(items) {
     const t = today();
     const stmt = this.d1.prepare(
-      `INSERT OR IGNORE INTO screened (search, url, company, title, location, reason, date)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT OR IGNORE INTO screened (user_id, search, url, company, title, location, reason, date)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     );
     const batch = items.map((item) =>
-      stmt.bind(item.search, item.url, item.company || "", item.title || "", item.location || "", item.reason || "", item.date || t)
+      stmt.bind(
+        this.userId,
+        item.search,
+        item.url,
+        item.company || "",
+        item.title || "",
+        item.location || "",
+        item.reason || "",
+        item.date || t
+      )
     );
     const results = await this.d1.batch(batch);
     return results.reduce((n, r) => n + (r.meta.changes || 0), 0);
@@ -423,12 +563,18 @@ export class Db {
 
   /** @param {number|string} id @returns {Promise<Application|null>} */
   async getApplication(id) {
-    return this.d1.prepare("SELECT * FROM applications WHERE id = ?").bind(id).first();
+    return this.d1
+      .prepare("SELECT * FROM applications WHERE id = ? AND user_id = ?")
+      .bind(id, this.userId)
+      .first();
   }
 
   /** @param {number|string} leadId @returns {Promise<Application|null>} */
   async getApplicationByLeadId(leadId) {
-    return this.d1.prepare("SELECT * FROM applications WHERE leadId = ? LIMIT 1").bind(String(leadId)).first();
+    return this.d1
+      .prepare("SELECT * FROM applications WHERE leadId = ? AND user_id = ? LIMIT 1")
+      .bind(String(leadId), this.userId)
+      .first();
   }
 
   /**
@@ -437,13 +583,16 @@ export class Db {
    */
   async insertApplication(fields) {
     const cols = ["leadId", "company", "title", "dateApplied", "status", "notes", ...EXTRA_FIELDS, ...APP_STAGE_DATE_FIELDS];
-    const placeholders = cols.map(() => "?").join(", ");
+    const placeholders = ["?", ...cols.map(() => "?")].join(", ");
     const values = cols.map((f) => {
       if (f === "dateApplied") return fields.dateApplied || today();
       if (f === "status") return fields.status || "Applied";
       return fields[f] || "";
     });
-    const result = await this.d1.prepare(`INSERT INTO applications (${cols.join(", ")}) VALUES (${placeholders})`).bind(...values).run();
+    const result = await this.d1
+      .prepare(`INSERT INTO applications (user_id, ${cols.join(", ")}) VALUES (${placeholders})`)
+      .bind(this.userId, ...values)
+      .run();
     return this.getApplication(result.meta.last_row_id);
   }
 
@@ -457,14 +606,20 @@ export class Db {
     const fields = ["company", "title", "dateApplied", "status", "notes", "leadId", ...EXTRA_FIELDS, ...APP_STAGE_DATE_FIELDS];
     const setClause = fields.map((f) => `${f} = COALESCE(?, ${f})`).join(", ");
     const values = fields.map((f) => (typeof patch[f] === "string" ? patch[f] : null));
-    const result = await this.d1.prepare(`UPDATE applications SET ${setClause} WHERE id = ?`).bind(...values, id).run();
+    const result = await this.d1
+      .prepare(`UPDATE applications SET ${setClause} WHERE id = ? AND user_id = ?`)
+      .bind(...values, id, this.userId)
+      .run();
     if (result.meta.changes === 0) return null;
     return this.getApplication(id);
   }
 
   /** @param {number|string} id @returns {Promise<boolean>} true if a row was actually deleted */
   async deleteApplication(id) {
-    const result = await this.d1.prepare("DELETE FROM applications WHERE id = ?").bind(id).run();
+    const result = await this.d1
+      .prepare("DELETE FROM applications WHERE id = ? AND user_id = ?")
+      .bind(id, this.userId)
+      .run();
     return result.meta.changes > 0;
   }
 
@@ -481,11 +636,14 @@ export class Db {
     const result = stageDateColumn
       ? await this.d1
           .prepare(
-            `UPDATE applications SET status = ?, ${stageDateColumn} = CASE WHEN ${stageDateColumn} = '' THEN ? ELSE ${stageDateColumn} END WHERE id = ?`
+            `UPDATE applications SET status = ?, ${stageDateColumn} = CASE WHEN ${stageDateColumn} = '' THEN ? ELSE ${stageDateColumn} END WHERE id = ? AND user_id = ?`
           )
-          .bind(status, today(), id)
+          .bind(status, today(), id, this.userId)
           .run()
-      : await this.d1.prepare("UPDATE applications SET status = ? WHERE id = ?").bind(status, id).run();
+      : await this.d1
+          .prepare("UPDATE applications SET status = ? WHERE id = ? AND user_id = ?")
+          .bind(status, id, this.userId)
+          .run();
     if (result.meta.changes === 0) return null;
     return this.getApplication(id);
   }
@@ -505,7 +663,11 @@ export class Db {
    * @returns {Promise<{lead: Lead|null, application: Application|null}>}
    */
   async setLeadStatusAndMaybeCreateApplication(id, status, newApplicationFields) {
-    const batch = [this.d1.prepare("UPDATE leads SET status = ? WHERE id = ?").bind(status, id)];
+    const batch = [
+      this.d1
+        .prepare("UPDATE leads SET status = ? WHERE id = ? AND user_id = ?")
+        .bind(status, id, this.userId),
+    ];
     if (newApplicationFields) {
       const cols = ["leadId", "company", "title", "dateApplied", "status", "notes", "link", "referral", "comp", "team", "setup"];
       const values = cols.map((f) => {
@@ -514,7 +676,11 @@ export class Db {
         return newApplicationFields[f] || "";
       });
       batch.push(
-        this.d1.prepare(`INSERT INTO applications (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`).bind(...values)
+        this.d1
+          .prepare(
+            `INSERT INTO applications (user_id, ${cols.join(", ")}) VALUES (${["?", ...cols.map(() => "?")].join(", ")})`
+          )
+          .bind(this.userId, ...values)
       );
     }
     const results = await this.d1.batch(batch);
