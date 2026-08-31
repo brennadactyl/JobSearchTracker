@@ -35,6 +35,8 @@ tracks, leads, applications, page titles and location rules.
 - `src/db.js` - all D1 access for a person's own data. Every instance is
   bound to one user id at construction, so no query can forget to filter.
 - `src/prompt.js` - composes a track's daily search prompt from its config.
+- `verify-local.mjs` - the cross-user isolation checks, run against a local
+  `wrangler dev`. See [Verifying](#verifying-a-change) below.
 - `migrations/` - `0001_schema.sql` creates every table; `0002_multi_user.sql`
   adds accounts and gives every table an owner. See below.
 
@@ -307,6 +309,30 @@ a company list beyond its apparent industry, worked examples of what counts
 as out of scope. Reducing those to keywords and regenerating the sentences
 lost them silently. Only the fields the app itself reads (`key`, `label`,
 `sort_order`, `schedule_time`, `target_companies`) are structured.
+
+## Verifying a change
+
+There's no CI and no test suite, but there is one property worth checking
+before every deploy: **two people's data cannot reach each other.**
+`verify-local.mjs` is 34 checks of exactly that - one user trying to read and
+write another's leads, applications, tracks, runs and prompts by id, and
+getting a 404 each time - plus the auth behaviour around it (password reset,
+indistinguishable login failures, per-token revocation).
+
+```bash
+cd server
+wrangler d1 migrations apply job-search-tracker-db --local
+echo ADMIN_TOKEN=local-admin-token-for-testing > .dev.vars
+wrangler dev --local --port 8787          # in another terminal
+node verify-local.mjs
+```
+
+Run it against a **local** database - it creates users and writes freely.
+It expects one with no accounts yet; re-running against the same local
+database is fine.
+
+If you change anything in `db.js`, run this. A missing `AND user_id = ?`
+fails nothing, breaks no page, and silently serves someone else's job search.
 
 ## Security notes
 
