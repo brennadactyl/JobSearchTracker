@@ -224,24 +224,30 @@ has settled.
 
 ## Rollout order (there is live data in the deployed D1)
 
-1. `wrangler d1 export` - back up first.
-2. `wrangler d1 migrations apply` - creates `users`/`sessions`, scopes all rows
-   to the backfill GUID.
-3. `wrangler secret put ADMIN_TOKEN` - a fresh value, not the old one.
-4. `wrangler d1 execute` - insert a session row whose `id` is the **current**
-   `API_TOKEN` value, owned by the backfill user, labelled
-   `legacy scheduled search`. This is what keeps the already-registered
-   scheduled tasks authenticating with nothing changed on the machine, and it
-   stays revocable by deleting that one row.
-5. `wrangler deploy` the server, then the client. Steps 2-4 finish before any
-   new code is live, so no request window 401s.
-6. Rename the backfill account (`UPDATE users SET name = ...`), then
-   `POST /api/users` with `ADMIN_TOKEN` **using that same name** to set its
-   password; sign in from the browser. A name that doesn't match creates a
-   second, empty account instead - check the response says
-   `"created": false`. `server/README.md` has the exact commands.
-7. Delete the `API_TOKEN` secret - its value now lives only as that session row.
-8. Provision user 2 and run the setup skill for them.
+**[`server/README.md`](../server/README.md)'s "Migrating an existing
+deployment to multi-user" is the authority, and the only copy to follow.** A
+one-shot procedure against live data should not exist in two documents that
+can drift apart - and this one already had. The steps that used to be written
+out here were wrong in two ways by the time the code was finished: they said
+to insert the raw `API_TOKEN` as a session id (sessions store a SHA-256 now,
+so that row would be dead and every scheduled search would 401 on deploy),
+and they claimed nothing failed between migrating and deploying.
+
+The shape of it, for context:
+
+- Back up, and **disable the scheduled tasks first**. Between the migration
+  and the deploy, the old Worker is talking to the new schema and its writes
+  fail - some silently, returning a success-shaped `{"added": 0}` to a search
+  that then reports a clean run having discarded everything it found.
+- Migrate, set `ADMIN_TOKEN`, carry the existing token over as a session row
+  (its hash, not the token), deploy both halves.
+- Rename the backfill account and set its password using **the same name** -
+  a mismatch creates a second, empty account instead.
+- Post each track's search config, diff the composed prompts against the
+  files they replace, then re-enable the tasks and retire the old ones.
+  Re-enabling before the config is posted is its own trap: the server refuses
+  to compose a prompt for a track with no config (409), so such a run fails
+  loudly rather than searching for nothing in particular.
 
 ## Verification
 

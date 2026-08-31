@@ -171,6 +171,26 @@ export function handleGetMe(user) {
 export async function handleGetPrompt(db, user, key) {
   const [track, config] = await Promise.all([db.getTrack(key), db.getTracksAndSettings()]);
   if (!track) return json({ error: `unknown track "${key}" - not in the configured tracks` }, 404);
+
+  // A track that exists but has no search config at all would still compose a
+  // perfectly well-formed prompt - out of the generic fallbacks. "Companies:
+  // ." and "Read the resume." and no geographic scope, followed by the same
+  // instructions to verify postings and POST them as leads. A scheduled run
+  // would carry that out and report success.
+  //
+  // That state is reachable, and not hypothetically: it's exactly what a
+  // track looks like between the multi-user migration (which copies no search
+  // config) and the config being posted for it. Refuse instead, so the run
+  // fails loudly and visibly rather than quietly doing a hollow search.
+  if (!track.role_search_line && !track.resume_line && !track.target_companies) {
+    return json(
+      {
+        error: `track "${key}" has no search config yet - post it to /api/config before running this search`,
+      },
+      409
+    );
+  }
+
   return text(buildSearchPrompt({ user, track, settings: config.settings }));
 }
 

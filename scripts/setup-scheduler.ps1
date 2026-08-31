@@ -190,7 +190,12 @@ if ($ownedPrefixes.Count -gt 0) {
             # that also has per-user folders: a -DataDir pointing elsewhere, a
             # tracker.json mid-write, or a half-migrated machine that still
             # has the old environment variables set.
-            if ($p -eq "JobSearch-" -and $taskName -match '^JobSearch-[0-9a-f]{8}-') { continue }
+            # Matched on the second hyphen rather than on a GUID shape: the
+            # prefix is built from a folder name, which this script elsewhere
+            # allows not to be a GUID, and ConvertTo-TaskSuffix can never emit
+            # a hyphen - so a second one always means "this is somebody's
+            # per-user task", whatever their folder is called.
+            if ($p -eq "JobSearch-" -and $taskName -match '^JobSearch-.+-') { continue }
             if ($taskName.StartsWith($p)) { $mine = $true }
         }
         $mine -and ($registered -notcontains $taskName)

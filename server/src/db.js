@@ -379,10 +379,19 @@ export class Db {
     // field is done by sending it as "".
     const existing = {};
     const current = await this.d1
-      .prepare(`SELECT key, ${TRACK_CONFIG_FIELDS.join(", ")} FROM tracks WHERE user_id = ?`)
+      .prepare(`SELECT key, ${cols.join(", ")} FROM tracks WHERE user_id = ?`)
       .bind(this.userId)
       .all();
     for (const row of current.results) existing[row.key] = row;
+
+    // Falls back through: what was posted, then what's stored, then the
+    // default. `sort_order` needs the same treatment as the text fields -
+    // defaulting it to the array index silently reorders someone's tabs when
+    // a caller posts the tracks in a different order than they're displayed.
+    const keep = (t, f, fallback) => {
+      const stored = existing[t.key] && existing[t.key][f];
+      return stored !== undefined && stored !== null ? stored : fallback;
+    };
     const stmt = this.d1.prepare(
       `INSERT INTO tracks (user_id, key, ${cols.join(", ")})
        VALUES (?, ?, ${cols.map(() => "?").join(", ")})
@@ -407,16 +416,15 @@ export class Db {
         stmt.bind(
           this.userId,
           t.key,
-          t.label || t.key,
-          t.full_description || "",
-          Number.isInteger(t.sort_order) ? t.sort_order : i,
+          typeof t.label === "string" && t.label ? t.label : keep(t, "label", t.key),
+          typeof t.full_description === "string" ? t.full_description : keep(t, "full_description", ""),
+          Number.isInteger(t.sort_order) ? t.sort_order : keep(t, "sort_order", i),
           ...TRACK_CONFIG_FIELDS.map((f) => {
             // target_companies is the one structured field: accept an array
             // and store it as JSON, or pass through a string that already is.
             if (f === "target_companies" && Array.isArray(t[f])) return JSON.stringify(t[f]);
             if (typeof t[f] === "string") return t[f];
-            const kept = existing[t.key] && existing[t.key][f];
-            return typeof kept === "string" ? kept : "";
+            return keep(t, f, "");
           })
         )
       ),
@@ -426,15 +434,27 @@ export class Db {
   }
 
   /**
-   * Sets any subset of this user's settings. Empty strings are ignored (falls
-   * back to DEFAULT_SETTINGS) rather than stored, so clearing a field produces
-   * the default instead of a blank label.
+   * Sets any subset of this user's settings.
+   *
+   * The two groups differ on what an empty string means, because what the
+   * user wants from it differs. For a display label ("" as a page title) the
+   * only sensible reading is "use the default", so it's ignored and
+   * DEFAULT_SETTINGS applies. For a prompt setting, "" is a real instruction:
+   * dropping a geographic restriction, or removing a footer note, means
+   * clearing the text. Ignoring it there would mean a widened search scope
+   * silently didn't take, and the searches would go on excluding what the
+   * installer just told them to stop excluding.
    * @param {Partial<Settings>} patch
    */
   async setSettings(patch) {
-    const textSettings = [...SETTING_KEYS, ...PROMPT_SETTING_KEYS].filter((k) => k !== "stale_run_hours");
-    for (const key of textSettings) {
+    const labels = SETTING_KEYS.filter((k) => k !== "stale_run_hours");
+    for (const key of labels) {
       if (typeof patch[key] === "string" && patch[key]) {
+        await this.setSetting(key, patch[key]);
+      }
+    }
+    for (const key of PROMPT_SETTING_KEYS) {
+      if (typeof patch[key] === "string") {
         await this.setSetting(key, patch[key]);
       }
     }

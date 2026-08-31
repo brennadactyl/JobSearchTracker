@@ -231,9 +231,13 @@ wrangler deploy
    ```
    Nothing on the search machine changes - it keeps sending the same token -
    and the credential stays revocable by deleting that one row later.
-5. `wrangler deploy`, then deploy the client. Re-enable the scheduled tasks
-   (`Get-ScheduledTask -TaskName "JobSearch-*" | Enable-ScheduledTask`) once
-   both are live.
+5. `wrangler deploy`, then deploy the client. **Leave the tasks disabled** -
+   they have nothing to run yet. The migration copies no search config, so
+   until step 8 each track exists for the webpage but not for searching.
+   `/api/prompt` returns a 409 for a track in that state rather than
+   composing a prompt out of its generic fallbacks, so a run started early
+   fails loudly instead of searching for nothing in particular and reporting
+   success - but there's no reason to make it fail at all.
 6. Give the account a real name and password. **The two names must match** -
    `POST /api/users` with a name that doesn't match an existing account
    creates a new empty one rather than setting the password on this one.
@@ -254,6 +258,31 @@ wrangler deploy
    deleting anything**: `curl -s "$TRACKER_URL/api/prompt/<key>" -H
    "Authorization: Bearer <token>"` against the `.md` it replaces. Expect
    only wording normalizations; anything else means config is missing.
+9. Move the data folder to `private\<user-id>\`, write its `tracker.json`
+   (see [`../private.example/README.md`](../private.example/README.md)), then
+   re-register the schedule and re-enable it:
+   ```powershell
+   .\scripts\setup-scheduler.ps1
+   Get-ScheduledTask -TaskName "JobSearch-*" | Enable-ScheduledTask
+   ```
+   **Then unregister the old, pre-migration tasks.** They're named
+   `JobSearch-<Track>` where the new ones are `JobSearch-<user>-<Track>`, so
+   nothing replaces them and nothing cleans them up - left alone, each track
+   would run twice a day, once through each task:
+   ```powershell
+   Get-ScheduledTask -TaskName "JobSearch-*" |
+     Where-Object { $_.TaskName -notmatch '^JobSearch-.+-' } |
+     Unregister-ScheduledTask -Confirm:$false
+   ```
+10. Confirm a real run works end to end before trusting the schedule:
+    `.\scripts\run-search.ps1 -Task <key> -User <user-id>`, then check the log
+    and that the track's tab reports the run.
+
+**If it goes wrong**, the recovery is the step-1 export: `wrangler d1 execute
+job-search-tracker-db --remote --file backup.sql` against a database you've
+dropped the tables from, or re-create the D1 and import there. There is no
+down-migration - `0002` drops and recreates five tables, and a partially
+applied run is not something to unpick by hand.
 
 ### The schema files
 
@@ -360,6 +389,18 @@ database is fine.
 
 If you change anything in `db.js`, run this. A missing `AND user_id = ?`
 fails nothing, breaks no page, and silently serves someone else's job search.
+
+The migration gets its own check, because `verify-local.mjs` only ever sees a
+database the migration built from empty - it would not notice `0002` losing a
+column, dropping rows, or resetting AUTOINCREMENT on a database that already
+had data. `verify-migration.mjs` seeds a throwaway in-process SQLite database
+with pre-migration rows, applies both migration files, and checks what came
+out the other side. No wrangler, no dev worker, nothing to clean up:
+
+```bash
+cd server
+node verify-migration.mjs
+```
 
 ## Security notes
 

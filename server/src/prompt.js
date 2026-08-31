@@ -46,6 +46,11 @@ function joinAnd(parts) {
   return p.slice(0, -1).join(", ") + ", and " + p[p.length - 1];
 }
 
+const DEFAULT_LOCATION_GUIDANCE =
+  "Write accurate location strings - the tracker derives priority from them " +
+  "automatically, so precision matters. There is no priority field to set - " +
+  "just get the location text right.";
+
 const DEFAULT_SCREENED_EXAMPLES =
   '"outside scope: London, UK", "404 - closed", "duplicate of req 7829580003", "below target level"';
 
@@ -130,6 +135,11 @@ export function buildSearchPrompt({ user, track, settings }) {
   const geoStep = settings.geo_scope_line
     ? settings.geo_scope_line
     : "No geographic restriction is configured for this search - don't exclude a posting on location alone.";
+  // Unlike the others, this one can't be emptied into nothing: it's a whole
+  // numbered step, and the generic version still earns its place even with no
+  // priority locations set, because the tracker derives a lead's priority from
+  // the location text either way.
+  const locationGuidance = settings.location_guidance || DEFAULT_LOCATION_GUIDANCE;
   const screenedExamples = track.screened_examples || DEFAULT_SCREENED_EXAMPLES;
   const report = track.report_line || DEFAULT_REPORT_LINE;
   const footer = settings.footer_note ? ` ${settings.footer_note}` : "";
@@ -147,7 +157,7 @@ ${intro}Do the following:
 3. Search target companies' careers sites (web search as backup) for current ${roleLine}. Companies: ${companies}.${searchNote} Also run the doc's broader-discovery step.
 4. MANDATORY VERIFICATION: fetch every candidate URL directly and confirm it renders an actual job description (real title, responsibilities/qualifications - not a landing page, 404, "job not found," a loading placeholder, or a listing/index page that merely contains the title text). A search-snippet URL is a lead, not a finding, until opened and confirmed. If a site won't reveal real content, skip that company today rather than report something unverified.
 5. ${geoStep}
-6. ${settings.location_guidance}
+6. ${locationGuidance}
 ${fitFilterStep}${captureNum}. While the posting is open, also capture - only when it's stated plainly, never inferred or guessed - the team/org named for the role (\`team\`), the stated work arrangement (\`setup\`, e.g. "Remote", "Hybrid - 3 days/week onsite", "Onsite"), and any posted compensation range (\`comp\`, e.g. "$180,000-$230,000/yr"; many US states disclose this by law). Leave any of these as an empty string when the posting doesn't say. These land in the tracker's per-lead "Details" panel alongside referral/resume/next-action fields that are ${name}'s alone to fill in by hand - this search never touches those.
 7. Compare candidate URLs against \`leads[]\` and \`screened[]\` from step 1b (not a doc table). Sort each candidate into: (a) already tracked or already screened - skip it; (b) ${findingIs} - a finding, goes to step 9; (c) genuinely new but disqualified (${disqualified}) - goes to step 9b instead of being dropped silently.
 8. For a previously-tracked lead (from step 1b's \`leads[]\`) confirmed dead on this check, **never remove or move it** - it stays a lead. Use the step-1b tracker data (match by \`url\`) to call \`POST /api/update\` marking it delisted:

@@ -771,7 +771,15 @@ function logout(){
   var token=TOKEN;
   forgetSession("");
   if(!token||!API_BASE)return;
-  fetch(API_BASE+"/api/logout",{method:"POST",headers:{"Authorization":"Bearer "+token}}).catch(function(){});
+  // Say so if the revoke didn't land. This browser has already forgotten the
+  // token either way - that part must not depend on the network - but the
+  // token is still live on the server, which matters on a shared machine.
+  fetch(API_BASE+"/api/logout",{method:"POST",headers:{"Authorization":"Bearer "+token}}).then(function(res){
+    if(!res.ok)throw new Error("status "+res.status);
+  }).catch(function(){
+    document.getElementById("gateError").textContent=
+      "Signed out here, but couldn't reach the server to revoke this session.";
+  });
 }
 
 function api(path,opts){
