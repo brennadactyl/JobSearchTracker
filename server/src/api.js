@@ -54,15 +54,22 @@ function today() {
 // status-change endpoints below; the generic handleUpdate() path is left
 // unvalidated on purpose - see handleSetLeadStatus/handleSetApplicationStatus.
 export const LEAD_STATUS = ["New", "Reviewing", "Applied", "Not a fit"];
+// "To Apply" is a posting logged before applying to it - a row that lives in
+// the Applications tab (so it can carry notes, comp, link, next action) but
+// hasn't been sent yet. It's first because it's the stage before "Applied";
+// a row that starts here has no dateApplied until it moves on.
 export const APP_STATUS = [
-  "Applied", "Recruiter Screen", "Tech Screen", "Onsite / Loop",
+  "To Apply", "Applied", "Recruiter Screen", "Tech Screen", "Onsite / Loop",
   "Offer", "Rejected", "Withdrawn",
 ];
 
 // Which applications column holds the date an application first reached a
 // given pipeline stage - mirrors page.html's STAGE_DATE_FIELDS. "Applied"
-// isn't here; it already has dateApplied.
+// maps to dateApplied, the column it already had, so a "To Apply" row gets
+// stamped the day it's actually applied to (the stamp only fires on a blank
+// column, so it never rewrites a date that's already there).
 export const STAGE_DATE_MAP = {
+  "Applied": "dateApplied",
   "Recruiter Screen": "dateRecruiterScreen",
   "Tech Screen": "dateTechScreen",
   "Onsite / Loop": "dateOnsite",
@@ -304,6 +311,12 @@ export async function handleSetLeadStatus(request, db, id) {
 // date in the same statement - but only if that column is still empty,
 // so it never overwrites a date the user corrected or backfilled by hand
 // (that still goes through the generic handleUpdate() path above).
+//
+// Moving back to "To Apply" is the one case that clears a date instead of
+// stamping one: the row is being marked as not applied to yet, so the
+// applied date it was created with (insertApplication defaults it to today)
+// would be a lie, and leaving it there would also block the stamp above
+// from firing when the application actually goes out.
 export async function handleSetApplicationStatus(request, db, id) {
   let body;
   try {
@@ -315,7 +328,12 @@ export async function handleSetApplicationStatus(request, db, id) {
     return json({ error: "invalid status" }, 400);
   }
 
-  const application = await db.setApplicationStatus(id, body.status, STAGE_DATE_MAP[body.status] || null);
+  const application = await db.setApplicationStatus(
+    id,
+    body.status,
+    STAGE_DATE_MAP[body.status] || null,
+    body.status === "To Apply" ? "dateApplied" : null
+  );
   if (!application) return json({ error: "application not found" }, 404);
   await db.touchUpdated();
   return json({ application });

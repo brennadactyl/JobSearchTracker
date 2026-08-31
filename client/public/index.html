@@ -368,7 +368,12 @@ function toggleTheme(){
 paintThemeToggle();
 
 var LEAD_STATUS=["New","Reviewing","Applied","Not a fit"];
-var APP_STATUS=["Applied","Recruiter Screen","Tech Screen","Onsite / Loop","Offer","Rejected","Withdrawn"];
+// "To Apply" is a posting parked in this tab before applying to it - worth
+// tracking (notes, comp, link, next action) but not sent yet, so it has no
+// applied date until it moves to "Applied". Switching a row to it clears
+// dateApplied server-side, and switching to "Applied" stamps it - see
+// api.js's handleSetApplicationStatus.
+var APP_STATUS=["To Apply","Applied","Recruiter Screen","Tech Screen","Onsite / Loop","Offer","Rejected","Withdrawn"];
 var ACTIVE=["Recruiter Screen","Tech Screen","Onsite / Loop"];
 // Populated from state.tracks on boot (see buildTracks/applyConfig below) -
 // not baked in, so this same deployed code serves any installer's tracks.
@@ -575,9 +580,21 @@ var APP_SORTS=[
   ["company-asc","Company A-Z"]
 ];
 function appComparator(sortKey){
-  if(sortKey==="applied-asc")return function(a,b){return String(a.dateApplied).localeCompare(String(b.dateApplied));};
   if(sortKey==="company-asc")return function(a,b){return String(a.company).localeCompare(String(b.company));};
-  return function(a,b){return String(b.dateApplied).localeCompare(String(a.dateApplied));};
+  var byDate=sortKey==="applied-asc"
+    ?function(a,b){return String(a.dateApplied).localeCompare(String(b.dateApplied));}
+    :function(a,b){return String(b.dateApplied).localeCompare(String(a.dateApplied));};
+  // "To Apply" rows have no applied date to sort by, so either date sort
+  // would clump them at one end on an empty string - last, under the
+  // default, which is the wrong place for the only rows still owing an
+  // application. Float them to the top instead (same shape as the leads
+  // comparator sinking "Not a fit"). Company A-Z above is left alone: an
+  // explicit alphabetical sort should be exactly alphabetical.
+  return function(a,b){
+    var ta=a.status==="To Apply"?0:1, tb=b.status==="To Apply"?0:1;
+    if(ta!==tb)return ta-tb;
+    return byDate(a,b);
+  };
 }
 
 function sortSelectHtml(kind,id){
@@ -765,6 +782,7 @@ function delistedBadge(l){
 
 function pillFor(st){
   var m={"New":"new","Reviewing":"hot","Applied":"go","Not a fit":"no",
+         "To Apply":"new",
          "Recruiter Screen":"hot","Tech Screen":"hot","Onsite / Loop":"hot","Offer":"go",
          "Rejected":"bad","Withdrawn":"no"};
   return m[st]||"live";
@@ -783,6 +801,11 @@ function dashboard(){
   var active=A.filter(function(a){return ACTIVE.indexOf(a.status)>=0;}).length;
   var stale=A.filter(function(a){var d=daysSince(a.dateApplied);
     return a.status==="Applied"&&d!==null&&d>14;}).length;
+  // "To Apply" rows sit in the Applications tab without having been applied
+  // to, so they'd inflate an "Applied" count - split them out and show them
+  // as their own line under the tile instead.
+  var toApply=A.filter(function(a){return a.status==="To Apply";}).length;
+  var appliedCount=A.length-toApply;
   var near=L.filter(function(l){var g=geo(l.location);
     return g&&g.p==="p-high"&&l.status!=="Not a fit"&&l.status!=="Applied";}).length;
   var topRule=(state.settings.priority_locations||[]).filter(function(r){return r.tier==="p-high";})[0];
@@ -793,7 +816,8 @@ function dashboard(){
     '<div class="tile hi"><div class="k">Untriaged</div><div class="v mono">'+fresh+'</div><div class="f">leads marked New</div></div>'+
     '<div class="tile"><div class="k">'+esc(topLabel)+'</div><div class="v mono" style="color:var(--pri-high)">'+near+'</div><div class="f">still open</div></div>'+
     '<div class="tile"><div class="k">Tracked leads</div><div class="v mono">'+L.length+'</div><div class="f">across '+trackCount+' tracked search'+(trackCount===1?'':'es')+'</div></div>'+
-    '<div class="tile"><div class="k">Applied</div><div class="v mono">'+A.length+'</div><div class="f">in your Applications tab</div></div>'+
+    '<div class="tile"><div class="k">Applied</div><div class="v mono">'+appliedCount+'</div><div class="f">'+
+      (toApply?'plus '+toApply+' still to apply':'in your Applications tab')+'</div></div>'+
     '<div class="tile"><div class="k">In conversation</div><div class="v mono">'+active+'</div><div class="f">screen or loop stage</div></div>'+
     '<div class="tile"><div class="k">Gone quiet</div><div class="v mono">'+stale+'</div><div class="f">applied 14+ days ago</div></div>'+
   '</div>';
@@ -1021,7 +1045,10 @@ function appsTab(){
       '<div class="md-row-top"><span class="co">'+esc(a.company||"Untitled")+'</span>'+
         '<span class="pill '+pillFor(a.status)+'">'+esc(a.status)+'</span></div>'+
       '<div class="md-row-ttl">'+esc(a.title||"&mdash;")+'</div>'+
-      '<div class="md-row-loc">Applied '+esc(a.dateApplied)+(d!==null?' &middot; '+d+'d':'')+'</div>'+
+      // A "To Apply" row has no applied date to count from (see APP_STATUS),
+      // so say that rather than render a bare "Applied" with nothing after it.
+      '<div class="md-row-loc">'+(a.status==="To Apply"?'Not applied yet'
+        :'Applied '+esc(a.dateApplied)+(d!==null?' &middot; '+d+'d':''))+'</div>'+
     '</div>';
   }).join("");
 

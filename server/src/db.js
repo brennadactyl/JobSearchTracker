@@ -474,18 +474,24 @@ export class Db {
    * empty, so it never overwrites a date the user corrected by hand.
    * @param {number|string} id
    * @param {string} status
-   * @param {string|null} stageDateColumn - one of APP_STAGE_DATE_FIELDS, or null if this status has none
+   * @param {string|null} stageDateColumn - one of APP_STAGE_DATE_FIELDS (or dateApplied, for "Applied"), or null if this status has none
+   * @param {string|null} clearColumn - a date column to blank instead of stamp - see handleSetApplicationStatus's "To Apply" case
    * @returns {Promise<Application|null>}
    */
-  async setApplicationStatus(id, status, stageDateColumn) {
-    const result = stageDateColumn
-      ? await this.d1
-          .prepare(
-            `UPDATE applications SET status = ?, ${stageDateColumn} = CASE WHEN ${stageDateColumn} = '' THEN ? ELSE ${stageDateColumn} END WHERE id = ?`
-          )
-          .bind(status, today(), id)
-          .run()
-      : await this.d1.prepare("UPDATE applications SET status = ? WHERE id = ?").bind(status, id).run();
+  async setApplicationStatus(id, status, stageDateColumn, clearColumn = null) {
+    // Column names here come from api.js's own constants, never from the
+    // request body, so they're safe to interpolate; the values still bind.
+    const sets = ["status = ?"];
+    const values = [status];
+    if (stageDateColumn) {
+      sets.push(`${stageDateColumn} = CASE WHEN ${stageDateColumn} = '' THEN ? ELSE ${stageDateColumn} END`);
+      values.push(today());
+    }
+    if (clearColumn) sets.push(`${clearColumn} = ''`);
+    const result = await this.d1
+      .prepare(`UPDATE applications SET ${sets.join(", ")} WHERE id = ?`)
+      .bind(...values, id)
+      .run();
     if (result.meta.changes === 0) return null;
     return this.getApplication(id);
   }
