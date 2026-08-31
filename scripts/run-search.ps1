@@ -92,7 +92,33 @@ if (-not $claude) {
 }
 $claudePath = if ($claude -is [System.Management.Automation.CommandInfo]) { $claude.Source } else { $claude }
 
-$prompt = Get-Content -Raw -Path $promptFile
+$promptBody = Get-Content -Raw -Path $promptFile
+
+# This runs as a single headless, non-interactive `claude -p` turn - nobody is
+# there to read a "kicked off as a background agent, I'll report back" reply.
+# If the model backgrounds any part of the work (a Bash run_in_background
+# call, or a subagent), this process's background-task wait ceiling (600s by
+# default) kills it and exits before the search finishes - it never gets to
+# verify postings, sync leads, or record the run. Confirmed happening for
+# real on 2026-08-30 (technical-pm run): the model backgrounded the whole
+# search, the ceiling hit, and nothing was synced or recorded even though
+# Task Scheduler saw exit code 0. So the prompt has to say explicitly, every
+# run, not to do that - the per-track .md files can't be trusted to always
+# include this on their own since they're per-installer generated copies.
+$prompt = @"
+IMPORTANT: this is one single non-interactive headless run. This process
+exits as soon as your turn ends, and nobody reads any message after that -
+there is no follow-up turn. Do all of the work below yourself, synchronously,
+in this one turn. Do not hand any part of it (web searches, URL
+verification, curl calls, or the task as a whole) off to a backgrounded Bash
+command or a background subagent and end your turn early saying you'll
+report back - a backgrounded task does not survive this process exiting, so
+it would be killed mid-run and nothing would get verified, synced, or
+recorded. If the work risks running long, that's fine - just do it inline;
+do not shorten or skip verification steps to save time either.
+
+$promptBody
+"@
 $allowedTools = "Read Write Edit Glob Grep WebSearch WebFetch Bash"
 
 Log "===== starting $Task ====="
