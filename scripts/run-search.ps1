@@ -3,22 +3,25 @@
   Runs one daily job-search prompt through the Claude Code CLI.
 
 .DESCRIPTION
-  Generic runner - contains no personal data itself. It reads a prompt file from
-  <DataDir>\scheduled-tasks\<Task>.md, runs it non-interactively via `claude -p`,
-  and logs output to <DataDir>\logs\<Task>.log. Working directory is set to
-  <DataDir> so the relative paths inside the prompt (docs/..., resumes/..., etc.)
+  Generic runner - contains no personal data itself. It fetches the prompt for
+  one track from the tracker API (`GET /api/prompt/<task>`), runs it
+  non-interactively via `claude -p`, and logs output to
+  <DataDir>\<User>\logs\<Task>.log. Working directory is set to the user's
+  folder so the relative paths inside the prompt (docs/..., resumes/...)
   resolve correctly.
+
+  The prompt is composed server-side from that track's config in D1, not read
+  from a file here. That's what lets one machine run several people's searches
+  without holding several people's search config, and what keeps the API's own
+  calling convention (the curl steps) defined in one place instead of copied
+  into a prompt file per track. See ../server/src/prompt.js.
 
   Runs with a scoped tool allowlist (Read/Write/Edit/Glob/Grep/WebSearch/WebFetch/
   Bash) so it doesn't stall on a permission prompt with nobody there to answer
   it. Bash is unscoped rather than limited to e.g. "Bash(curl:*)" - a narrower
   pattern blocked the model from even checking whether TRACKER_URL/
   TRACKER_API_TOKEN were set before attempting curl, since env-checking
-  commands (printenv etc.) didn't match the pattern. The prompt syncs new
-  postings to the tracker API via `curl`, which needs TRACKER_URL and
-  TRACKER_API_TOKEN set as environment variables (see ../server/README.md) -
-  if they're missing, the search and doc update still run, the sync step is
-  just skipped.
+  commands (printenv etc.) didn't match the pattern.
 
   Logs a config summary at the start, a heartbeat line every 20s while the
   search is running (searches take several minutes - without this the log
@@ -26,23 +29,32 @@
   exit status at the end.
 
 .PARAMETER Task
-  Which search to run - any name with a matching <DataDir>\scheduled-tasks\<Task>.md
-  file (e.g. "engineering", "data-science", whatever tracks you've set up).
-  Not a fixed list: this runner has no opinion on how many tracks you have or
-  what they're called, only that a prompt file exists for the one you name.
+  Which track to run - any key configured for this user in the tracker (e.g.
+  "SWE", "engineering"). Not a fixed list: the runner has no opinion on how
+  many tracks exist or what they're called, only that the API has config for
+  the one you name.
+
+.PARAMETER User
+  Which person's search this is - the user id (a GUID) whose folder under
+  <DataDir> holds their resumes, docs, logs, and tracker.json credentials.
+  Omit it for a single-user machine, where those live in <DataDir> directly
+  and the credentials come from the environment.
 
 .PARAMETER DataDir
-  Path to the private data folder (the "silo") holding docs/, resumes/,
-  reference/, scheduled-tasks/. Defaults to the JOB_SEARCH_DATA_DIR
-  environment variable, then to a "private" folder next to this repo.
+  Path to the private data folder (the "silo"). With -User, it holds one
+  folder per person; without, it holds one person's docs/, resumes/, logs/
+  directly. Defaults to the JOB_SEARCH_DATA_DIR environment variable, then to
+  a "private" folder next to this repo.
 
 .EXAMPLE
-  .\run-search.ps1 -Task engineering
-  .\run-search.ps1 -Task product -DataDir "D:\JobSearchData"
+  .\run-search.ps1 -Task SWE -User ab266b6c-00cc-45d1-92ac-cdad412c1558
+  .\run-search.ps1 -Task engineering                 # single-user machine
 #>
 param(
     [Parameter(Mandatory = $true)]
     [string]$Task,
+
+    [string]$User,
 
     [string]$DataDir = $(if ($env:JOB_SEARCH_DATA_DIR) { $env:JOB_SEARCH_DATA_DIR } else { Join-Path $PSScriptRoot "..\private" })
 )
@@ -55,18 +67,36 @@ if (-not (Test-Path $DataDir)) {
 }
 $DataDir = (Resolve-Path $DataDir).Path
 
-$promptFile = Join-Path $DataDir "scheduled-tasks\$Task.md"
-if (-not (Test-Path $promptFile)) {
-    $tasksDir = Join-Path $DataDir "scheduled-tasks"
-    $available = if (Test-Path $tasksDir) {
-        (Get-ChildItem $tasksDir -Filter "*.md" | ForEach-Object { $_.BaseName }) -join ", "
-    } else { $null }
-    $hint = if ($available) { "Available tasks: $available" } else { "No .md files found in $tasksDir either." }
-    Write-Error "Prompt file not found: $promptFile`n$hint"
+# One folder per person when -User is given; the data dir itself otherwise, so
+# a machine that was set up before there was more than one person keeps working
+# untouched.
+$workDir = if ($User) { Join-Path $DataDir $User } else { $DataDir }
+if (-not (Test-Path $workDir)) {
+    Write-Error "User folder not found: $workDir`nSee private.example/README.md for the expected layout."
     exit 1
 }
 
-$logDir = Join-Path $DataDir "logs"
+# Credentials live next to the data they belong to, not in the machine's
+# environment: one machine runs several people's searches, and an environment
+# variable can only hold one person's token. The environment stays as the
+# fallback for a single-user machine that predates this.
+$trackerFile = Join-Path $workDir "tracker.json"
+if (Test-Path $trackerFile) {
+    $tracker = Get-Content -Raw -Path $trackerFile | ConvertFrom-Json
+    $trackerUrl = $tracker.url
+    $trackerToken = $tracker.token
+} else {
+    $trackerUrl = $env:TRACKER_URL
+    $trackerToken = $env:TRACKER_API_TOKEN
+}
+
+if (-not $trackerUrl -or -not $trackerToken) {
+    Write-Error "No tracker credentials. Create $trackerFile with {`"url`": `"...`", `"token`": `"...`"}, or set TRACKER_URL and TRACKER_API_TOKEN. See ../server/README.md."
+    exit 1
+}
+$trackerUrl = $trackerUrl.TrimEnd("/")
+
+$logDir = Join-Path $workDir "logs"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $logFile = Join-Path $logDir "$Task.log"
 
@@ -92,7 +122,35 @@ if (-not $claude) {
 }
 $claudePath = if ($claude -is [System.Management.Automation.CommandInfo]) { $claude.Source } else { $claude }
 
-$promptBody = Get-Content -Raw -Path $promptFile
+# The prompt comes from the tracker, composed from this track's config. A
+# failure here is fatal and loud: running a stale or empty prompt would look
+# like a search that ran and found nothing, which is the exact ambiguity the
+# run record exists to prevent.
+Log "===== starting $Task ====="
+Log "data dir:         $DataDir"
+Log "work dir:         $workDir"
+Log "user:             $(if ($User) { $User } else { '(single-user machine)' })"
+Log "tracker:          $trackerUrl"
+Log "credentials from: $(if (Test-Path $trackerFile) { $trackerFile } else { 'environment' })"
+
+try {
+    $promptBody = Invoke-RestMethod -Uri "$trackerUrl/api/prompt/$Task" -Headers @{ Authorization = "Bearer $trackerToken" } -ErrorAction Stop
+} catch {
+    $status = $_.Exception.Response.StatusCode.value__
+    $hint = switch ($status) {
+        401 { "the token in $trackerFile isn't valid (revoked, or from another deployment)" }
+        404 { "no track '$Task' is configured for this user - check the tracker's config" }
+        default { $_.Exception.Message }
+    }
+    Log "ERROR: couldn't fetch the prompt ($status): $hint"
+    Write-Error "Couldn't fetch the prompt for '$Task' ($status): $hint"
+    exit 1
+}
+if (-not $promptBody) {
+    Log "ERROR: the tracker returned an empty prompt for $Task"
+    Write-Error "The tracker returned an empty prompt for '$Task'."
+    exit 1
+}
 
 # This runs as a single headless, non-interactive `claude -p` turn - nobody is
 # there to read a "kicked off as a background agent, I'll report back" reply.
@@ -103,8 +161,8 @@ $promptBody = Get-Content -Raw -Path $promptFile
 # real on 2026-08-30 (technical-pm run): the model backgrounded the whole
 # search, the ceiling hit, and nothing was synced or recorded even though
 # Task Scheduler saw exit code 0. So the prompt has to say explicitly, every
-# run, not to do that - the per-track .md files can't be trusted to always
-# include this on their own since they're per-installer generated copies.
+# run, not to do that - it's about how this runner invokes the CLI, which is
+# why it's here and not in the prompt the tracker composes.
 $prompt = @"
 IMPORTANT: this is one single non-interactive headless run. This process
 exits as soon as your turn ends, and nobody reads any message after that -
@@ -121,28 +179,28 @@ $promptBody
 "@
 $allowedTools = "Read Write Edit Glob Grep WebSearch WebFetch Bash"
 
-Log "===== starting $Task ====="
-Log "data dir:        $DataDir"
-Log "prompt file:      $promptFile ($((Get-Item $promptFile).Length) bytes)"
-Log "claude CLI:      $claudePath"
+Log "prompt:           $($promptBody.Length) chars from $trackerUrl/api/prompt/$Task"
+Log "claude CLI:       $claudePath"
 Log "allowed tools:    $allowedTools"
 Log "CLAUDE_CODE_OAUTH_TOKEN set: $([bool]$env:CLAUDE_CODE_OAUTH_TOKEN)"
-Log "TRACKER_URL set:            $([bool]$env:TRACKER_URL)"
-Log "TRACKER_API_TOKEN set:      $([bool]$env:TRACKER_API_TOKEN)"
 
 $job = Start-Job -ScriptBlock {
-    param($claudePath, $prompt, $allowedTools, $dataDir)
-    Set-Location $dataDir
+    param($claudePath, $prompt, $allowedTools, $workDir, $trackerUrl, $trackerToken)
+    Set-Location $workDir
+    # The prompt's own curl calls read these from the environment. Set inside
+    # the script block because Start-Job runs in its own process - and set from
+    # the resolved per-user values, so two people's searches on one machine
+    # each authenticate as themselves.
+    $env:TRACKER_URL = $trackerUrl
+    $env:TRACKER_API_TOKEN = $trackerToken
     # The claude CLI writes UTF-8. Without this, PowerShell decodes its stdout
     # using the console's OEM codepage instead, so every non-ASCII character
     # the model writes is mangled before it ever reaches the log file - an
     # em-dash lands as "-o" garbage, and no amount of fixing the file's own
     # encoding recovers it, because the damage happened upstream of the write.
-    # Set inside the script block on purpose: Start-Job runs in its own
-    # process, so setting this in the parent would have no effect here.
     [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
     & $claudePath -p $prompt --allowedTools $allowedTools 2>&1
-} -ArgumentList $claudePath, $prompt, $allowedTools, $DataDir
+} -ArgumentList $claudePath, $prompt, $allowedTools, $workDir, $trackerUrl, $trackerToken
 
 $start = Get-Date
 Log "job started (id $($job.Id)), waiting..."
