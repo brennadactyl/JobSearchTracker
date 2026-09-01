@@ -743,7 +743,9 @@ function runSummary(run){
   var bits=[];
   if(run.leads_added)bits.push(run.leads_added+" new");
   if(run.screened_added)bits.push(run.screened_added+" screened out");
-  if(run.delisted)bits.push(run.delisted+" delisted");
+  // The run record still counts these ("2 postings came down today") even
+  // though nothing on a lead marks it - the rows themselves were deleted.
+  if(run.delisted)bits.push(run.delisted+" taken down");
   return bits.length?bits.join(", "):"found nothing new";
 }
 
@@ -933,14 +935,6 @@ function tabsHtml(){
   }).join("");
 }
 
-// A lead's original posting can be confirmed taken down independent of
-// `status` (which is the installer's own application-progress field) - so
-// an "Applied" lead can still show as delisted without status being touched
-// or overwritten. See migrations/0001_schema.sql.
-function delistedBadge(l){
-  return l.delistedOn?' <span class="pill bad" title="Original posting confirmed no longer live">Delisted '+esc(l.delistedOn)+'</span>':"";
-}
-
 function pillFor(st){
   var m={"New":"new","Reviewing":"hot","Applied":"go","Not a fit":"no",
          "To Apply":"new",
@@ -1094,10 +1088,18 @@ function dashboard(){
 }
 
 function leadsTab(key){
-  // A lead marked "Applied" has moved to the Applications tab (see
-  // setLeadStatus()) - it's still in state.leads underneath (so URL
-  // dedup and delistedOn tracking keep working), just no longer shown here.
-  var all=state.leads.filter(function(l){return l.search===key&&l.status!=="Applied";});
+  // One reason a tracked lead isn't shown here: it's been marked "Applied"
+  // and moved to the Applications tab (see setLeadStatus()). The row itself
+  // stays in state.leads/the DB, which URL dedup needs. A lead whose posting
+  // has been taken down isn't filtered out here because it isn't in
+  // state.leads at all - the server deletes it when a search reports it dead
+  // (see api.js's removeDelistedLead), so there's no dead-posting state left
+  // for this function to know about.
+  // `tracked` keeps the unfiltered set only so the empty state below can tell
+  // a search that has never found anything from one whose finds have all been
+  // applied to.
+  var tracked=state.leads.filter(function(l){return l.search===key;});
+  var all=tracked.filter(function(l){return l.status!=="Applied";});
   var q=ui.q.toLowerCase();
   var rows=all.filter(function(l){
     if(ui.filter!=="All"&&l.status!==ui.filter)return false;
@@ -1127,15 +1129,26 @@ function leadsTab(key){
       '<span class="key-run">'+runStampHtml(key)+'</span></div>';
 
   if(!all.length){
-    // Which of the two "nothing here" stories this is depends entirely on
-    // the run record - an empty track whose search ran this morning is a
-    // real result; an empty track whose search hasn't run in a week isn't.
+    // An empty track has more than one story behind it, and they read very
+    // differently. Whether anything is still tracked separates a search that
+    // has turned up nothing from one whose finds have all been applied to;
+    // the run record separates a real zero (the search ran this morning and
+    // there was nothing) from a search that hasn't run in a week, which isn't
+    // a result at all. A track whose postings have all been taken down reads
+    // as the first of those - the rows were deleted, so nothing here can know
+    // they ever existed.
     var st0=runState(TRACKS[key].run);
+    var warn0=(st0==="stale"||st0==="error")
+      ? '<div class="empty-warn">But this search hasn&rsquo;t reported a clean run recently &mdash; check the scheduled task before reading this as a genuine zero.</div>'
+      : '';
+    if(tracked.length){
+      return h+'<div class="card empty"><strong>Nothing open right now</strong>'+
+        'Everything this search is still tracking has been applied to &mdash; it&rsquo;s all in the Applications tab. '+
+        'New postings land here as the daily run finds them.'+warn0+'</div>';
+    }
     return h+'<div class="card empty"><strong>No postings yet</strong>The '+esc(TRACKS[key].label).toLowerCase()+
       ' search hasn&rsquo;t turned up a verified opening yet. An empty day is a real result &mdash; nothing gets padded in here.'+
-      (st0==="stale"||st0==="error"
-        ? '<div class="empty-warn">But this search hasn&rsquo;t reported a clean run recently &mdash; check the scheduled task before reading this as a genuine zero.</div>'
-        : '')+'</div>';
+      warn0+'</div>';
   }
   if(!rows.length) return h+'<div class="card empty"><strong>Nothing matches</strong>Try a different filter.</div>';
 
@@ -1153,7 +1166,7 @@ function leadsTab(key){
     var cls="md-row"+(l.id===sel.id?" sel":"")+(g?" "+g.p:"");
     return '<div class="'+cls+'" data-select="'+l.id+'" data-scope="'+key+'">'+
       '<div class="md-row-top"><span class="co">'+esc(l.company)+'</span>'+
-        '<span class="pill '+pillFor(l.status)+'">'+esc(l.status)+'</span>'+delistedBadge(l)+'</div>'+
+        '<span class="pill '+pillFor(l.status)+'">'+esc(l.status)+'</span></div>'+
       '<div class="md-row-ttl">'+esc(l.title)+'</div>'+
       '<div class="md-row-loc"><span class="md-row-place">'+esc(l.location)+'</span>'+
         (g?'<span class="geo '+g.p+'">'+esc(g.label)+'</span>':'')+
@@ -1193,7 +1206,7 @@ function leadsGridHtml(rows,trackKey){
       '<td class="co cc" title="'+esc(l.company)+'">'+esc(l.company)+'</td>'+
       '<td class="rc"><a href="'+esc(l.url)+'" target="_blank" rel="noopener" title="'+esc(l.title)+'">'+esc(l.title)+'</a></td>'+
       '<td class="loc" title="'+esc(l.location)+'"><div class="loc-txt">'+esc(l.location)+'</div>'+(g?'<span class="geo '+g.p+'">'+esc(g.label)+'</span>':'')+'</td>'+
-      '<td>'+selectHtml(LEAD_STATUS,l.status,'data-id="'+l.id+'" data-field="status"')+delistedBadge(l)+'</td>'+
+      '<td>'+selectHtml(LEAD_STATUS,l.status,'data-id="'+l.id+'" data-field="status"')+'</td>'+
       LEAD_GRID_FIELDS.map(function(f){
         var key=f[0],val=l[key]||"";
         return '<td><input type="text" data-id="'+l.id+'" data-field="'+key+'" value="'+esc(val)+'"></td>';
@@ -1217,7 +1230,7 @@ function leadDetailHtml(l,key){
     '<div class="dh-meta">'+esc(l.location)+(g?' &middot; <span class="geo '+g.p+'">'+esc(g.label)+'</span>':'')+
       ' &middot; <a href="'+esc(l.url)+'" target="_blank" rel="noopener">View posting &#8599;</a></div></div>';
   if(l.fit)h+='<div class="dh-fit">'+esc(l.fit)+'</div>';
-  h+='<div class="dh-status">'+selectHtml(LEAD_STATUS,l.status,'data-id="'+l.id+'" data-field="status"')+delistedBadge(l)+
+  h+='<div class="dh-status">'+selectHtml(LEAD_STATUS,l.status,'data-id="'+l.id+'" data-field="status"')+
     '<span class="dh-dates">Found '+esc(l.found)+' &middot; Confirmed live '+esc(l.verified)+'</span></div>';
   h+='<div class="facts-card">'+factsGridHtml(l,ROLE_FIELDS,false)+'</div>';
   h+='<div class="dh-notes"><div class="mf-label">Notes</div>'+
@@ -1482,8 +1495,10 @@ function replaceById(list,item){
 // was two sequential POSTs from the client, which could leave a lead
 // marked Applied with no application if the second one never landed).
 // The lead row itself is untouched beyond its status: it stays in
-// state.leads/the DB (URL dedup and delistedOn tracking both need it to
-// still exist), it just no longer shows in the Leads tab - see leadsTab().
+// state.leads/the DB (URL dedup needs it to still exist), it just no longer
+// shows in the Leads tab - see leadsTab(). It's also the one kind of lead the
+// server will never delete when its posting comes down: an application row
+// points at this id. See api.js's removeDelistedLead.
 function setLeadStatus(id,value){
   setSaved("Saving…",false);
   api("/api/leads/"+id+"/status",{method:"POST",body:JSON.stringify({status:value})}).then(function(res){

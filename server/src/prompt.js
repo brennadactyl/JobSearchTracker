@@ -227,13 +227,15 @@ ${intro}Do the following:
 6. ${locationGuidance}
 ${fitFilterStep}${captureNum}. While the posting is open, also capture - only when it's stated plainly, never inferred or guessed - the team/org named for the role (\`team\`), the stated work arrangement (\`setup\`, e.g. "Remote", "Hybrid - 3 days/week onsite", "Onsite"), and any posted compensation range (\`comp\`, e.g. "$180,000-$230,000/yr"; many US states disclose this by law). Leave any of these as an empty string when the posting doesn't say. These land in the tracker's per-lead "Details" panel alongside referral/resume/next-action fields that are ${name}'s alone to fill in by hand - this search never touches those.
 7. Compare candidate URLs against \`leads[]\` and \`screened[]\` from step 1b (not a doc table). Sort each candidate into: (a) already tracked or already screened - skip it; (b) ${findingIs} - a finding, goes to step 9; (c) genuinely new but disqualified (${disqualified}) - goes to step 9b instead of being dropped silently.
-${filingStep}8. For a previously-tracked lead (from step 1b's \`leads[]\`) confirmed dead on this check, **never remove or move it** - it stays a lead. Use the step-1b tracker data (match by \`url\`) to call \`POST /api/update\` marking it delisted:
+${filingStep}8. For a previously-tracked lead (from step 1b's \`leads[]\`) confirmed dead on this check, **never delete or move anything yourself** - report it and let the tracker decide what to do with it. Use the step-1b tracker data (match by \`url\`) to call \`POST /api/update\` marking it delisted:
    \`\`\`
    curl -s -X POST "$TRACKER_URL/api/update" \\
      -H "Authorization: Bearer $TRACKER_API_TOKEN" -H "Content-Type: application/json" \\
      -d '{"type":"lead","id":<its id>,"delistedOn":"<today YYYY-MM-DD>"}'
    \`\`\`
-   This is independent of \`status\` (Applied, Interviewing, etc. are untouched) - ${name} still needs to track what ${pn.subj} applied to regardless of whether the listing survives. If a posting previously marked delisted is found live again, clear it the same way with \`"delistedOn":""\`. If the tracker's unreachable, skip the API call and note it in your report - don't guess an id.
+   One call per dead lead, and don't post it to \`/api/screened\` as well - this one call is the whole report. Send it the same way whatever \`status\` the lead is in; the tracker knows which ones to leave alone (${name}'s applied-to leads are kept - what matters there is the application, not whether the listing survived). A success response saying \`"removed":true\` means it took the posting off ${pn.poss} board, and \`"removed":false\` means it kept it - both are the tracker working as intended, not something to retry or work around. \`delistedOn\` must be a real \`YYYY-MM-DD\` - anything else is refused with a 400, since a value that isn't a date isn't a report of anything. **There is no undoing this report.** A removed lead's row is gone and its URL is in \`screened[]\` from then on, so step 7 skips that URL for good: if the posting turns out to be live after all, no future run puts it back. If the tracker's unreachable, skip the API call and note it in your report - don't guess an id.
+
+   **Only send this for a posting you have actually confirmed dead** - a page that loads and says the role is closed or filled, or a genuine 404. Not being able to check is not the same as dead: a fetch timeout, a blocked domain, a 403/429, truncated content, or a JS shell that renders nothing all mean *unknown*, and an unknown leaves the lead exactly as it is while you note the tooling problem in your report. Reporting a live posting as dead is not a mistake that shows up later as a wrong date on a row - it takes a real opening off ${pn.poss} board. When in doubt, leave it and say so.
 8b. ${docUpdateLine}
 9. SYNC NEW POSTINGS TO THE LIVE TRACKER WEBPAGE. If there are zero new verified postings from step 7, skip this step entirely - do not call the API. Otherwise, build a JSON array of only today's new postings and POST it with curl:
 
@@ -257,7 +259,7 @@ ${filingStep}8. For a previously-tracked lead (from step 1b's \`leads[]\`) confi
    say so in your report. Check the curl response: a JSON body with an
    \`"added"\` count means it worked; anything else (including no response, a
    non-2xx status, or an \`"error"\` field) means it failed - report that
-   plainly, the delisting update from step 8 still stands regardless.
+   plainly, the delisting reports from step 8 still stand regardless.
 9b. RECORD SCREENED-OUT CANDIDATES. If there are zero disqualified-but-new candidates from step 7, skip this step. Otherwise, POST them so tomorrow's run doesn't re-verify them:
 
    \`\`\`
@@ -278,7 +280,7 @@ ${filingStep}8. For a previously-tracked lead (from step 1b's \`leads[]\`) confi
 
    ${runKeysRule} ${countsRule}
    \`"added"\` count${multi ? " step 9b returned" : "s the step-9 and step-9b calls actually returned"} (0 if that
-   step was skipped); \`delisted\` is how many leads step 8 marked dead. \`on\` is
+   step was skipped); \`delisted\` is how many leads step 8 reported dead. \`on\` is
    today's **local** date - the server can't derive it, and without it a
    morning run records tomorrow's date. \`note\` is one short line summarising
    the run for the webpage (e.g. "no new postings; 34 screened out").
