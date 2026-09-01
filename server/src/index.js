@@ -74,14 +74,15 @@
  *                            batch/transaction) also creates the
  *                            corresponding application row, unless one
  *                            already exists for this lead
- *   POST /api/applications/:id/status  requires Bearer token -> body: { status }
+ *   POST /api/applications/:id/status  requires Bearer token -> body: { status, date? }
  *                            validates against APP_STATUS; if the status
  *                            is a pipeline stage with a Stage history
  *                            column (STAGE_DATE_MAP), stamps it with
- *                            today's date, but only if that column is
- *                            still empty. "Applied" stamps dateApplied the
- *                            same way; "To Apply" (not applied to yet)
- *                            clears it instead
+ *                            `date` (YYYY-MM-DD) if given and valid,
+ *                            otherwise today's date - but only if that
+ *                            column is still empty. "Applied" stamps
+ *                            dateApplied the same way; "To Apply" (not
+ *                            applied to yet) clears it instead
  *   POST /api/delete-application  requires Bearer token -> body: { id } ->
  *                            removes one application row (used by the
  *                            client's "remove" control; leads are never

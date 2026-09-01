@@ -442,10 +442,15 @@ export async function handleSetLeadStatus(request, db, id) {
 }
 
 // Validates status and, the first time an application reaches a stage
-// with a Stage history column (STAGE_DATE_MAP), stamps it with today's
-// date in the same statement - but only if that column is still empty,
-// so it never overwrites a date the user corrected or backfilled by hand
-// (that still goes through the generic handleUpdate() path above).
+// with a Stage history column (STAGE_DATE_MAP), stamps it with a date in
+// the same statement - but only if that column is still empty, so it
+// never overwrites a date the user corrected or backfilled by hand (that
+// still goes through the generic handleUpdate() path above). The date
+// stamped is body.date when the client sends one - the tracker page
+// prompts for it whenever a status change is about to stamp a blank
+// column, since "today" is often wrong (the stage happened a few days
+// before it's getting logged) - falling back to today() if it's missing
+// or malformed, same as before this existed.
 //
 // Moving back to "To Apply" is the one case that clears a date instead of
 // stamping one: the row is being marked as not applied to yet, so the
@@ -462,12 +467,14 @@ export async function handleSetApplicationStatus(request, db, id) {
   if (!APP_STATUS.includes(body.status)) {
     return json({ error: "invalid status" }, 400);
   }
+  const explicitDate = typeof body.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.date) ? body.date : null;
 
   const application = await db.setApplicationStatus(
     id,
     body.status,
     STAGE_DATE_MAP[body.status] || null,
-    body.status === "To Apply" ? "dateApplied" : null
+    body.status === "To Apply" ? "dateApplied" : null,
+    explicitDate
   );
   if (!application) return json({ error: "application not found" }, 404);
   await db.touchUpdated();

@@ -661,22 +661,23 @@ export class Db {
 
   /**
    * Sets status and, the first time it reaches a stage with a history
-   * column, stamps that column with today's date - but only if it's still
-   * empty, so it never overwrites a date the user corrected by hand.
+   * column, stamps that column with a date - but only if it's still empty,
+   * so it never overwrites a date the user corrected by hand.
    * @param {number|string} id
    * @param {string} status
    * @param {string|null} stageDateColumn - one of APP_STAGE_DATE_FIELDS (or dateApplied, for "Applied"), or null if this status has none
    * @param {string|null} clearColumn - a date column to blank instead of stamp - see handleSetApplicationStatus's "To Apply" case
+   * @param {string|null} explicitDate - the date the client says this actually happened on (YYYY-MM-DD, already validated by the caller), or null to fall back to today - see handleSetApplicationStatus
    * @returns {Promise<Application|null>}
    */
-  async setApplicationStatus(id, status, stageDateColumn, clearColumn = null) {
+  async setApplicationStatus(id, status, stageDateColumn, clearColumn = null, explicitDate = null) {
     // Column names here come from api.js's own constants, never from the
     // request body, so they're safe to interpolate; the values still bind.
     const sets = ["status = ?"];
     const values = [status];
     if (stageDateColumn) {
       sets.push(`${stageDateColumn} = CASE WHEN ${stageDateColumn} = '' THEN ? ELSE ${stageDateColumn} END`);
-      values.push(today());
+      values.push(explicitDate || today());
     }
     if (clearColumn) sets.push(`${clearColumn} = ''`);
     const result = await this.d1

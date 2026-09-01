@@ -290,6 +290,20 @@ td textarea{font-size:13px;min-height:32px;min-width:130px}
 #gate p{margin:0;color:var(--ink2);font-size:13px}
 #gate .err{color:var(--crit);font-size:12.5px;min-height:1em}
 .hidden{display:none!important}
+
+.modal-overlay{position:fixed;inset:0;background:rgba(10,11,18,.55);display:flex;
+  align-items:center;justify-content:center;padding:20px;z-index:60}
+.modal-card{padding:22px 24px;display:flex;flex-direction:column;gap:12px;width:100%;max-width:340px}
+.modal-card h3{font-size:16px}
+.modal-card p{margin:0;color:var(--ink2);font-size:13px}
+.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:2px}
+
+.stage-hist table{width:100%;border-collapse:collapse}
+.stage-hist tr+tr td,.stage-hist tr+tr th{border-top:1px solid var(--line)}
+.stage-hist th{text-align:left;font-weight:500;color:var(--ink2);font-size:13px;
+  padding:6px 12px 6px 0;white-space:nowrap;width:1%}
+.stage-hist td{padding:4px 0}
+.stage-hist input[type=date]{width:100%}
 </style>
 <script>
 // Applied before body paint so a stored theme choice (see #themeToggle's
@@ -330,6 +344,25 @@ try{
     </div>
     <nav class="tabs" id="tabs" role="tablist"></nav>
     <main id="panel"></main>
+  </div>
+</div>
+
+<!--
+  Asks for the date a status change actually happened on, instead of
+  silently stamping today - see the change listener's stage-date
+  interception and confirmStageDate() in the script below. Only ever
+  opened for an application's status select, moving into a stage whose
+  history column is still blank.
+-->
+<div id="stageDateModal" class="modal-overlay hidden">
+  <div class="card modal-card">
+    <h3>When did this happen?</h3>
+    <p id="stageDateSub"></p>
+    <input type="date" id="stageDateInput">
+    <div class="modal-actions">
+      <button class="btn" id="stageDateCancel" type="button">Cancel</button>
+      <button class="btn primary" id="stageDateSave" type="button">Save</button>
+    </div>
   </div>
 </div>
 
@@ -512,9 +545,16 @@ var STAGE_DATE_FIELDS=[
   ["Rejected","dateRejected"],
   ["Withdrawn","dateWithdrawn"]
 ];
-// factsGridHtml-ready [key,label,type] form of the above, keyed by the DB
-// column instead of the status string.
-var STAGE_DATE_RENDER_FIELDS=STAGE_DATE_FIELDS.map(function(s){return [s[1],s[0],"date"];});
+// [column,label] form, "Applied" first - the order the Stage history table
+// (see stageHistoryHtml) renders in, and the source list for it.
+var STAGE_HISTORY_FIELDS=[["dateApplied","Applied"]].concat(
+  STAGE_DATE_FIELDS.map(function(s){return [s[1],s[0]];}));
+// status -> its history column, mirrors server/src/api.js's STAGE_DATE_MAP -
+// same intentional client/server duplication as APP_STATUS itself. Used to
+// decide whether picking a status from the dropdown needs to ask for a date
+// first (see the change listener's stage-date interception below).
+var APP_STAGE_DATE_MAP={"Applied":"dateApplied"};
+STAGE_DATE_FIELDS.forEach(function(s){APP_STAGE_DATE_MAP[s[0]]=s[1];});
 
 function factsGridHtml(item,fields,isApp){
   var appAttr=isApp?' data-app="1"':'';
@@ -528,19 +568,36 @@ function factsGridHtml(item,fields,isApp){
   }).join("")+'</div>';
 }
 
-// Renders the two facts boxes (role details, then follow-up tracking) for
-// either a lead or an application. `compact` drops the first box's default
-// top margin - used in Grid view's expanded row, which is already padded
-// by its containing cell and doesn't want the extra gap Detail view does.
+// A row per pipeline stage (Applied first, then STAGE_HISTORY_FIELDS' own
+// order) instead of factsGridHtml's grid of same-size boxes - a history is
+// a sequence, and a list read top-to-bottom says so more directly than a
+// wrapping grid does. Editing works the same way as any other field
+// (commit() via the change/focusout listeners); this only changes the
+// layout, not what the inputs do.
+function stageHistoryHtml(item){
+  return '<div class="stage-hist"><table><tbody>'+
+    STAGE_HISTORY_FIELDS.map(function(f){
+      var key=f[0],label=f[1],val=item[key]||"";
+      return '<tr><th>'+esc(label)+'</th><td><input type="date" data-id="'+item.id+
+        '" data-field="'+key+'" data-app="1" value="'+esc(val)+'"></td></tr>';
+    }).join("")+
+  '</tbody></table></div>';
+}
+
+// Renders the facts boxes (role details, follow-up tracking, then - for an
+// application - stage history) for either a lead or an application.
+// `compact` drops the first box's default top margin - used in Grid view's
+// expanded row, which is already padded by its containing cell and doesn't
+// want the extra gap Detail view does.
 function factsCardsHtml(item,isApp,compact){
   var roleFields=isApp?APP_ROLE_FIELDS:ROLE_FIELDS;
-  return '<div class="facts-card"'+(compact?' style="margin-top:0"':'')+'><div class="mf-label">Role details</div>'+
+  var h='<div class="facts-card"'+(compact?' style="margin-top:0"':'')+'><div class="mf-label">Role details</div>'+
       factsGridHtml(item,roleFields,isApp)+'</div>'+
     '<div class="facts-card"><div class="mf-label">Follow-up</div>'+
-      factsGridHtml(item,TRACKING_FIELDS,isApp)+
-      '<div class="mf-label" style="margin-top:14px">Stage history</div>'+
-      factsGridHtml(item,STAGE_DATE_RENDER_FIELDS,isApp)+
-    '</div>';
+      factsGridHtml(item,TRACKING_FIELDS,isApp)+'</div>';
+  if(isApp)h+='<div class="facts-card"><div class="mf-label">Stage history</div>'+
+      stageHistoryHtml(item)+'</div>';
+  return h;
 }
 try{var s=localStorage.getItem("bjs.tab");if(s)ui.tab=s;}catch(e){}
 try{var vw0=localStorage.getItem("bjs.view");if(vw0)ui.view=vw0;}catch(e){}
@@ -1303,6 +1360,11 @@ function render(){
 }
 
 document.addEventListener("click",function(e){
+  if(e.target.id==="stageDateSave"){confirmStageDate();return;}
+  if(e.target.id==="stageDateCancel"){closeStageDateModal(true);return;}
+  // The overlay itself, not anything inside the card - a click on the
+  // dimmed backdrop cancels, same as Cancel.
+  if(e.target.id==="stageDateModal"){closeStageDateModal(true);return;}
   if(e.target.id==="tokenSubmit"){submitToken();return;}
   if(e.target.id==="logout"){logout();return;}
   if(e.target.closest("#themeToggle")){toggleTheme();return;}
@@ -1377,6 +1439,8 @@ document.addEventListener("click",function(e){
 
 document.addEventListener("keydown",function(e){
   if((e.target.id==="nameInput"||e.target.id==="passwordInput")&&e.key==="Enter"){submitToken();}
+  if(pendingStage&&e.key==="Escape"){closeStageDateModal(true);return;}
+  if(e.target.id==="stageDateInput"&&e.key==="Enter"){confirmStageDate();}
 });
 
 document.addEventListener("input",function(e){
@@ -1449,15 +1513,53 @@ function setLeadStatus(id,value){
 // See api.js's handleSetApplicationStatus - stamps the matching Stage
 // history date server-side (only if it isn't already set) in the same
 // request as the status write, then returns the full row so the newly
-// stamped date shows up immediately.
-function setApplicationStatus(id,value){
+// stamped date shows up immediately. `date` (YYYY-MM-DD) is what the
+// stage-date modal below collects - omit it to fall back to today, same
+// as before that modal existed.
+function setApplicationStatus(id,value,date){
   setSaved("Saving…",false);
-  api("/api/applications/"+id+"/status",{method:"POST",body:JSON.stringify({status:value})}).then(function(res){
+  var body={status:value};
+  if(date)body.date=date;
+  api("/api/applications/"+id+"/status",{method:"POST",body:JSON.stringify(body)}).then(function(res){
     replaceById(state.applications,res.application);
     setSaved("Saved",true);
     render();
   }).catch(function(){setSaved("Couldn't save — try again","bad");});
 }
+
+// Holds the in-flight status change while #stageDateModal is open: which
+// application, which status it's moving to, which column that stamps, the
+// status it's moving away from (to revert the <select> on Cancel, since the
+// browser has already updated its displayed value by the time "change"
+// fires), and the select element itself. Null whenever the modal is closed.
+var pendingStage=null;
+
+function openStageDateModal(app,newStatus,dateField,selectEl){
+  pendingStage={id:app.id,status:newStatus,dateField:dateField,prevStatus:app.status,selectEl:selectEl};
+  document.getElementById("stageDateSub").textContent=
+    (app.company||app.title||"This application")+" — "+newStatus;
+  var input=document.getElementById("stageDateInput");
+  input.value=today();
+  document.getElementById("stageDateModal").classList.remove("hidden");
+  input.focus();
+}
+
+function closeStageDateModal(revert){
+  if(revert&&pendingStage&&pendingStage.selectEl)pendingStage.selectEl.value=pendingStage.prevStatus;
+  pendingStage=null;
+  document.getElementById("stageDateModal").classList.add("hidden");
+}
+
+function confirmStageDate(){
+  if(!pendingStage)return;
+  var date=document.getElementById("stageDateInput").value;
+  if(!date)return; // the date is the whole point of this dialog - require one
+  var p=pendingStage;
+  pendingStage=null;
+  document.getElementById("stageDateModal").classList.add("hidden");
+  setApplicationStatus(p.id,p.status,date);
+}
+
 document.addEventListener("change",function(e){
   var so=e.target.closest("[data-sort]");
   if(so){
@@ -1466,6 +1568,22 @@ document.addEventListener("change",function(e){
     else{ui.appSort=so.value;try{localStorage.setItem("bjs.appSort",ui.appSort);}catch(err){}}
     render();
     return;
+  }
+  // Moving an application into a pipeline stage that hasn't happened yet
+  // (its history column is still blank) asks when it actually happened,
+  // rather than silently stamping today - the change is often logged a few
+  // days after the fact. A stage already reached, or a plain field edit,
+  // skips straight to commit() same as always.
+  if(e.target.matches('select[data-field="status"][data-app]')){
+    var appId=e.target.getAttribute("data-id");
+    var app=state.applications.filter(function(a){return String(a.id)===String(appId);})[0];
+    if(app){
+      var newStatus=e.target.value, dateField=APP_STAGE_DATE_MAP[newStatus];
+      if(newStatus!==app.status&&dateField&&!app[dateField]){
+        openStageDateModal(app,newStatus,dateField,e.target);
+        return;
+      }
+    }
   }
   if(e.target.matches("select[data-id],input[data-id]"))commit(e.target);
 });
