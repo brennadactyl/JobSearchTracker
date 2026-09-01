@@ -52,7 +52,13 @@ export function unauthorized() {
 export function json(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
     status,
-    headers: { "content-type": "application/json", ...CORS_HEADERS },
+    // charset spelled out: JSON is UTF-8 by definition and browsers assume so,
+    // but Windows PowerShell 5.1's Invoke-RestMethod falls back to Latin-1
+    // without it. A PowerShell client doing the documented GET-merge-POST on
+    // /api/config would then read every em-dash in a prompt setting as
+    // mojibake and write it back that way, silently corrupting the config it
+    // was only meant to add a field to.
+    headers: { "content-type": "application/json; charset=utf-8", ...CORS_HEADERS },
   });
 }
 
