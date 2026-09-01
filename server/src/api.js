@@ -198,6 +198,22 @@ export async function handleGetPrompt(db, user, key) {
   const [track, config] = await Promise.all([db.getTrack(key), db.getTracksAndSettings()]);
   if (!track) return json({ error: `unknown track "${key}" - not in the configured tracks` }, 404);
 
+  // A track with `fed_by` set is a tab, not a search: a sibling's run finds
+  // its postings and files them here (see migrations/0003_branched_tracks.sql).
+  // Composing a prompt for it would produce a second, near-identical search of
+  // the same job boards - exactly what the arrangement exists to avoid - so
+  // refuse and name the track to run instead. setup-scheduler.ps1 registers no
+  // task for one of these, so reaching this is either a hand-run or a
+  // scheduled task left over from before the split.
+  if (track.fed_by) {
+    return json(
+      {
+        error: `track "${key}" has no search of its own - "${track.fed_by}" fills it. Run that track instead.`,
+      },
+      409
+    );
+  }
+
   // A track that exists but has no search config at all would still compose a
   // perfectly well-formed prompt - out of the generic fallbacks. "Companies:
   // ." and "Read the resume." and no geographic scope, followed by the same
@@ -217,7 +233,11 @@ export async function handleGetPrompt(db, user, key) {
     );
   }
 
-  return text(buildSearchPrompt({ user, track, settings: config.settings }));
+  // The tabs this run fills besides its own. Passing them turns the prompt
+  // multi-tab: dedup for every key, a filing step, and a run record each.
+  const feeds = config.tracks.filter((t) => t.fed_by === key);
+
+  return text(buildSearchPrompt({ user, track, settings: config.settings, feeds }));
 }
 
 // Records that one track's scheduled search finished - see
@@ -298,6 +318,16 @@ export async function handleSetConfig(request, db) {
   if (Array.isArray(body.tracks)) {
     const valid = body.tracks.filter((t) => t && typeof t.key === "string" && t.key);
     if (valid.length === 0) return json({ error: "tracks must be a non-empty array of {key, ...}" }, 400);
+    // A `fed_by` pointing anywhere but at another track in this same list is a
+    // tab no search fills: nothing lands in it and nothing records a run
+    // against it, so it sits there reading "no run recorded yet" forever with
+    // no error anywhere to say why.
+    const keys = new Set(valid.map((t) => t.key));
+    for (const t of valid) {
+      if (t.fed_by && (t.fed_by === t.key || !keys.has(t.fed_by))) {
+        return json({ error: `track "${t.key}" is fed_by "${t.fed_by}", which is not another track in this list` }, 400);
+      }
+    }
     // Each track carries its display fields and, optionally, its search
     // config (TRACK_CONFIG_FIELDS in db.js - the role line, target companies,
     // candidate blurb and so on that prompt.js composes the daily prompt
@@ -402,7 +432,26 @@ export async function handleUpdate(request, db) {
       }
       return removeDelistedLead(db, body.id, on);
     }
-    const lead = await db.updateLead(body.id, body);
+
+    // `search` moves the lead to another of this user's tabs. It's the one
+    // field here that can fail on its own terms, so both failures are caught
+    // rather than left to surface as a 500: an unknown track key is the same
+    // drift /api/runs rejects (a lead filed under a key no tab displays is a
+    // lead nobody sees again), and the destination may already hold this url,
+    // which UNIQUE(user_id, search, url) refuses.
+    const move = typeof body.search === "string" && body.search ? body.search : "";
+    if (move && !(await db.trackExists(move))) {
+      return json({ error: `unknown track "${move}" - not in the configured tracks` }, 404);
+    }
+    let lead;
+    try {
+      lead = await db.updateLead(body.id, body);
+    } catch (err) {
+      if (move && /UNIQUE|constraint/i.test(String((err && err.message) || ""))) {
+        return json({ error: `"${move}" already has a lead for that url` }, 409);
+      }
+      throw err;
+    }
     if (!lead) return json({ error: "lead not found" }, 404);
     await db.touchUpdated();
     return json({ ok: true, lead });

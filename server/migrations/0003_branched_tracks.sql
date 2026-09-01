@@ -1,0 +1,16 @@
+-- One search, several tabs.
+--
+-- A track has always been both a tab and its own scheduled search, which is
+-- right when two tracks are two different searches. It's the wrong shape when
+-- one search is split by level: the companies, the resume, the scope and the
+-- verification work are identical, and the only question is which tab a
+-- posting belongs in once it's found. A second daily task for that re-fetches
+-- the same job boards to sort the same results differently.
+--
+-- `fed_by` names the sibling that fills this tab. Set, it means this track has
+-- no search of its own: setup-scheduler.ps1 registers no task for it,
+-- GET /api/prompt refuses to compose one, and the feeding track's prompt turns
+-- multi-tab - dedup for every key it fills, a step that files each finding
+-- under one of them (from each tab's `full_description`), and a run record per
+-- tab, without which the fed tab reads as stale forever.
+ALTER TABLE tracks ADD COLUMN fed_by TEXT NOT NULL DEFAULT '';

@@ -67,12 +67,17 @@
  *                            purpose-built routes below instead, which
  *                            validate the value and own the side effects
  *                            (application creation, stage-date stamping)
- *                            that a plain field write can't. `delistedOn` is
- *                            the one field the server acts on rather than
- *                            stores: a search reporting a posting taken down
- *                            gets the lead deleted and its URL screened,
- *                            unless it's been applied to, in which case it's
- *                            kept - see api.js's removeDelistedLead.
+ *                            that a plain field write can't. A lead's
+ *                            `search` is writable here too, which moves it
+ *                            to another of this user's tabs - 404 on an
+ *                            unknown track, 409 if that tab already has the
+ *                            url. `delistedOn` is the one field the server
+ *                            acts on rather than stores: a search reporting
+ *                            a posting taken down (a YYYY-MM-DD date, or a
+ *                            400) gets the lead deleted and its URL
+ *                            screened, unless an application points at it,
+ *                            in which case it's kept - see api.js's
+ *                            removeDelistedLead.
  *   POST /api/leads/:id/status       requires Bearer token -> body: { status }
  *                            validates against LEAD_STATUS; if the new
  *                            status is "Applied", atomically (one D1
@@ -112,7 +117,9 @@
  *                            search prompt for that track, composed from its
  *                            config (see ./prompt.js). What run-search.ps1
  *                            fetches instead of reading a prompt file off
- *                            whichever machine it's running on.
+ *                            whichever machine it's running on. 409s for a
+ *                            track with `fed_by` set: that tab has no search
+ *                            of its own, and the error names the one to run.
  *   OPTIONS *                 CORS preflight for any of the above -> 204 + CORS_HEADERS
  *
  * Schema: see ../migrations/. Persistence: see ./db.js. Handlers: see ./api.js.

@@ -120,6 +120,16 @@ the resume where reasonable, then confirm):
   caveat quietly screens out real, well-fitting opportunities before the
   installer ever sees them.
 
+- **Is this a second search, or a second tab on the same search?** Two tracks
+  usually mean two different searches, each with its own daily run. But a
+  split by level or kind of role ("EM of engineers" vs "EM of managers /
+  Director") often searches the *same* boards with the *same* resume and
+  differs only in which tab a posting lands in - one search, two tabs. For
+  that, set the second track's `fed_by` to the first's key and leave the rest
+  of its search config empty; each track's `full_description` doubles as the
+  rule for what belongs in that tab, so write both as a real description of
+  the roles. Ask which way it is rather than assuming.
+
 Once per setup (applies to every track, new and existing):
 - **Geographic scope** - the hard filter on what's in-scope at all (e.g. "US
   only", "UK and EU", "no restriction"). This becomes the `geo_scope_line`
@@ -186,7 +196,11 @@ the finished sentence you want the search to read:
   has sensible generic versions.
 - `schedule_time` - `HH:mm` local. This *is* the schedule now (step 7 reads
   it), so stagger it: 30 minutes after the last existing track across all
-  users on that machine, since they share one CLI.
+  users on that machine, since they share one CLI. Leave it empty on a track
+  with `fed_by` set - that tab has no run of its own.
+- `fed_by` - only for a track that's a second tab on a sibling's search rather
+  than a search of its own (see step 3). `GET /api/prompt/<fed key>` refuses to
+  compose a prompt for one; the feeding track's prompt is the whole search.
 
 Once per person, the settings half (`geo_scope_line`, `scope_clause`,
 `scope_disqualifier`, `location_guidance`, `footer_note`, `pronouns`) - also

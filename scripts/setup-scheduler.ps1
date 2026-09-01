@@ -12,6 +12,12 @@
   names of tracks, or to one person: add a track in the tracker, or add a
   person's folder, and the next run of this script picks it up.
 
+  The one track that gets no task is one with `fed_by` set - a tab filled by a
+  sibling track's search rather than by a search of its own (see
+  server/migrations/0003_branched_tracks.sql). Giving it a task would run a
+  second, near-identical search of the same job boards, which is the thing the
+  arrangement exists to avoid.
+
   Safe to re-run: existing tasks for a still-present track are replaced in
   place; tasks left over from a track that no longer exists are unregistered.
   **Cleanup is scoped to the people this run actually processed** - a machine
@@ -148,6 +154,13 @@ foreach ($person in $people) {
 
     # Auto-stagger anything without a configured time, 30 minutes apart.
     foreach ($track in ($config.tracks | Sort-Object sort_order, key)) {
+        # A tab, not a search: the track named in fed_by finds its postings and
+        # files them here too. GET /api/prompt refuses to compose a prompt for
+        # one of these, so a task registered for it would fail every morning.
+        if ($track.fed_by) {
+            Write-Host "  $($track.key) - no task; filled by $($track.fed_by)'s search"
+            continue
+        }
         $time = $track.schedule_time
         if (-not $time -or $time -notmatch '^\d{2}:\d{2}$') {
             $time = $auto.ToString("HH:mm")

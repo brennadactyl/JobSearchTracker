@@ -78,7 +78,7 @@ console.log("\n== against a database with data ==");
     lead.status === "Applied" && lead.notes === "my note" && lead.referral === "a referral"
     && lead.comp === "$1" && lead.team === "Platform" && lead.fit === "strong",
     JSON.stringify(lead));
-  // leads.delistedOn is dropped later, by 0003 - this file only ever applies
+  // leads.delistedOn is dropped later, by 0004 - this file only ever applies
   // 0001 and 0002 (see migrated()), and what it checks is that 0002's table
   // rebuild didn't lose a column that existed at the time. Still a valid
   // check on 0002; just don't expect the column on a current database.

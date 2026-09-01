@@ -55,6 +55,10 @@ docs/
 scripts/
   run-search.ps1              runs one track for one person (fetches its prompt from the API)
   setup-scheduler.ps1          registers every person's tracks as daily Windows Scheduled Tasks
+  backup-tracker.ps1           exports the whole database to a dated .sql file + an off-machine mirror
+  archive-backups.ps1          copies those exports into an archive this account can't modify (runs as SYSTEM)
+  protect-backups.ps1          one-time elevated setup that creates that archive and its task
+  verify-backups.ps1           proves the archive really refuses writes, from an unelevated shell
 server/                        API only - Cloudflare Worker + D1, no HTML served
   src/index.js                  routing, session resolution, CORS preflight
   src/auth.js                   passwords, session tokens, who a token belongs to
@@ -177,6 +181,10 @@ note after each step if you'd rather do it the traditional way instead.
    it found. Until a track's first run reports in it reads "No run recorded
    yet", which is also what you'll see on a brand-new install.
 
+7. **Set up backups** - see [Backups](#backups) below. One elevated command,
+   and it's the step you won't think to do until you need it: nothing above
+   this line leaves a copy of your data anywhere but Cloudflare.
+
 Tasks run daily while you're logged in - no stored Windows password required.
 If the machine is off or you're logged out at the scheduled time, that run is
 skipped (not queued/retried). The webpage itself, unlike the tasks, is always
@@ -220,6 +228,90 @@ run takes several minutes and they share one CLI.
 Note what this does and doesn't protect: the API keeps each person's data
 strictly separate, but whoever administers the Cloudflare account can read
 any of it directly in D1. This is for people who are fine with that.
+
+## Backups
+
+Cloudflare's own answer for D1 is [Time
+Travel](https://developers.cloudflare.com/d1/reference/time-travel/) -
+point-in-time recovery over the last 30 days, on by default, no setup. It is
+genuinely good at the thing it does: undoing a bad write. It is no help at all
+for the two cases worth planning for, because the recovery mechanism lives
+inside the thing being lost. `wrangler d1 delete` takes the database *and* its
+Time Travel history in one step, and if the Cloudflare account goes, both go
+with it.
+
+So the only real safety net is a copy of the data somewhere else, and a copy
+that whatever went wrong can't also delete. Three pieces, in order of how much
+they're worth:
+
+| | where | who can destroy it |
+|---|---|---|
+| working copy | `private\backups\` | anything running as you |
+| archive | `%ProgramData%\JobSearchTracker\backups\` | only an elevated process |
+| off-machine | OneDrive (or `JOB_SEARCH_BACKUP_MIRROR`) | deletable locally, but recoverable from the service's own trash |
+
+`backup-tracker.ps1` writes the first and third every night. It exports to a
+temp file and checks it before letting it count as a backup - right size, has
+tables, has rows, not dramatically smaller than yesterday's - because an export
+that succeeds and returns nothing is the failure that would otherwise go
+unnoticed for months. It never deletes anything; at roughly 800 KB a day,
+retention isn't worth a script that removes backups unattended.
+
+`archive-backups.ps1` copies new exports into the second. That folder is owned
+by Administrators and grants everyone else read-only, so an unelevated process -
+which is what a scheduled task, a script, or an AI agent actually is - can read
+the backups but cannot write, rename, truncate or delete them. Filling a folder
+like that needs a writer you aren't, hence a task running as SYSTEM.
+
+Set it up once, from an **Administrator** PowerShell:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "C:\VibeCoding\scripts\protect-backups.ps1"
+```
+
+(The `-ExecutionPolicy Bypass` isn't optional theatre: this machine leaves the
+policy Undefined, which means Restricted for an interactive shell, so calling
+the script by path just fails. The scheduled tasks pass the same flag. Spawning
+a child process this way inherits the elevation and changes no policy setting.)
+
+That creates the archive, sets its ownership and permissions, installs its own
+copy of the archiver inside it (a task running as SYSTEM must never execute a
+script you can edit - that turns the task into free administrator access), and
+registers both daily tasks: the export at 03:15 as you, the archive at 03:45 as
+SYSTEM. Re-run it after changing `archive-backups.ps1`.
+
+Neither task name matches `JobSearch-*`, which is what `setup-scheduler.ps1`
+sweeps for stale search tasks - a backup job silently unregistered by the next
+scheduler run is exactly the failure you'd only find out about when you needed
+it. The export runs under the same Interactive logon as the searches, so like
+them it only fires while you're logged in; the archive runs as SYSTEM and
+doesn't care.
+
+Then check it from an ordinary, **unelevated** window - a permission scheme that
+quietly stopped applying looks exactly like one that works:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "C:\VibeCoding\scripts\verify-backups.ps1"
+```
+
+It makes real attempts to overwrite, rename and delete an archived backup, to
+edit the script SYSTEM runs, and to grant itself the permissions back - all of
+which must be refused. Safe to run: every archived file also exists in the
+working folder and the mirror, so even a probe that unexpectedly succeeded
+costs nothing.
+
+To restore, feed a `.sql` file back with `wrangler d1 execute <db> --remote
+--file <backup.sql>` - see `server/README.md`, which covers doing that against
+a database with live data in it.
+
+**What this does and doesn't cover.** It guarantees the data survives: if the
+database is deleted, the rows are still on disk and in OneDrive, in a form that
+restores. It does not prevent the deletion. That capability comes from
+wrangler's stored credential, and no file permission touches it - the
+`.claude/hooks/block-remote-d1-writes.mjs` PreToolUse hook refuses the obvious
+commands, but a hook is a config file, not a boundary, and something determined
+could call the Cloudflare API directly. The protection worth having is the one
+that makes the loss recoverable.
 
 ## Things worth not relearning
 
