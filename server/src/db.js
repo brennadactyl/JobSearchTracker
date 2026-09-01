@@ -152,6 +152,7 @@
  * @property {string} applications_label
  * @property {number} stale_run_hours
  * @property {Array<Object>} priority_locations
+ * @property {string[]} excluded_companies
  * @property {string} geo_scope_line
  * @property {string} scope_clause
  * @property {string} scope_disqualifier
@@ -202,6 +203,10 @@ export const DEFAULT_SETTINGS = {
   applications_label: "Applications",
   stale_run_hours: 36,
   priority_locations: [],
+  // Companies this person will not work for, at all. A list rather than a
+  // sentence buried in a track's prose: "is X excluded?" should be a lookup,
+  // and adding one should be an append, not surgery on a paragraph.
+  excluded_companies: [],
   // No geographic restriction by default: an unconfigured deployment shouldn't
   // silently filter out postings it was never told to exclude.
   geo_scope_line: "",
@@ -287,7 +292,7 @@ export class Db {
     const trackCols = ["key", ...TRACK_DISPLAY_FIELDS, ...TRACK_CONFIG_FIELDS]
       .map((f) => `t.${f}`)
       .join(", ");
-    const settingKeys = ["priority_locations", ...SETTING_KEYS, ...PROMPT_SETTING_KEYS];
+    const settingKeys = ["priority_locations", "excluded_companies", ...SETTING_KEYS, ...PROMPT_SETTING_KEYS];
     const [tracksRes, settingsRows] = await Promise.all([
       this.d1
         .prepare(
@@ -313,11 +318,11 @@ export class Db {
 
     const settings = { ...DEFAULT_SETTINGS };
     for (const row of settingsRows.results) {
-      if (row.key === "priority_locations") {
+      if (row.key === "priority_locations" || row.key === "excluded_companies") {
         try {
-          settings.priority_locations = JSON.parse(row.value);
+          settings[row.key] = JSON.parse(row.value);
         } catch {
-          settings.priority_locations = [];
+          settings[row.key] = [];
         }
       } else if (row.key === "stale_run_hours") {
         const n = Number(row.value);
@@ -463,6 +468,14 @@ export class Db {
     }
     if (Array.isArray(patch.priority_locations)) {
       await this.setSetting("priority_locations", JSON.stringify(patch.priority_locations));
+    }
+    // An empty array is a real instruction here - "I no longer exclude anyone" -
+    // so this checks for an array, not for a non-empty one.
+    if (Array.isArray(patch.excluded_companies)) {
+      await this.setSetting(
+        "excluded_companies",
+        JSON.stringify(patch.excluded_companies.filter((c) => typeof c === "string" && c.trim()))
+      );
     }
   }
 

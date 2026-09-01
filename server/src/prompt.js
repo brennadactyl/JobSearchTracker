@@ -110,6 +110,20 @@ export function buildSearchPrompt({ user, track, settings }) {
   }
   const searchNote = track.search_note ? ` ${track.search_note}` : "";
 
+  // Companies this person won't work for, rendered from a list rather than
+  // written into each track's prose. The prose version drifted immediately:
+  // one exclusion ended up inside target_companies and the next inside
+  // search_note, so answering "is this company excluded?" meant grepping two
+  // free-text fields and knowing which one to look in. A list is a lookup, and
+  // adding one is an append. Entries can be a plain name or a catch-all phrase
+  // ("any other company X owns or leads"), so the sentence reads either way.
+  const excluded = Array.isArray(settings.excluded_companies)
+    ? settings.excluded_companies.filter((c) => typeof c === "string" && c.trim())
+    : [];
+  const exclusionNote = excluded.length
+    ? ` Never search ${joinAnd(excluded)} - permanently excluded from this search, including via broader discovery: drop any hit there without verifying it and without a \`/api/screened\` row.`
+    : "";
+
   const resumeLine = track.resume_line || "Read the resume.";
   const roleLine = track.role_search_line || "roles matching the resume";
 
@@ -154,7 +168,7 @@ ${intro}Do the following:
 1. Read \`${doc}\` - ${docSummary}. Follow its numbered process. The doc doesn't keep a found-postings table or a screened/dead-link list of its own - dedup data comes from step 1b instead.
 1b. Fetch the tracker's current data: \`curl -s "$TRACKER_URL/api/data" -H "Authorization: Bearer $TRACKER_API_TOKEN"\`. This returns \`leads[]\` (postings already tracked - keep each one's \`url\` and \`status\` on hand for step 8, it's how you tell a stale lead nobody's touched from one ${name} has already applied to) and \`screened[]\` (postings already looked at and rejected - keep each one's \`url\` on hand for step 7, so you don't re-verify the same dead/out-of-scope candidate every run).
 2. ${resumeLine}
-3. Search target companies' careers sites (web search as backup) for current ${roleLine}. Companies: ${companies}.${searchNote} Also run the doc's broader-discovery step.
+3. Search target companies' careers sites (web search as backup) for current ${roleLine}. Companies: ${companies}.${searchNote} Also run the doc's broader-discovery step.${exclusionNote}
 4. MANDATORY VERIFICATION: fetch every candidate URL directly and confirm it renders an actual job description (real title, responsibilities/qualifications - not a landing page, 404, "job not found," a loading placeholder, or a listing/index page that merely contains the title text). A search-snippet URL is a lead, not a finding, until opened and confirmed. If a site won't reveal real content, skip that company today rather than report something unverified.
 5. ${geoStep}
 6. ${locationGuidance}

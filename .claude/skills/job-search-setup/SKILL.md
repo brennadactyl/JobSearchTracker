@@ -245,6 +245,12 @@ anyOf: [...substrings], allOf?: [...substrings]}` - first match wins,
 text, `allOf` (optional) needs all of them present too (used for something
 like "remote AND a US indicator", not just "remote" alone).
 
+`excluded_companies` is a JSON array of companies this person will not work
+for at all - plain names, or a catch-all phrase like "any other company X owns
+or leads". The prompt renders it into a single never-search sentence, so an
+exclusion is an append to a list rather than a sentence hand-written into some
+track's prose (which is how the first two ended up in two different fields).
+
 Send the prose settings from step 4 in the same call: `geo_scope_line`,
 `scope_clause`, `scope_disqualifier`, `location_guidance`, `footer_note`,
 `pronouns`. They're per person, so a second person's settings never disturb
