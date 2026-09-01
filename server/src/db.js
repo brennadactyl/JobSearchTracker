@@ -285,6 +285,39 @@ export class Db {
     return res.results;
   }
 
+  /**
+   * The smallest thing a daily run needs to avoid re-processing what it has
+   * already seen: for one track, the ids/urls/statuses of its leads and the
+   * urls it has already screened out.
+   *
+   * This exists because the runs were using GET /api/data for it, which
+   * returns every field of every row across every track - 398KB to use 22KB
+   * of, at a point where screened rows were accumulating ~150/day. That grows
+   * without bound and lands in the run's context every night, so the failure
+   * mode was a run eventually truncating its own dedup list and re-adding
+   * postings it had already ruled out. Selecting three columns for one track
+   * keeps it roughly flat instead.
+   *
+   * `status` is here because the run needs it to tell a stale lead nobody has
+   * touched from one already applied to; `id` because delisting posts back
+   * against it.
+   * @param {string} trackKey
+   * @returns {Promise<{leads: Array<{id: number, url: string, status: string}>, screened: string[]}>}
+   */
+  async getDedupData(trackKey) {
+    const [leads, screened] = await Promise.all([
+      this.d1
+        .prepare("SELECT id, url, status FROM leads WHERE user_id = ? AND search = ? ORDER BY id")
+        .bind(this.userId, trackKey)
+        .all(),
+      this.d1
+        .prepare("SELECT url FROM screened WHERE user_id = ? AND search = ? ORDER BY id")
+        .bind(this.userId, trackKey)
+        .all(),
+    ]);
+    return { leads: leads.results, screened: screened.results.map((r) => r.url) };
+  }
+
   // -------------------------------------------------- tracks & settings --
 
   /** @returns {Promise<{tracks: TrackWithRun[], settings: Settings}>} */

@@ -137,6 +137,20 @@ check("B cannot fetch A's prompt for a key B also has (gets B's own)",
 check("an unconfigured track key 404s",
   (await req("GET", "/api/prompt/NOPE", { token: A_TOK })).status === 404);
 
+console.log("\n== dedup endpoint (what every scheduled run fetches) ==");
+const aDedup = await req("GET", "/api/dedup/SWE", { token: A_TOK });
+check("returns this track's leads as {id, url, status} and nothing else",
+  aDedup.status === 200 && aDedup.json.leads.every((l) => "id" in l && "url" in l && "status" in l && !("notes" in l)),
+  JSON.stringify(aDedup.json).slice(0, 120));
+check("screened comes back as bare urls, not whole rows",
+  Array.isArray(aDedup.json.screened) && aDedup.json.screened.every((u) => typeof u === "string"));
+check("it is substantially smaller than /api/data - the whole point",
+  JSON.stringify(aDedup.json).length * 2 < JSON.stringify(aData.json).length);
+check("B cannot read dedup data for a track key B doesn't have",
+  (await req("GET", "/api/dedup/DATA", { token: B_TOK })).status === 404);
+check("an unconfigured key 404s rather than returning an empty list",
+  (await req("GET", "/api/dedup/GHOST", { token: A_TOK })).status === 404);
+
 console.log("\n== runs ==");
 check("recording a run works for your own track",
   (await req("POST", "/api/runs", { token: A_TOK, body: { search: "SWE", status: "ok", leadsAdded: 1, on: "2026-08-31", note: "ok" } })).status === 200);

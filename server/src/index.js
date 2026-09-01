@@ -124,6 +124,7 @@ import {
   handleLogout,
   handleUpsertUser,
   handleGetMe,
+  handleGetDedup,
   handleGetPrompt,
   handleAddLeads,
   handleAddScreened,
@@ -206,9 +207,13 @@ export default {
       return handleSetApplicationStatus(request, db, m[1]);
     }
 
-    // Track keys are installer-chosen slugs, so this is deliberately looser
-    // than the numeric-id routes above - handleGetPrompt 404s on anything
-    // that isn't one of this user's configured tracks.
+    // Track keys are installer-chosen slugs, so these two are deliberately
+    // looser than the numeric-id routes above - both 404 on anything that
+    // isn't one of this user's configured tracks.
+    if ((m = url.pathname.match(/^\/api\/dedup\/([^/]+)$/)) && request.method === "GET") {
+      return handleGetDedup(db, decodeURIComponent(m[1]));
+    }
+
     if ((m = url.pathname.match(/^\/api\/prompt\/([^/]+)$/)) && request.method === "GET") {
       return handleGetPrompt(db, user, decodeURIComponent(m[1]));
     }

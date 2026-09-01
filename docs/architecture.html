@@ -316,6 +316,7 @@
           <tr><td class="mono">/api/update</td><td class="mono">POST</td><td>edit a lead's status/notes, or add/edit an application</td></tr>
           <tr><td class="mono">/api/delete-application</td><td class="mono">POST</td><td>remove one application row</td></tr>
           <tr><td class="mono">/api/config</td><td class="mono">GET/POST</td><td>read/set this person's track labels, display title, priority-location rules, and each track's search config</td></tr>
+          <tr><td class="mono">/api/dedup/&lt;track&gt;</td><td class="mono">GET</td><td>the ids/urls/statuses one track has already tracked, plus the urls it has already screened out &mdash; what a run fetches before searching, kept deliberately small because it enters the run's context every night</td></tr>
           <tr><td class="mono">/api/prompt/&lt;track&gt;</td><td class="mono">GET</td><td>the daily search prompt, composed from that track's config &mdash; what the scheduled runner fetches instead of reading a prompt file off one machine</td></tr>
         </tbody>
       </table>

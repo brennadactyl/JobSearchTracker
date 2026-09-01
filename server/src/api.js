@@ -181,6 +181,19 @@ export function handleGetMe(user) {
 // config - what run-search.ps1 fetches instead of reading a prompt file off
 // the machine it happens to be running on. text/plain because its consumer
 // pipes it straight into the CLI.
+// What a scheduled run fetches before searching, to know what it has already
+// found or already ruled out. Deliberately narrow: one track, three columns,
+// and screened as bare urls - see db.getDedupData for why. 404s on an unknown
+// track rather than returning empty arrays, because empty is exactly what a
+// mistyped key would produce, and a run that believes it has seen nothing
+// re-adds every posting it already screened.
+export async function handleGetDedup(db, key) {
+  if (!(await db.trackExists(key))) {
+    return json({ error: `unknown track "${key}" - not in the configured tracks` }, 404);
+  }
+  return json(await db.getDedupData(key));
+}
+
 export async function handleGetPrompt(db, user, key) {
   const [track, config] = await Promise.all([db.getTrack(key), db.getTracksAndSettings()]);
   if (!track) return json({ error: `unknown track "${key}" - not in the configured tracks` }, 404);
