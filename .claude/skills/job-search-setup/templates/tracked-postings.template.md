@@ -5,7 +5,7 @@ This doc is the running knowledge base for the daily "{{SEARCH_GOAL_SENTENCE}}" 
 **Posting data lives in the tracker DB, not this doc.** The "found" list (what's already tracked) and the "screened" list (what's been looked at and rejected) are both fetched from the tracker each run - see step 1b of the daily prompt (composed by the tracker - `GET /api/prompt/{{TRACK_KEY}}`). This doc holds only the knowledge that has no DB equivalent.
 
 Each run should:
-1. Fetch the tracker's current leads AND screened data (step 1b of the daily prompt: `GET /api/data` → `leads[]`, `screened[]`) to see what's already found or already ruled out (compare by URL).
+1. Fetch the tracker's current leads AND screened data (step 1b of the daily prompt: `GET /api/dedup/{{TRACK_KEY}}` → `leads[]`, `screened[]`) to see what's already found or already ruled out (compare by URL). Not `/api/data`: that returns every field of every row across every track, which is far larger and grows every day.
 2. Re-search the target companies below for {{ROLE_SEARCH_LINE}} matching the Candidate Profile below.
 3. **Also run a broader discovery search beyond the fixed target list**: search generally for other companies currently hiring for these roles, plus targeted searches on companies with a strong fit not on the core list (see "Expanded net" below for ones tried so far; add more each run). Apply the same mandatory verification - a new company is not exempt. If an expanded-net company yields a strong verified fit more than once, consider promoting it to the core list.
 4. **MANDATORY: fetch every candidate URL directly and confirm it renders an actual job description (title, responsibilities, etc.) before including it anywhere** - in the tracker or the summary to the user. A URL surfaced only by a search-engine snippet is a lead, not a finding, until opened and confirmed. Many "found" links turn out closed/expired/wrong even when freshly searched - check every single one, every run, including previously-tracked ones (they close later). Watch for search snippets that resolve to a listing/index page instead of the individual posting - that does not count as verified, even if the title text matches.
@@ -21,6 +21,24 @@ Each run should:
 Don't re-spend a full verification attempt rediscovering a **domain-wide fetch block** that's already confirmed - that's different from a specific posting closing, which is real signal and always worth checking. The distinction: if *every* URL tried at a domain fails the *same way* regardless of which posting (robots.txt block, blanket 403/429, a JS-rendered shell with no static content ever, metadata-only, or systematic truncation), that's a tooling wall, not news. If specific postings turn out closed/404 while others at the same domain verify fine, that's normal churn - keep checking those in full.
 
 Once a domain-wide block has shown up on 2+ separate run-dates (track it in the Reliability notes below as it happens), stop spending a fresh attempt confirming it: use a known working fallback if one exists (a different subdomain, an ATS mirror), or skip that domain for the run entirely if none exists, noting in the addendum that it was skipped on cadence grounds rather than re-tested. Re-attempt a skipped domain at most about once a week, or immediately if a specific new posting surfaces there via search that looks like a strong fit - a concrete new lead always earns one verification attempt even at an otherwise-blocked domain.
+
+## Company coverage (apply on every run, once this search has a coverage list)
+
+A company list long enough to be worth having is usually longer than one run
+can verify properly, and covering all of it every night is what makes a run
+shallow. If this search has been seeded with a coverage list, the daily prompt
+carries two extra steps for it - 1c picks which companies this run covers
+(cheap JSON boards every run, then the least-recently-swept, capped), and 9d
+records what was attempted. Follow them.
+
+**That state lives in the tracker, not this doc** - same reason posting data
+does. `GET /api/coverage/{{TRACK_KEY}}` is the list with each company's
+last-attempted date; `POST /api/coverage` stamps it. Don't keep a parallel
+table here: what belongs in this doc is which companies are worth searching
+(Target Companies below) and what is known about fetching each one (Fetch
+efficiency above). A confirmed board endpoint belongs in both - here as the
+URL shape, and as `board` on the coverage row, which is what moves a company
+into the every-run tier.
 
 ## Scope rules (apply on every run)
 

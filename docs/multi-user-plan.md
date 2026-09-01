@@ -1,8 +1,16 @@
 # Multi-user tracker - implementation plan
 
-> Status: **planned, not implemented.** Nothing on this branch is deployed, and
-> none of it should reach `main` before the verification section below passes
-> end to end against a local `wrangler dev`.
+> Status: **implemented and deployed** (multi-user shipped with
+> `server/migrations/0002_multi_user.sql`; the deployment now runs more than one
+> person's searches). This is kept as the record of *why* the design is shaped
+> the way it is - the reasoning in "The finding" and "Worth knowing" is the part
+> still worth reading. It is not a description of current behaviour: the code
+> has moved on, and where the two disagree the code is right. Since this was
+> written, runs fetch dedup data from `/api/dedup/:key` rather than `/api/data`,
+> one track can fill several tabs (`fed_by`), a search rotates through its
+> company list via `/api/coverage`, and delisting a dead posting is decided
+> server-side. `server/src/prompt.js` and `server/README.md` are the live
+> reference.
 >
 > This document follows the repo's rule that no personal data lives here: where
 > the appendix needs to point at a real prompt's wording, it describes the text
@@ -285,6 +293,10 @@ There is no test suite in this repo; verification is curl plus the real UI.
 ---
 
 # Appendix - what `prompt.js` has to carry
+
+> Snapshot of the design as drafted, not of the file as it stands. `prompt.js`
+> has gained steps since (dedup endpoint, multi-tab filing, company rotation);
+> read it rather than this for what a prompt contains today.
 
 ## The finding
 

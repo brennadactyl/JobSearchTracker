@@ -282,6 +282,32 @@ Posting `tracks` also creates each new track's `search_runs` row, so its tab
 shows "No run recorded yet" until its first scheduled run reports in. That's
 expected on a fresh setup, not a problem to chase.
 
+**Seed the track's company coverage** if its company list is long enough that
+one run can't verify all of it properly - roughly a dozen companies and up.
+Without this the search sweeps the whole list every night, which sounds
+thorough and isn't: everything gets skimmed. Registering the companies turns
+on a rotation (the composed prompt gains steps 1c and 9d for any track that
+has coverage rows - it's gated on the rows existing, so there's no flag to
+set):
+
+```
+curl -s -X POST "$TRACKER_URL/api/coverage" \
+  -H "Authorization: Bearer $USER_TOKEN" -H "Content-Type: application/json" \
+  -d '{"search":"<key>","on":"","swept":[{"company":"Acme","board":"greenhouse"},{"company":"Globex"}]}'
+```
+
+`on: ""` means "register these, nobody has swept them" - it creates the rows
+without stamping a date, which is what makes them sort first so the early runs
+work through the whole list before re-covering anything. Never seed with
+today's date: that claims a sweep that didn't happen and starts the rotation
+with no idea what it has actually seen. `board` is the JSON-board kind where
+one is already known (`greenhouse`, `ashby`, `lever`, `workday cxs`); those
+companies cost one fetch for discovery *and* verification, so they're covered
+every run rather than rotated. Leave it empty where you don't know - a run
+fills it in when it finds one. Seed against the track that *runs* the search:
+a `fed_by` tab shares its feeder's coverage list, it doesn't get one of its
+own.
+
 If there's no deployment to post to yet, skip this step and tell the
 installer to come back to it (re-running this skill is fine, or they can run
 the curls above by hand) once they've deployed the API and the webpage.
