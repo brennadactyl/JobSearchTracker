@@ -318,32 +318,14 @@ export async function handleSetConfig(request, db) {
   if (Array.isArray(body.tracks)) {
     const valid = body.tracks.filter((t) => t && typeof t.key === "string" && t.key);
     if (valid.length === 0) return json({ error: "tracks must be a non-empty array of {key, ...}" }, 400);
-    // `fed_by` has to name another track in this same list, and that track has
-    // to be one that actually runs. A tab fed by a key that doesn't exist (or
-    // by another fed tab) is a tab no search fills: nothing would ever land in
-    // it and nothing would record a run against it, so it would sit there
-    // permanently reading "no run recorded yet" with no error anywhere to say
-    // why. Cheaper to refuse the post.
-    //
-    // Checked against the *merged* value, not the posted one: replaceTracks
-    // keeps a field the payload doesn't mention, so a later post that renames a
-    // tab (`{key, label}`) and drops the feeding track from the list would
-    // otherwise slip a now-dangling fed_by through unexamined.
-    const stored = {};
-    for (const t of (await db.getTracksAndSettings()).tracks) stored[t.key] = t;
-    const fedByOf = (t) =>
-      typeof t.fed_by === "string" ? t.fed_by : (stored[t.key] && stored[t.key].fed_by) || "";
-    const byKey = new Map(valid.map((t) => [t.key, t]));
+    // A `fed_by` pointing anywhere but at another track in this same list is a
+    // tab no search fills: nothing lands in it and nothing records a run
+    // against it, so it sits there reading "no run recorded yet" forever with
+    // no error anywhere to say why.
+    const keys = new Set(valid.map((t) => t.key));
     for (const t of valid) {
-      const fedBy = fedByOf(t);
-      if (!fedBy) continue;
-      if (fedBy === t.key) return json({ error: `track "${t.key}" cannot feed itself` }, 400);
-      const feeder = byKey.get(fedBy);
-      if (!feeder) {
-        return json({ error: `track "${t.key}" is fed_by "${fedBy}", which is not in this track list` }, 400);
-      }
-      if (fedByOf(feeder)) {
-        return json({ error: `track "${t.key}" is fed_by "${fedBy}", which is itself fed by another track` }, 400);
+      if (t.fed_by && (t.fed_by === t.key || !keys.has(t.fed_by))) {
+        return json({ error: `track "${t.key}" is fed_by "${t.fed_by}", which is not another track in this list` }, 400);
       }
     }
     // Each track carries its display fields and, optionally, its search

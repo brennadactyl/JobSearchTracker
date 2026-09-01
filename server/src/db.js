@@ -140,7 +140,6 @@
  * @property {string} screened_examples
  * @property {string} schedule_time
  * @property {string} fed_by - key of the sibling track whose search fills this tab, '' when this track runs its own
- * @property {string} branch_line - what belongs in this tab, when one run fills more than one
  */
 
 /**
@@ -183,7 +182,7 @@ export const TRACK_CONFIG_FIELDS = [
   "role_search_line", "target_companies", "search_note", "resume_line",
   "fit_clause", "fit_disqualifier", "fit_filter_step", "leads_note",
   "doc_file", "doc_summary", "doc_update_line", "intro_note", "report_line",
-  "screened_examples", "schedule_time", "fed_by", "branch_line",
+  "screened_examples", "schedule_time", "fed_by",
 ];
 
 // Settings the client renders from...

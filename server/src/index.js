@@ -107,9 +107,7 @@
  *                            - sets that config (see handleSetConfig in api.js).
  *                            Writing `tracks` also keeps search_runs 1:1 with
  *                            it - new tracks gain a "never ran" row, removed
- *                            tracks lose theirs. A track with `fed_by` set is
- *                            a tab filled by a sibling track's search rather
- *                            than one of its own (migrations/0003).
+ *                            tracks lose theirs.
  *   GET  /api/prompt/:key    requires Bearer token -> text/plain - the daily
  *                            search prompt for that track, composed from its
  *                            config (see ./prompt.js). What run-search.ps1

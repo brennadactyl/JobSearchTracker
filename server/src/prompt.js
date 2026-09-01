@@ -81,10 +81,10 @@ export function buildSearchPrompt({ user, track, settings, feeds }) {
   const fed = (Array.isArray(feeds) ? feeds : []).filter((t) => t && t.key && t.key !== key);
   const multi = fed.length > 0;
   const allKeys = [key, ...fed.map((t) => t.key)];
-  // What belongs in each tab, for the filing step. Falls back to the tab's
-  // subtitle, which is at least a description of the roles, when no
-  // branch_line was written for it.
-  const branchOf = (t) => t.branch_line || t.full_description || t.label;
+  // What belongs in each tab, for the filing step. That's what a tab's
+  // subtitle already is, so it does double duty rather than earning a field of
+  // its own - which also means the two can't drift apart.
+  const branchOf = (t) => t.full_description || t.label;
 
   const doc = track.doc_file || `docs/tracked_${key}_postings.md`;
   const docSummary =

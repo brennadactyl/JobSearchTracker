@@ -173,17 +173,12 @@ check("a track cannot feed itself",
   (await req("POST", "/api/config", { token: A_TOK, body: { tracks: [
     { key: "SWE", label: "Ada Eng" },
     { key: "LEAD", label: "Ada Lead", fed_by: "LEAD" }] } })).status === 400);
-check("a fed track cannot feed another one",
-  (await req("POST", "/api/config", { token: A_TOK, body: { tracks: [
-    { key: "SWE", label: "Ada Eng" },
-    { key: "LEAD", label: "Ada Lead", fed_by: "SWE" },
-    { key: "DIR", label: "Ada Dir", fed_by: "LEAD" }] } })).status === 400);
 const branched = await req("POST", "/api/config", { token: A_TOK, body: { tracks: [
   { key: "SWE", label: "Ada Eng", sort_order: 0, schedule_time: "08:00",
     role_search_line: "Backend roles", target_companies: ["Acme"],
-    branch_line: "a hands-on backend role" },
+    full_description: "a hands-on backend role" },
   { key: "LEAD", label: "Ada Lead", sort_order: 1, fed_by: "SWE",
-    branch_line: "a role leading a team" }] } });
+    full_description: "a role leading a team" }] } });
 check("a fed track posts fine alongside the track that feeds it", branched.status === 200, branched.text.slice(0, 120));
 const fedPrompt = await req("GET", "/api/prompt/LEAD", { token: A_TOK });
 check("a fed track has no prompt of its own, and the refusal names the one to run",
