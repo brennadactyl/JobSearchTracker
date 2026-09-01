@@ -67,7 +67,11 @@
  *                            purpose-built routes below instead, which
  *                            validate the value and own the side effects
  *                            (application creation, stage-date stamping)
- *                            that a plain field write can't.
+ *                            that a plain field write can't. A lead's
+ *                            `search` is writable here too, which moves it
+ *                            to another of this user's tabs - 404 on an
+ *                            unknown track, 409 if that tab already has the
+ *                            url.
  *   POST /api/leads/:id/status       requires Bearer token -> body: { status }
  *                            validates against LEAD_STATUS; if the new
  *                            status is "Applied", atomically (one D1
@@ -103,12 +107,16 @@
  *                            - sets that config (see handleSetConfig in api.js).
  *                            Writing `tracks` also keeps search_runs 1:1 with
  *                            it - new tracks gain a "never ran" row, removed
- *                            tracks lose theirs.
+ *                            tracks lose theirs. A track with `fed_by` set is
+ *                            a tab filled by a sibling track's search rather
+ *                            than one of its own (migrations/0003).
  *   GET  /api/prompt/:key    requires Bearer token -> text/plain - the daily
  *                            search prompt for that track, composed from its
  *                            config (see ./prompt.js). What run-search.ps1
  *                            fetches instead of reading a prompt file off
- *                            whichever machine it's running on.
+ *                            whichever machine it's running on. 409s for a
+ *                            track with `fed_by` set: that tab has no search
+ *                            of its own, and the error names the one to run.
  *   OPTIONS *                 CORS preflight for any of the above -> 204 + CORS_HEADERS
  *
  * Schema: see ../migrations/. Persistence: see ./db.js. Handlers: see ./api.js.

@@ -251,6 +251,16 @@ job market. Tune the threshold with `stale_run_hours` via `/api/config` if a
 track is scheduled less often than daily - a weekly search left at 36 hours
 would warn nearly all week.
 
+**A tab is normally a search, but it doesn't have to be.** Each track gets its
+own daily run, which is right when two tracks are two different searches. When
+they're really one search split by level or kind of role - same companies, same
+resume, same scope, differing only in which tab a posting lands in - a second
+daily run would re-fetch the same job boards to sort the same results
+differently. Set the second track's `fed_by` to the first's key instead
+(plus a `branch_line` on each saying what belongs in it): no task is registered
+for it, and the feeding track's prompt fills both tabs and records a run against
+each. See `server/migrations/0003_branched_tracks.sql`.
+
 **Headless runs use a scoped tool allowlist**, not full permission bypass -
 see `scripts/run-search.ps1`. If a search prompt ever needs a new capability,
 add it there deliberately rather than reaching for `--dangerously-skip-permissions`.

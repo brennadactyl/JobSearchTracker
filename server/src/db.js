@@ -139,6 +139,8 @@
  * @property {string} report_line
  * @property {string} screened_examples
  * @property {string} schedule_time
+ * @property {string} fed_by - key of the sibling track whose search fills this tab, '' when this track runs its own
+ * @property {string} branch_line - what belongs in this tab, when one run fills more than one
  */
 
 /**
@@ -181,7 +183,7 @@ export const TRACK_CONFIG_FIELDS = [
   "role_search_line", "target_companies", "search_note", "resume_line",
   "fit_clause", "fit_disqualifier", "fit_filter_step", "leads_note",
   "doc_file", "doc_summary", "doc_update_line", "intro_note", "report_line",
-  "screened_examples", "schedule_time",
+  "screened_examples", "schedule_time", "fed_by", "branch_line",
 ];
 
 // Settings the client renders from...
@@ -596,12 +598,19 @@ export class Db {
   /**
    * Field-whitelist partial update - only keys present in `patch` (as
    * strings) are changed; everything else is left as-is via COALESCE.
+   *
+   * `search` is in the list so a lead can be moved between this user's tabs -
+   * the case that turns up when one track is split in two, since a lead's
+   * track is otherwise fixed at the moment the search filed it and there is no
+   * delete route to re-add it through. The caller (handleUpdate) is what
+   * checks the target track exists and catches the UNIQUE(user_id, search,
+   * url) collision; both are policy, not storage.
    * @param {number|string} id
    * @param {Partial<Lead>} patch
    * @returns {Promise<Lead|null>} the updated row, or null if no row matched
    */
   async updateLead(id, patch) {
-    const fields = ["status", "notes", "delistedOn", ...EXTRA_FIELDS];
+    const fields = ["status", "notes", "delistedOn", "search", ...EXTRA_FIELDS];
     const setClause = fields.map((f) => `${f} = COALESCE(?, ${f})`).join(", ");
     const values = fields.map((f) => (typeof patch[f] === "string" ? patch[f] : null));
     const result = await this.d1

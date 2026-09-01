@@ -161,6 +161,59 @@ check("A's run is recorded against A only",
 check("a track key nobody configured 404s",
   (await req("POST", "/api/runs", { token: A_TOK, body: { search: "GHOST", on: "2026-08-31" } })).status === 404);
 
+// One search, several tabs: a track with fed_by is a tab the named sibling's
+// run fills. The failure this guards against is a tab nothing ever fills or
+// records a run against - which looks like a working, quiet search.
+console.log("\n== branched tracks ==");
+check("fed_by naming a track that isn't in the list is refused",
+  (await req("POST", "/api/config", { token: A_TOK, body: { tracks: [
+    { key: "SWE", label: "Ada Eng" },
+    { key: "LEAD", label: "Ada Lead", fed_by: "NOPE" }] } })).status === 400);
+check("a track cannot feed itself",
+  (await req("POST", "/api/config", { token: A_TOK, body: { tracks: [
+    { key: "SWE", label: "Ada Eng" },
+    { key: "LEAD", label: "Ada Lead", fed_by: "LEAD" }] } })).status === 400);
+check("a fed track cannot feed another one",
+  (await req("POST", "/api/config", { token: A_TOK, body: { tracks: [
+    { key: "SWE", label: "Ada Eng" },
+    { key: "LEAD", label: "Ada Lead", fed_by: "SWE" },
+    { key: "DIR", label: "Ada Dir", fed_by: "LEAD" }] } })).status === 400);
+const branched = await req("POST", "/api/config", { token: A_TOK, body: { tracks: [
+  { key: "SWE", label: "Ada Eng", sort_order: 0, schedule_time: "08:00",
+    role_search_line: "Backend roles", target_companies: ["Acme"],
+    branch_line: "a hands-on backend role" },
+  { key: "LEAD", label: "Ada Lead", sort_order: 1, fed_by: "SWE",
+    branch_line: "a role leading a team" }] } });
+check("a fed track posts fine alongside the track that feeds it", branched.status === 200, branched.text.slice(0, 120));
+const fedPrompt = await req("GET", "/api/prompt/LEAD", { token: A_TOK });
+check("a fed track has no prompt of its own, and the refusal names the one to run",
+  fedPrompt.status === 409 && /"SWE"/.test(fedPrompt.json.error), fedPrompt.text.slice(0, 120));
+const feedPrompt = (await req("GET", "/api/prompt/SWE", { token: A_TOK })).text;
+check("the feeding track's prompt covers both tabs",
+  feedPrompt.includes("/api/dedup/LEAD") &&
+  feedPrompt.includes("a role leading a team") &&
+  feedPrompt.includes('"search":"LEAD"'));
+check("a fed track still accepts a run record - that's what keeps its tab from reading stale",
+  (await req("POST", "/api/runs", { token: A_TOK, body: { search: "LEAD", on: "2026-08-31", note: "filed by SWE" } })).status === 200);
+
+console.log("\n== moving a lead between tabs ==");
+const moved = await req("POST", "/api/update", { token: A_TOK, body: { type: "lead", id: aLeadId, search: "LEAD" } });
+check("a lead moves to another of your own tabs", moved.status === 200 && moved.json.lead.search === "LEAD", moved.text.slice(0, 120));
+check("moving to a track you don't have is a 404, not a lost lead",
+  (await req("POST", "/api/update", { token: A_TOK, body: { type: "lead", id: aLeadId, search: "GHOST" } })).status === 404);
+check("B cannot move A's lead into one of B's tabs",
+  (await req("POST", "/api/update", { token: B_TOK, body: { type: "lead", id: aLeadId, search: "SWE" } })).status === 404);
+// Its own url rather than the shared fixture: a second row for that one would
+// quietly break the "A's leads survive their track being removed" count below.
+const conflictUrl = `https://example.com/in-both-tabs-${Date.now()}`;
+await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
+  { search: "SWE", company: "Acme", title: "Staff Backend", location: "Remote (U.S.)", url: conflictUrl },
+  { search: "LEAD", company: "Acme", title: "Staff Backend", location: "Remote (U.S.)", url: conflictUrl }] } });
+const dupId = (await req("GET", "/api/data", { token: A_TOK })).json.leads
+  .find((l) => l.url === conflictUrl && l.search === "SWE").id;
+check("moving onto a url the destination tab already holds is a 409, not a 500",
+  (await req("POST", "/api/update", { token: A_TOK, body: { type: "lead", id: dupId, search: "LEAD" } })).status === 409);
+
 console.log("\n== sessions ==");
 const aSecond = await req("POST", "/api/login", { body: { name: "Ada", password: "ada-new-password-1", label: "browser" } });
 check("logging out revokes only the token used",

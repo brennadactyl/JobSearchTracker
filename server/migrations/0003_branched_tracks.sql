@@ -1,0 +1,31 @@
+-- One search, several tabs.
+--
+-- Until now every track was its own scheduled search: setup-scheduler.ps1
+-- registers one daily task per track it finds in /api/config, and prompt.js
+-- hard-codes that track's key into the steps that POST leads, screened rows
+-- and the run record. That is the right default - two tracks usually mean two
+-- genuinely different searches (different resume framing, different companies,
+-- different fit bar).
+--
+-- It is the wrong shape when a person wants one tab split into two by *level*
+-- rather than by search: the companies, the resume, the geographic scope and
+-- the verification work are all identical, and the only difference is which
+-- tab a given posting belongs in once it has been found. Registering a second
+-- daily task for that re-fetches the same couple of dozen job boards a second
+-- time to sort the same results differently.
+--
+-- So a track can now name the sibling that fills it. `fed_by` set means: this
+-- tab has no search of its own - the named track's run finds its postings and
+-- files them here. setup-scheduler.ps1 registers no task for it, and
+-- GET /api/prompt refuses to compose one, pointing at the feeding track
+-- instead. On the other side, prompt.js sees the tracks fed by the track it is
+-- composing for and turns the whole run multi-tab: it fetches dedup data for
+-- every key it fills, adds a filing step, and records a run against each tab
+-- (without that last part the fed tab would show as stale forever, since a run
+-- record is per track).
+--
+-- `branch_line` is what makes the filing step possible: one sentence per tab
+-- saying what belongs in it. It is only read when a run fills more than one
+-- tab; a lone track never needs one.
+ALTER TABLE tracks ADD COLUMN fed_by TEXT NOT NULL DEFAULT '';
+ALTER TABLE tracks ADD COLUMN branch_line TEXT NOT NULL DEFAULT '';

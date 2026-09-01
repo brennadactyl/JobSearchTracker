@@ -120,6 +120,25 @@ the resume where reasonable, then confirm):
   caveat quietly screens out real, well-fitting opportunities before the
   installer ever sees them.
 
+- **Is this a second search, or a second tab on the same search?** Two tracks
+  usually mean two genuinely different searches - different companies,
+  different resume framing, different fit bar - and each gets its own daily
+  run. But sometimes the ask is to split *one* search by level or kind of
+  role ("EM of engineers" vs "EM of managers / Director", "IC" vs "lead"),
+  where the companies, the resume, the geographic scope and the verification
+  work are all identical and the only question is which tab a posting belongs
+  in once it's found. That's one search filling two tabs, not two searches:
+  set the second track's `fed_by` to the first track's key, leave its
+  `schedule_time` empty, and give **both** tracks a `branch_line` - one
+  sentence saying what belongs in that tab. The feeding track's prompt then
+  fetches dedup data for both keys, gains a filing step built from those
+  `branch_line`s, and records a run against each tab; no scheduled task is
+  registered for the fed one. Everything else about the fed track (role line,
+  companies, resume line, fit clause) stays empty - it has no search of its
+  own to configure. Ask which way it is rather than assuming; the tell is
+  whether the two tabs would search the *same* boards for the *same* person
+  and differ only in how the results are sorted.
+
 Once per setup (applies to every track, new and existing):
 - **Geographic scope** - the hard filter on what's in-scope at all (e.g. "US
   only", "UK and EU", "no restriction"). This becomes the `geo_scope_line`
@@ -186,7 +205,14 @@ the finished sentence you want the search to read:
   has sensible generic versions.
 - `schedule_time` - `HH:mm` local. This *is* the schedule now (step 7 reads
   it), so stagger it: 30 minutes after the last existing track across all
-  users on that machine, since they share one CLI.
+  users on that machine, since they share one CLI. Leave it empty on a track
+  with `fed_by` set - that tab has no run of its own.
+- `fed_by` / `branch_line` - only for a track that's a second tab on a sibling's
+  search rather than a search of its own (see step 3). `fed_by` is the feeding
+  track's key; `branch_line` goes on both tracks and is one sentence saying what
+  belongs in that tab. `POST /api/config` refuses a `fed_by` naming a track
+  that isn't in the same posted list, and `GET /api/prompt/<fed key>` refuses
+  to compose a prompt at all - the feeding track's prompt is the whole search.
 
 Once per person, the settings half (`geo_scope_line`, `scope_clause`,
 `scope_disqualifier`, `location_guidance`, `footer_note`, `pronouns`) - also
