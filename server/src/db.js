@@ -319,6 +319,60 @@ export class Db {
     return { leads: leads.results, screened: screened.results.map((r) => r.url) };
   }
 
+  // ---------------------------------------------------- company sweeps --
+
+  /**
+   * One row per company this search tracks, least-recently-swept first so the
+   * caller can take the first N and be right. '' (never swept) sorts before
+   * any date, which is what makes a newly-seeded list get worked through
+   * before anything gets re-covered.
+   * @param {string} search @returns {Promise<{company: string, last_swept: string, board: string, note: string}[]>}
+   */
+  async getCoverage(search) {
+    const rows = await this.d1
+      .prepare(
+        `SELECT company, last_swept, board, note FROM company_sweeps
+         WHERE user_id = ? AND search = ? ORDER BY last_swept, company`
+      )
+      .bind(this.userId, search)
+      .all();
+    return rows.results;
+  }
+
+  /**
+   * Upsert one row per company covered. Creating on write rather than needing
+   * a separate "add this company" call is deliberate: broader discovery turns
+   * up companies that were never on any list, and the run recording that it
+   * swept one is exactly the moment the row should start existing.
+   *
+   * `board`, `note` and the date itself only overwrite when non-empty - a run
+   * that stamps a date shouldn't blank the endpoint an earlier run confirmed,
+   * and an empty `on` is how a caller registers companies *without* claiming to
+   * have swept them (seeding a list, or adding one broader discovery found).
+   * Registering must never look like a sweep: a seeded row has to sort ahead
+   * of everything already covered, which is exactly what an empty date does.
+   * @param {string} search
+   * @param {{company: string, board?: string, note?: string}[]} items
+   * @param {string} on - YYYY-MM-DD
+   */
+  async recordSweeps(search, items, on) {
+    const stmt = this.d1.prepare(
+      `INSERT INTO company_sweeps (user_id, search, company, last_swept, board, note)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(user_id, search, company) DO UPDATE SET
+         last_swept = CASE WHEN excluded.last_swept <> '' THEN excluded.last_swept ELSE company_sweeps.last_swept END,
+         board = CASE WHEN excluded.board <> '' THEN excluded.board ELSE company_sweeps.board END,
+         note = CASE WHEN excluded.note <> '' THEN excluded.note ELSE company_sweeps.note END`
+    );
+    await this.d1.batch(
+      items.map((i) =>
+        stmt.bind(this.userId, search, i.company, on, typeof i.board === "string" ? i.board : "",
+          typeof i.note === "string" ? i.note : "")
+      )
+    );
+    return items.length;
+  }
+
   // -------------------------------------------------- tracks & settings --
 
   /** @returns {Promise<{tracks: TrackWithRun[], settings: Settings}>} */

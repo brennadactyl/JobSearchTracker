@@ -164,6 +164,49 @@ check("a track key nobody configured 404s",
 // One search, several tabs: a track with fed_by is a tab the named sibling's
 // run fills. The failure this guards against is a tab nothing ever fills or
 // records a run against - which looks like a working, quiet search.
+// The rotation's memory. What matters here is the ordering (least-recently-
+// swept first, never-swept before that) and that a stamp doesn't wipe the
+// board endpoint an earlier run confirmed - both are what stop the rotation
+// from restarting at the top of the list every night.
+console.log("\n== company coverage ==");
+check("an unconfigured track key 404s rather than reading as 'never swept'",
+  (await req("GET", "/api/coverage/GHOST", { token: A_TOK })).status === 404);
+check("a track with no rows yet is an empty list, not an error",
+  (await req("GET", "/api/coverage/SWE", { token: B_TOK })).status === 200 &&
+  Array.isArray((await req("GET", "/api/coverage/SWE", { token: B_TOK })).json.companies));
+await req("POST", "/api/coverage", { token: A_TOK, body: { search: "SWE", on: "2026-08-20",
+  swept: [{ company: "Acme", board: "greenhouse" }, { company: "Globex" }] } });
+await req("POST", "/api/coverage", { token: A_TOK, body: { search: "SWE", on: "2026-08-28",
+  swept: [{ company: "Acme", note: "blocked" }] } });
+// By name, not by index: this file is meant to be re-run against a database
+// that still holds the last run's fixtures, and every check that assumed a
+// position broke the moment a later one added a row.
+const cov = (await req("GET", "/api/coverage/SWE", { token: A_TOK })).json.companies;
+const at = (name) => cov.findIndex((c) => c.company === name);
+check("least-recently-swept sorts first", at("Globex") < at("Acme"), JSON.stringify(cov));
+const acme = cov[at("Acme")];
+check("a later stamp keeps the board an earlier run confirmed",
+  acme.board === "greenhouse" && acme.last_swept === "2026-08-28" && acme.note === "blocked",
+  JSON.stringify(acme));
+await req("POST", "/api/coverage", { token: A_TOK, body: { search: "SWE", on: "",
+  swept: [{ company: "Acme" }, { company: "Initech" }] } });
+const seeded = (await req("GET", "/api/coverage/SWE", { token: A_TOK })).json.companies;
+check("registering with an empty date doesn't overwrite a real sweep",
+  seeded.find((c) => c.company === "Acme").last_swept === "2026-08-28");
+check("a newly registered company sorts ahead of everything already swept",
+  seeded[0].last_swept === "" &&
+  seeded.findIndex((c) => c.company === "Initech") < seeded.findIndex((c) => c.company === "Globex"));
+check("recording against a track you don't have 404s",
+  (await req("POST", "/api/coverage", { token: A_TOK, body: { search: "GHOST", swept: [{ company: "Acme" }] } })).status === 404);
+check("an empty sweep list is refused rather than stamping nothing",
+  (await req("POST", "/api/coverage", { token: A_TOK, body: { search: "SWE", swept: [] } })).status === 400);
+check("B's coverage for the same track key is B's own",
+  (await req("GET", "/api/coverage/SWE", { token: B_TOK })).json.companies.length === 0);
+check("the prompt gains the rotation steps once a track has rows",
+  (await req("GET", "/api/prompt/SWE", { token: A_TOK })).text.includes("1c. Decide which companies"));
+check("and B's, with no rows, does not",
+  !(await req("GET", "/api/prompt/SWE", { token: B_TOK })).text.includes("1c. Decide which companies"));
+
 console.log("\n== branched tracks ==");
 check("fed_by naming a track that isn't in the list is refused",
   (await req("POST", "/api/config", { token: A_TOK, body: { tracks: [

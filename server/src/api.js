@@ -194,6 +194,53 @@ export async function handleGetDedup(db, key) {
   return json(await db.getDedupData(key));
 }
 
+// The rotation's memory: which companies this search has covered and when,
+// least-recently-swept first. Same 404-on-unknown-track reasoning as the dedup
+// route - an empty list from a mistyped key would read as "nothing has ever
+// been swept" and send the run at the whole company list at once.
+export async function handleGetCoverage(db, key) {
+  if (!(await db.trackExists(key))) {
+    return json({ error: `unknown track "${key}" - not in the configured tracks` }, 404);
+  }
+  return json({ companies: await db.getCoverage(key) });
+}
+
+// Records what a run actually attempted. Attempted, not found: a company whose
+// board was blocked today still gets stamped, or the rotation retries it every
+// run forever and the rest of the list starves.
+export async function handleRecordSweeps(request, db) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "invalid JSON body" }, 400);
+  }
+  const key = typeof body.search === "string" ? body.search : "";
+  if (!key) return json({ error: "missing search (track key)" }, 400);
+  if (!(await db.trackExists(key))) {
+    return json({ error: `unknown track "${key}" - not in the configured tracks` }, 404);
+  }
+  const incoming = Array.isArray(body.swept) ? body.swept : [];
+  const valid = incoming
+    .filter((i) => i && typeof i.company === "string" && i.company.trim())
+    .map((i) => ({ ...i, company: i.company.trim() }));
+  if (valid.length === 0) return json({ error: "no companies provided" }, 400);
+
+  // Same reasoning as /api/runs: the worker only knows UTC, and a 01:00 local
+  // run is already the next UTC day - a date derived here would stamp tomorrow.
+  // An explicit "" is not a malformed date, it's "register these companies,
+  // I haven't swept them" - the seeding case, which must not stamp anything
+  // (see db.recordSweeps).
+  const on = typeof body.on === "string" && body.on === ""
+    ? ""
+    : typeof body.on === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.on)
+      ? body.on
+      : new Date().toISOString().slice(0, 10);
+
+  const recorded = await db.recordSweeps(key, valid, on);
+  return json({ recorded, on });
+}
+
 export async function handleGetPrompt(db, user, key) {
   const [track, config] = await Promise.all([db.getTrack(key), db.getTracksAndSettings()]);
   if (!track) return json({ error: `unknown track "${key}" - not in the configured tracks` }, 404);
@@ -236,8 +283,11 @@ export async function handleGetPrompt(db, user, key) {
   // The tabs this run fills besides its own. Passing them turns the prompt
   // multi-tab: dedup for every key, a filing step, and a run record each.
   const feeds = config.tracks.filter((t) => t.fed_by === key);
+  // Whether this search rotates through its company list, which is true once
+  // it has any coverage rows at all - see buildSearchPrompt.
+  const coverage = (await db.getCoverage(key)).length;
 
-  return text(buildSearchPrompt({ user, track, settings: config.settings, feeds }));
+  return text(buildSearchPrompt({ user, track, settings: config.settings, feeds, coverage }));
 }
 
 // Records that one track's scheduled search finished - see

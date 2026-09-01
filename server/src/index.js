@@ -108,6 +108,21 @@
  *                            Writing `tracks` also keeps search_runs 1:1 with
  *                            it - new tracks gain a "never ran" row, removed
  *                            tracks lose theirs.
+ *   GET  /api/coverage/:key  requires Bearer token -> { companies: [{company,
+ *                            last_swept, board, note}] } - which companies
+ *                            this search tracks and when each was last
+ *                            attempted, least-recently-swept first. The
+ *                            rotation's memory: a run covers a bounded slice
+ *                            of a company list too long to verify in one go,
+ *                            and this is what stops it starting at the top
+ *                            every night.
+ *   POST /api/coverage       requires Bearer token -> body: { search, on?,
+ *                            swept: [{company, board?, note?}] } - stamps the
+ *                            companies a run attempted (attempted, not
+ *                            found - a blocked board still counts, or it gets
+ *                            retried forever). Creates rows it hasn't seen,
+ *                            so a company broader discovery turned up joins
+ *                            the rotation by being swept once.
  *   GET  /api/prompt/:key    requires Bearer token -> text/plain - the daily
  *                            search prompt for that track, composed from its
  *                            config (see ./prompt.js). What run-search.ps1
@@ -131,6 +146,8 @@ import {
   handleUpsertUser,
   handleGetMe,
   handleGetDedup,
+  handleGetCoverage,
+  handleRecordSweeps,
   handleGetPrompt,
   handleAddLeads,
   handleAddScreened,
@@ -213,11 +230,19 @@ export default {
       return handleSetApplicationStatus(request, db, m[1]);
     }
 
-    // Track keys are installer-chosen slugs, so these two are deliberately
-    // looser than the numeric-id routes above - both 404 on anything that
+    // Track keys are installer-chosen slugs, so these three are deliberately
+    // looser than the numeric-id routes above - all 404 on anything that
     // isn't one of this user's configured tracks.
     if ((m = url.pathname.match(/^\/api\/dedup\/([^/]+)$/)) && request.method === "GET") {
       return handleGetDedup(db, decodeURIComponent(m[1]));
+    }
+
+    if ((m = url.pathname.match(/^\/api\/coverage\/([^/]+)$/)) && request.method === "GET") {
+      return handleGetCoverage(db, decodeURIComponent(m[1]));
+    }
+
+    if (url.pathname === "/api/coverage" && request.method === "POST") {
+      return handleRecordSweeps(request, db);
     }
 
     if ((m = url.pathname.match(/^\/api\/prompt\/([^/]+)$/)) && request.method === "GET") {

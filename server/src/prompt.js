@@ -67,7 +67,7 @@ const DEFAULT_REPORT_LINE =
  *   this one - tabs this run also fills. See migrations/0003_branched_tracks.sql.
  * @returns {string} the full prompt text
  */
-export function buildSearchPrompt({ user, track, settings, feeds }) {
+export function buildSearchPrompt({ user, track, settings, feeds, coverage }) {
   const name = user.name;
   const pn = PRONOUNS[settings.pronouns] || PRONOUNS["they/them"];
   const key = track.key;
@@ -199,6 +199,41 @@ export function buildSearchPrompt({ user, track, settings, feeds }) {
   const screenedNote = multi
     ? ` Every screened row goes under \`"${key}"\` regardless of which tab the posting would have been filed under - step 1b reads them back as one combined set and nothing displays them per-tab, so splitting them would only add a way to get it wrong.`
     : "";
+  // Steps 1c and 9d appear only once a track has company_sweeps rows. Gating
+  // on the data rather than on a config flag keeps this off for every track
+  // that hasn't been seeded, and turns it on for one that has, with nothing to
+  // remember to set - see migrations/0004_company_sweeps.sql.
+  const rotates = Number(coverage) > 0;
+  const coverageStep = rotates
+    ? `1c. Decide which companies this run covers. The list in step 3 is longer than one run can verify properly, and covering all of it every night is what makes a run shallow - the failure isn't a company being missed, it's everything being skimmed. \`curl -s "$TRACKER_URL/api/coverage/${key}" -H "Authorization: Bearer $TRACKER_API_TOKEN"\` returns one row per company this search tracks, least-recently-swept first: \`{company, last_swept, board, note}\`. Cover, in this order:
+   (a) every company with a \`board\` recorded - one fetch there is both the discovery source and the verification, so they cost almost nothing and never rotate out;
+   (b) every company whose \`last_swept\` is empty or more than 7 days old - these have waited longest, and they take priority even when there are more of them than the cap;
+   (c) the least-recently-swept of whatever is left, up to 8 companies.
+   Whatever broader discovery turns up is covered as well, regardless of this list.
+`
+    : "";
+  const sweepStep = rotates
+    ? `9d. RECORD WHAT YOU COVERED. POST every company this run actually attempted:
+
+   \`\`\`
+   curl -s -X POST "$TRACKER_URL/api/coverage" \
+     -H "Authorization: Bearer $TRACKER_API_TOKEN" -H "Content-Type: application/json" \
+     -d '{"search":"${key}","on":"<today YYYY-MM-DD>","swept":[{"company":"...","board":"greenhouse","note":""}]}'
+   \`\`\`
+
+   This is the rotation's only memory. A run that covers companies without
+   recording them leaves tomorrow's run covering the same ones, and the tail of
+   the list never gets searched at all. Record a company you attempted and
+   *couldn't* fetch too, with the reason in \`note\` - the date tracks when a
+   company was last attempted, not when it last worked, or a blocked domain
+   comes back to the front of the queue every single run. Send \`board\` whenever
+   you confirm one (\`greenhouse\`, \`ashby\`, \`lever\`, \`workday cxs\`, ...): that is
+   what moves a company into the every-run tier. A company not already in the
+   list is created by this call, so one that broader discovery turned up joins
+   the rotation here. \`on\` is today's local date, same as step 9c.
+`
+    : "";
+
   const runKeysRule = multi
     ? `Post one of these **per tab** - \`"search":"${key}"\`, then ${fed
         .map((t) => `\`"search":"${t.key}"\``)
@@ -220,8 +255,8 @@ ${intro}Do the following:
 
 1. Read \`${doc}\` - ${docSummary}. Follow its numbered process. The doc doesn't keep a found-postings table or a screened/dead-link list of its own - dedup data comes from step 1b instead.
 1b. Fetch what this track has already seen: \`curl -s "$TRACKER_URL/api/dedup/${key}" -H "Authorization: Bearer $TRACKER_API_TOKEN"\`. Scoped to this track and deliberately minimal. It returns \`leads[]\` as \`{id, url, status}\` - postings already tracked; keep each \`url\` and \`status\` on hand for step 8 (that's how you tell a stale lead nobody's touched from one ${name} has already applied to) and the \`id\` because delisting posts back against it - and \`screened[]\` as a plain list of urls already looked at and rejected, which is what stops you re-verifying the same dead or out-of-scope candidate every run. Don't fetch \`/api/data\` for this: it returns every field of every row across every track, which is far larger and grows every day.${dedupNote}
-2. ${resumeLine}
-3. Search target companies' careers sites (web search as backup) for current ${roleLine}. Companies: ${companies}.${searchNote} Also run the doc's broader-discovery step.${exclusionNote}
+${coverageStep}2. ${resumeLine}
+3. Search ${rotates ? "the companies step 1c selected" : "target companies"}' careers sites (web search as backup) for current ${roleLine}. ${rotates ? "The full list this rotates through" : "Companies"}: ${companies}.${searchNote} Also run the doc's broader-discovery step.${exclusionNote}
 4. MANDATORY VERIFICATION: fetch every candidate URL directly and confirm it renders an actual job description (real title, responsibilities/qualifications - not a landing page, 404, "job not found," a loading placeholder, or a listing/index page that merely contains the title text). A search-snippet URL is a lead, not a finding, until opened and confirmed. If a site won't reveal real content, skip that company today rather than report something unverified.
 5. ${geoStep}
 6. ${locationGuidance}
@@ -293,7 +328,7 @@ ${filingStep}8. For a previously-tracked lead (from step 1b's \`leads[]\`) confi
    A \`404\` with \`"unknown track"\` means the track key here and the tracker's
    configured tracks have drifted apart - report that plainly, it means this
    track's findings have nowhere to land.
-10. ${report}
+${sweepStep}10. ${report}
 
 Never add an unverified link to any output.${footer}
 `;
