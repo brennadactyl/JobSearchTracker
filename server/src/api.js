@@ -439,10 +439,19 @@ export async function handleAddLeads(request, db) {
   const valid = incoming.filter((lead) => lead.search && lead.url && lead.company && lead.title);
   if (valid.length === 0) return json({ error: "no valid leads in payload" }, 400);
 
-  const added = await db.addLeads(valid);
+  // The run's own local date, applied to every lead that didn't carry one.
+  // Same reasoning as /api/runs' `on`: the worker only knows UTC, so it cannot
+  // derive the day the search believes it is having.
+  const on = typeof body.on === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.on) ? body.on : "";
+
+  const { added, duplicates } = await db.addLeads(valid, on);
   if (added > 0) await db.touchUpdated();
 
-  return json({ added });
+  // `duplicates` is reported rather than swallowed so a run can say what it
+  // actually contributed. Silently returning a smaller `added` than the number
+  // of rows posted is how a run comes to believe it found more than it did -
+  // and the run summary on the page is built out of exactly these numbers.
+  return json({ added, duplicates });
 }
 
 // Records postings the search looked at and decided NOT to add as a lead
@@ -464,8 +473,32 @@ export async function handleAddScreened(request, db) {
   const valid = incoming.filter((item) => item.search && item.url);
   if (valid.length === 0) return json({ error: "no valid screened items in payload" }, 400);
 
-  const added = await db.addScreened(valid);
-  return json({ added });
+  const on = typeof body.on === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.on) ? body.on : "";
+
+  // A screened row belongs to the search that did the screening, not to the
+  // tab the posting would have been filed under. Those differ for a branched
+  // search: one run fills several tabs (`fed_by`, see
+  // migrations/0003_branched_tracks.sql), but nothing displays screened rows
+  // per-tab and step 1b reads them back as one combined set, so splitting them
+  // across the tabs would only add a way to get it wrong.
+  //
+  // The prompt used to say this in a sentence and rely on the model to do it.
+  // Doing it here means the rule holds whether or not that sentence was read,
+  // and the sentence comes out of the prompt.
+  const { tracks } = await db.getTracksAndSettings();
+  const fedBy = new Map(tracks.map((t) => [t.key, t.fed_by || ""]));
+  const rootOf = (key) => {
+    // Bounded rather than a while(true): fed_by is validated as pointing at
+    // another track when config is written, but nothing there rules out a
+    // cycle, and an insert path is the wrong place to hang.
+    let k = key;
+    for (let i = 0; i < tracks.length && fedBy.get(k); i++) k = fedBy.get(k);
+    return k;
+  };
+  const filed = valid.map((item) => ({ ...item, search: rootOf(item.search) }));
+
+  const { added, duplicates } = await db.addScreened(filed, on);
+  return json({ added, duplicates });
 }
 
 export async function handleUpdate(request, db) {

@@ -161,6 +161,8 @@
  * @property {string} pronouns
  */
 
+import { canonicalUrl } from "./url.js";
+
 // Same field lists api.js validates/whitelists against - re-exported from
 // here so there is exactly one definition, not two that can drift apart.
 export const EXTRA_FIELDS = [
@@ -625,21 +627,100 @@ export class Db {
   // ------------------------------------------------------------ leads --
 
   /**
-   * Inserts leads not already present for the same (user, search, url) triple
-   * - DB-enforced UNIQUE constraint + INSERT OR IGNORE, atomic and race-free.
+   * Every URL this user already has under the given tracks, as canonical keys
+   * (see ./url.js) - both the leads they track and the postings they have
+   * already screened out, since a candidate matching either one is not new.
+   *
+   * Keyed per track, not per user, because that is the scope the UNIQUE
+   * constraint has always had: two tracks legitimately tracking the same
+   * posting are two rows on purpose, and widening the check here would start
+   * silently dropping the second one.
+   *
+   * @param {string[]} searches track keys appearing in the batch
+   * @returns {Promise<Map<string, Set<string>>>} track key -> canonical URL keys
+   */
+  async existingUrlKeys(searches) {
+    const keys = [...new Set(searches.filter(Boolean))];
+    const seen = new Map(keys.map((k) => [k, new Set()]));
+    if (keys.length === 0) return seen;
+
+    const placeholders = keys.map(() => "?").join(", ");
+    const [leads, screened] = await Promise.all([
+      this.d1
+        .prepare(`SELECT search, url FROM leads WHERE user_id = ? AND search IN (${placeholders})`)
+        .bind(this.userId, ...keys)
+        .all(),
+      this.d1
+        .prepare(`SELECT search, url FROM screened WHERE user_id = ? AND search IN (${placeholders})`)
+        .bind(this.userId, ...keys)
+        .all(),
+    ]);
+    for (const row of [...leads.results, ...screened.results]) {
+      const set = seen.get(row.search);
+      if (set) set.add(canonicalUrl(row.url));
+    }
+    return seen;
+  }
+
+  /**
+   * Inserts leads not already present for the same (user, search, posting).
+   *
+   * Two layers, and they catch different things. `INSERT OR IGNORE` against
+   * `UNIQUE(user_id, search, url)` is the atomic, race-free backstop for a URL
+   * repeated byte-for-byte. The canonical-key filter above it is what catches
+   * the same posting arriving under a *different* URL - a `?gh_jid=` suffix, a
+   * slug, a tracking param - which is how 8 duplicate leads landed in one
+   * night's run on 2026-09-01. See ./url.js for the rule and the evidence.
+   *
+   * The filter is a read-then-write, so unlike the constraint it is not
+   * race-free. That is an accepted trade rather than an oversight: a track's
+   * leads are written by exactly one caller, its own nightly run, so two
+   * concurrent inserts for one track do not happen in practice - and the
+   * alternative was a table rebuild to move the UNIQUE constraint onto a
+   * stored key, plus a generated backfill for every existing row. The
+   * constraint still holds the line for the case that actually races.
+   *
+   * Within-batch duplicates are dropped too: one payload carrying the same
+   * posting twice under two URLs is the same mistake as carrying it across two
+   * runs, and INSERT OR IGNORE cannot see it either.
+   *
    * Never touches an existing row's status/notes. Two users tracking the same
    * posting are two separate rows, by design.
+   *
    * @param {Array<Partial<Lead>>} leads
-   * @returns {Promise<number>} how many were actually inserted
+   * @param {string} [on] the run's local date, used for `found`/`verified`
+   *   when a lead doesn't carry its own - see the note on today() below
+   * @returns {Promise<{added: number, duplicates: number}>} inserted, and how
+   *   many were dropped as already-known
    */
-  async addLeads(leads) {
-    const t = today();
+  async addLeads(leads, on) {
+    // The caller's local date when it sent one. The worker only knows UTC, and
+    // a search scheduled in the evening is already the next UTC day - the same
+    // reasoning /api/runs' `on` has always had. Falling back to UTC keeps the
+    // behaviour every existing caller already gets.
+    const t = /^\d{4}-\d{2}-\d{2}$/.test(String(on || "")) ? on : today();
+
+    const seen = await this.existingUrlKeys(leads.map((l) => l.search));
+    const fresh = [];
+    let duplicates = 0;
+    for (const lead of leads) {
+      const key = canonicalUrl(lead.url);
+      const set = seen.get(lead.search);
+      if (!key || (set && set.has(key))) {
+        duplicates++;
+        continue;
+      }
+      if (set) set.add(key);
+      fresh.push(lead);
+    }
+    if (fresh.length === 0) return { added: 0, duplicates };
+
     const stmt = this.d1.prepare(
       `INSERT OR IGNORE INTO leads
          (user_id, search, found, company, title, location, url, verified, fit, status, notes, ${EXTRA_FIELDS.join(", ")})
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'New', '', ${EXTRA_FIELDS.map(() => "?").join(", ")})`
     );
-    const batch = leads.map((lead) =>
+    const batch = fresh.map((lead) =>
       stmt.bind(
         this.userId,
         lead.search,
@@ -654,7 +735,11 @@ export class Db {
       )
     );
     const results = await this.d1.batch(batch);
-    return results.reduce((n, r) => n + (r.meta.changes || 0), 0);
+    const added = results.reduce((n, r) => n + (r.meta.changes || 0), 0);
+    // A row the constraint rejected was a byte-identical repeat the canonical
+    // filter should already have caught, so counting the shortfall here keeps
+    // the two layers reporting one honest number rather than two.
+    return { added, duplicates: duplicates + (fresh.length - added) };
   }
 
   /** @param {number|string} id @returns {Promise<Lead|null>} */
@@ -694,17 +779,46 @@ export class Db {
   // -------------------------------------------------------- screened --
 
   /**
-   * Same INSERT-OR-IGNORE-on-(user, search, url) dedup shape as addLeads.
+   * Same two-layer dedup as addLeads - canonical-key filter over an
+   * INSERT-OR-IGNORE backstop - and for the same reason.
+   *
+   * A URL already tracked as a *lead* is dropped here too, not just one
+   * already screened. A run posting both about one posting is contradicting
+   * itself: step 7 sorts a candidate into tracked-or-screened, a finding, or a
+   * disqualified new one, and those are exclusive. Four such pairs exist in
+   * the live data, and the lead is the row worth keeping.
+   *
+   * deleteLeadAndScreen does not come through here, so a posting being taken
+   * off the board still gets its screened row while its lead is deleted in the
+   * same transaction.
+   *
    * @param {Array<Partial<ScreenedItem>>} items
-   * @returns {Promise<number>} how many were actually inserted
+   * @param {string} [on] the run's local date, for items without their own
+   * @returns {Promise<{added: number, duplicates: number}>}
    */
-  async addScreened(items) {
-    const t = today();
+  async addScreened(items, on) {
+    const t = /^\d{4}-\d{2}-\d{2}$/.test(String(on || "")) ? on : today();
+
+    const seen = await this.existingUrlKeys(items.map((i) => i.search));
+    const fresh = [];
+    let duplicates = 0;
+    for (const item of items) {
+      const key = canonicalUrl(item.url);
+      const set = seen.get(item.search);
+      if (!key || (set && set.has(key))) {
+        duplicates++;
+        continue;
+      }
+      if (set) set.add(key);
+      fresh.push(item);
+    }
+    if (fresh.length === 0) return { added: 0, duplicates };
+
     const stmt = this.d1.prepare(
       `INSERT OR IGNORE INTO screened (user_id, search, url, company, title, location, reason, date)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     );
-    const batch = items.map((item) =>
+    const batch = fresh.map((item) =>
       stmt.bind(
         this.userId,
         item.search,
@@ -717,7 +831,8 @@ export class Db {
       )
     );
     const results = await this.d1.batch(batch);
-    return results.reduce((n, r) => n + (r.meta.changes || 0), 0);
+    const added = results.reduce((n, r) => n + (r.meta.changes || 0), 0);
+    return { added, duplicates: duplicates + (fresh.length - added) };
   }
 
   // ----------------------------------------------------- applications --
