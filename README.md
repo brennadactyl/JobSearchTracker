@@ -261,8 +261,13 @@ like that needs a writer you aren't, hence a task running as SYSTEM.
 Set it up once, from an **Administrator** PowerShell:
 
 ```powershell
-.\scripts\protect-backups.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File "C:\VibeCoding\scripts\protect-backups.ps1"
 ```
+
+(The `-ExecutionPolicy Bypass` isn't optional theatre: this machine leaves the
+policy Undefined, which means Restricted for an interactive shell, so calling
+the script by path just fails. The scheduled tasks pass the same flag. Spawning
+a child process this way inherits the elevation and changes no policy setting.)
 
 That creates the archive, sets its ownership and permissions, installs its own
 copy of the archiver inside it (a task running as SYSTEM must never execute a

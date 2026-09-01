@@ -79,8 +79,10 @@
   Name of the export task.
 
 .EXAMPLE
-  # From an Administrator PowerShell:
-  C:\VibeCoding\scripts\protect-backups.ps1
+  # From an Administrator PowerShell. The -ExecutionPolicy flag is needed
+  # because the machine policy is Undefined, i.e. Restricted for an
+  # interactive shell - calling the script by path alone just fails.
+  powershell -NoProfile -ExecutionPolicy Bypass -File "C:\VibeCoding\scripts\protect-backups.ps1"
 #>
 param(
     [string]$SourceDir,
@@ -107,7 +109,7 @@ if (-not $isAdmin) {
     Write-Host ""
     Write-Host "This script has to run elevated - that is the point of it." -ForegroundColor Yellow
     Write-Host "Right-click PowerShell, Run as administrator, then:"
-    Write-Host "    $PSCommandPath"
+    Write-Host "    powershell -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
     Write-Host ""
     exit 1
 }
