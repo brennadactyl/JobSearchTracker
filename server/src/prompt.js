@@ -180,7 +180,7 @@ ${fitFilterStep}${captureNum}. While the posting is open, also capture - only wh
      -H "Authorization: Bearer $TRACKER_API_TOKEN" -H "Content-Type: application/json" \\
      -d '{"type":"lead","id":<its id>,"delistedOn":"<today YYYY-MM-DD>"}'
    \`\`\`
-   This is independent of \`status\` (Applied, Interviewing, etc. are untouched) - ${name} still needs to track what ${pn.subj} applied to regardless of whether the listing survives. If a posting previously marked delisted is found live again, clear it the same way with \`"delistedOn":""\`. If the tracker's unreachable, skip the API call and note it in your report - don't guess an id.
+   This is independent of \`status\` (Applied, Interviewing, etc. are untouched) - ${name} still needs to track what ${pn.subj} applied to regardless of whether the listing survives. On the tracker webpage this drops the lead out of its search tab, since there's nothing left to apply to, while the row stays in the database for dedup - which is why marking it is the right move and deleting it would not be. If a posting previously marked delisted is found live again, clear it the same way with \`"delistedOn":""\`. If the tracker's unreachable, skip the API call and note it in your report - don't guess an id.
 8b. ${docUpdateLine}
 9. SYNC NEW POSTINGS TO THE LIVE TRACKER WEBPAGE. If there are zero new verified postings from step 7, skip this step entirely - do not call the API. Otherwise, build a JSON array of only today's new postings and POST it with curl:
 
