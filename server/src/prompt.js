@@ -189,7 +189,7 @@ export function buildSearchPrompt({ user, track, settings, feeds }) {
   const filingStep = multi
     ? `7b. FILE EACH FINDING UNDER THE RIGHT TAB. This one search fills ${allKeys.length} tabs, and every finding from step 7 belongs to exactly one of them:\n${[track, ...fed]
         .map((t) => `   - \`${t.key}\` (${t.label}): ${branchOf(t)}`)
-        .join("\n")}\n   Decide from what the posting itself says - the scope it describes, who it reports to, whether the people reporting to it are engineers or managers - rather than from the company's usual titling, which means different things at different companies for the same job. If a posting genuinely reads either way after checking, file it under \`${key}\` and name those ones in your report. Don't spend a second verification pass on the question: the posting is already verified, this only decides which tab shows it. The answer is the \`"search"\` value in step 9.\n`
+        .join("\n")}\n   Decide from what the posting and the company actually are, reading the tab descriptions above as written - not from a job title alone, which means different things at different companies. \`${doc}\` is where any finer rule for this particular split lives; follow it. If a posting genuinely reads more than one way after checking, file it under \`${key}\` and name those ones in your report. Don't spend a second verification pass on the question: the posting is already verified, this only decides which tab shows it. The answer is the \`"search"\` value in step 9.\n`
     : "";
   const searchValueRule = multi
     ? `is the key step 7b filed that posting under - ${allKeys
