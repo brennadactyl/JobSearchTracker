@@ -78,6 +78,41 @@
  *                            screened, unless an application points at it,
  *                            in which case it's kept - see api.js's
  *                            removeDelistedLead.
+ *   POST /api/verified       requires Bearer token -> body: { search, on?,
+ *                            urls: [...] } -> { stamped, unmatched,
+ *                            unmatchedUrls, on }. A run reporting which of the
+ *                            postings it tracks it re-confirmed live tonight;
+ *                            the server stamps `verified` on the matching
+ *                            leads. That column has meant "date last verified
+ *                            live" since the first migration and nothing ever
+ *                            wrote it - the only thing a run could report about
+ *                            a re-checked posting was that it was dead - so it
+ *                            sat at the found date and couldn't answer how long
+ *                            it had been since anyone looked. Since delisting
+ *                            deletes (migrations/0004), a lead still in a tab
+ *                            is presumed live, and this is the only signal of
+ *                            how stale that presumption is.
+ *   POST /api/delist         requires Bearer token -> body: { search, on,
+ *                            urls: [...] } -> { removed, kept, unmatched,
+ *                            unmatchedUrls, on }. The batch form of the
+ *                            `delistedOn` report above: every posting a run
+ *                            confirmed dead tonight, in one call, so it stops
+ *                            carrying lead ids around and tallying responses
+ *                            itself. Same policy, same code - see api.js's
+ *                            delistLead, which both entry points call - so a
+ *                            lead an application points at is still kept and
+ *                            any other is deleted and its URL screened. `on`
+ *                            must be a real YYYY-MM-DD or the call is a 400:
+ *                            what it triggers is a permanent delete.
+ *
+ *                            Both match leads by posting identity (api.js's
+ *                            matchLeadsByUrl over ./url.js), not raw string, so
+ *                            a `?gh_jid=` variant or a slug still finds the row
+ *                            it was filed under - and across every tab this
+ *                            person has, since one run can fill several. A URL
+ *                            matching nothing comes back in `unmatchedUrls`:
+ *                            the run and the tracker disagree about what is
+ *                            tracked, which is worth a line in the report.
  *   POST /api/leads/:id/status       requires Bearer token -> body: { status }
  *                            validates against LEAD_STATUS; if the new
  *                            status is "Applied", atomically (one D1
@@ -158,6 +193,8 @@ import {
   handleAddScreened,
   handleRecordRun,
   handleUpdate,
+  handleMarkVerified,
+  handleDelistUrls,
   handleSetLeadStatus,
   handleSetApplicationStatus,
   handleDeleteApplication,
@@ -222,6 +259,16 @@ export default {
 
     if (url.pathname === "/api/update" && request.method === "POST") {
       return handleUpdate(request, db);
+    }
+
+    // The two URL-set reports a nightly run makes about the postings it already
+    // tracks: which are still live, and which have come down.
+    if (url.pathname === "/api/verified" && request.method === "POST") {
+      return handleMarkVerified(request, db);
+    }
+
+    if (url.pathname === "/api/delist" && request.method === "POST") {
+      return handleDelistUrls(request, db);
     }
 
     // Path-param routes (the only ones in this file) - matched by regex

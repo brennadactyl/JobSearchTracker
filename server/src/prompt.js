@@ -196,6 +196,17 @@ export function buildSearchPrompt({ user, track, settings, feeds, coverage }) {
         .map((k) => `\`"${k}"\``)
         .join(" or ")}. One POST can carry rows for different tabs, so send them all in a single call`
     : `must be \`"${key}"\``;
+  // Step 8's two reports take one "search" each, and for a multi-tab run that
+  // raises the obvious question of which tab a dead posting from a fed tab
+  // gets reported under. The answer is "this run's own key, always": the
+  // tracker matches a reported url against every lead this person has, whatever
+  // tab holds it (see db.getLeadsForUrlMatch). Worth saying out loud, because
+  // the alternative a run would otherwise invent - one call per tab, splitting
+  // the urls by which dedup response they came from - is exactly the id-and-tab
+  // bookkeeping taking urls was meant to stop.
+  const delistTabNote = multi
+    ? ` \`"search"\` is this run's own key, \`"${key}"\`, in both calls - including for a posting tracked in one of the other tabs this run fills. The tracker matches across every tab, so one call each covers all ${allKeys.length}.`
+    : "";
   const screenedNote = multi
     ? ` Every screened row goes under \`"${key}"\` regardless of which tab the posting would have been filed under - step 1b reads them back as one combined set and nothing displays them per-tab, so splitting them would only add a way to get it wrong.`
     : "";
@@ -261,7 +272,7 @@ export function buildSearchPrompt({ user, track, settings, feeds, coverage }) {
 ${intro}Do the following:
 
 1. Read \`${doc}\` - ${docSummary}. Follow its numbered process. The doc doesn't keep a found-postings table or a screened/dead-link list of its own - dedup data comes from step 1b instead.
-1b. Fetch what this track has already seen: \`curl -s "$TRACKER_URL/api/dedup/${key}" -H "Authorization: Bearer $TRACKER_API_TOKEN"\`. Scoped to this track and deliberately minimal. It returns \`leads[]\` as \`{id, url, status}\` - postings already tracked; keep each \`url\` and \`status\` on hand for step 8 (that's how you tell a stale lead nobody's touched from one ${name} has already applied to) and the \`id\` because delisting posts back against it - and \`screened[]\` as a plain list of urls already looked at and rejected, which is what stops you re-verifying the same dead or out-of-scope candidate every run. Don't fetch \`/api/data\` for this: it returns every field of every row across every track, which is far larger and grows every day.${dedupNote}
+1b. Fetch what this track has already seen: \`curl -s "$TRACKER_URL/api/dedup/${key}" -H "Authorization: Bearer $TRACKER_API_TOKEN"\`. Scoped to this track and deliberately minimal. It returns \`leads[]\` as \`{id, url, status}\` - postings already tracked; keep each \`url\` on hand for step 8, which reports back by url, and each \`status\` for context in your report (that's how you tell a stale lead nobody's touched from one ${name} has already applied to). You don't need to carry the \`id\` anywhere: nothing you post back is keyed by it. Then \`screened[]\` as a plain list of urls already looked at and rejected, which is what stops you re-verifying the same dead or out-of-scope candidate every run. Don't fetch \`/api/data\` for this: it returns every field of every row across every track, which is far larger and grows every day.${dedupNote}
 ${coverageStep}2. ${resumeLine}
 3. Search ${rotates ? "the step-1c companies" : "target companies"}' careers sites (web search as backup) for current ${roleLine}. ${rotates ? "Step 1c is the list for today, drawn from" : "Companies"}: ${companies}.${searchNote} Also run the doc's broader-discovery step.${exclusionNote}
 4. MANDATORY VERIFICATION: fetch every candidate URL directly and confirm it renders an actual job description (real title, responsibilities/qualifications - not a landing page, 404, "job not found," a loading placeholder, or a listing/index page that merely contains the title text). A search-snippet URL is a lead, not a finding, until opened and confirmed. If a site won't reveal real content, skip that company today rather than report something unverified.
@@ -269,15 +280,33 @@ ${coverageStep}2. ${resumeLine}
 6. ${locationGuidance}
 ${fitFilterStep}${captureNum}. While the posting is open, also capture - only when it's stated plainly, never inferred or guessed - the team/org named for the role (\`team\`), the stated work arrangement (\`setup\`, e.g. "Remote", "Hybrid - 3 days/week onsite", "Onsite"), and any posted compensation range (\`comp\`, e.g. "$180,000-$230,000/yr"; many US states disclose this by law). Leave any of these as an empty string when the posting doesn't say. These land in the tracker's per-lead "Details" panel alongside referral/resume/next-action fields that are ${name}'s alone to fill in by hand - this search never touches those.
 7. Compare candidate URLs against \`leads[]\` and \`screened[]\` from step 1b (not a doc table). Sort each candidate into: (a) already tracked or already screened - skip it; (b) ${findingIs} - a finding, goes to step 9; (c) genuinely new but disqualified (${disqualified}) - goes to step 9b instead of being dropped silently.
-${filingStep}8. For a previously-tracked lead (from step 1b's \`leads[]\`) confirmed dead on this check, **never delete or move anything yourself** - report it and let the tracker decide what to do with it. Use the step-1b tracker data (match by \`url\`) to call \`POST /api/update\` marking it delisted:
-   \`\`\`
-   curl -s -X POST "$TRACKER_URL/api/update" \\
-     -H "Authorization: Bearer $TRACKER_API_TOKEN" -H "Content-Type: application/json" \\
-     -d '{"type":"lead","id":<its id>,"delistedOn":"<today YYYY-MM-DD>"}'
-   \`\`\`
-   One call per dead lead, and don't post it to \`/api/screened\` as well - this one call is the whole report. Send it the same way whatever \`status\` the lead is in; the tracker knows which ones to leave alone (${name}'s applied-to leads are kept - what matters there is the application, not whether the listing survived). A success response saying \`"removed":true\` means it took the posting off ${pn.poss} board, and \`"removed":false\` means it kept it - both are the tracker working as intended, not something to retry or work around. \`delistedOn\` must be a real \`YYYY-MM-DD\` - anything else is refused with a 400, since a value that isn't a date isn't a report of anything. **There is no undoing this report.** A removed lead's row is gone and its URL is in \`screened[]\` from then on, so step 7 skips that URL for good: if the posting turns out to be live after all, no future run puts it back. If the tracker's unreachable, skip the API call and note it in your report - don't guess an id.
+${filingStep}8. REPORT WHAT THE RE-CHECK OF ALREADY-TRACKED LEADS FOUND. For the postings from step 1b's \`leads[]\` that you re-checked tonight, **never delete or move anything yourself** - report what you saw and let the tracker decide what to do with it. Both reports below are by \`url\`: send whichever URL you actually opened, and don't try to match it against step 1b's spelling first - the tracker matches on posting identity, so a \`?gh_jid=\` suffix, a tracking param, or a missing slug still finds the right lead. No ids anywhere.${delistTabNote}
 
-   **Only send this for a posting you have actually confirmed dead** - a page that loads and says the role is closed or filled, or a genuine 404. Not being able to check is not the same as dead: a fetch timeout, a blocked domain, a 403/429, truncated content, or a JS shell that renders nothing all mean *unknown*, and an unknown leaves the lead exactly as it is while you note the tooling problem in your report. Reporting a live posting as dead is not a mistake that shows up later as a wrong date on a row - it takes a real opening off ${pn.poss} board. When in doubt, leave it and say so.
+   **The ones you opened and confirmed still live** - one call listing all of them:
+
+   \`\`\`
+   curl -s -X POST "$TRACKER_URL/api/verified" \\
+     -H "Authorization: Bearer $TRACKER_API_TOKEN" -H "Content-Type: application/json" \\
+     -d '{"search":"${key}","on":"<today YYYY-MM-DD>","urls":["...","..."]}'
+   \`\`\`
+
+   This is the only thing in the whole system that writes a lead's "Confirmed live" date. Without it that date stays frozen at the day the posting was found, and there is no way to tell a lead re-checked last night from one nobody has looked at in two months - which matters precisely because a dead posting is now deleted rather than flagged, so a lead still sitting in a tab is presumed live and this is the only measure of how old that presumption is. It never deletes or changes anything else, so there is nothing to be careful about here beyond being honest about which ones you actually opened. Skip the call only if you re-checked nothing at all. The response is \`{"stamped":N,"unmatched":N,"unmatchedUrls":[...]}\`.
+
+   **The ones you confirmed dead** - again one call listing all of them, not one call per posting:
+
+   \`\`\`
+   curl -s -X POST "$TRACKER_URL/api/delist" \\
+     -H "Authorization: Bearer $TRACKER_API_TOKEN" -H "Content-Type: application/json" \\
+     -d '{"search":"${key}","on":"<today YYYY-MM-DD>","urls":["...","..."]}'
+   \`\`\`
+
+   Don't post these to \`/api/screened\` as well - this one call is the whole report. List a dead posting the same way whatever \`status\` its lead is in; the tracker knows which ones to leave alone (${name}'s applied-to leads are kept - what matters there is the application, not whether the listing survived). The response is \`{"removed":N,"kept":N,"unmatched":N,"unmatchedUrls":[...]}\`: \`removed\` is how many came off ${pn.poss} board and is the number step 9c wants, \`kept\` is how many were applied-to leads the tracker held on to - both are the tracker working as intended, not something to retry or work around. \`on\` is today's local date in both calls, and \`/api/delist\` refuses anything that isn't a real \`YYYY-MM-DD\` with a 400, since a value that isn't a date isn't a report of anything.
+
+   **There is no undoing the delist report.** A removed lead's row is gone and its URL is in \`screened[]\` from then on, so step 7 skips that URL for good: if the posting turns out to be live after all, no future run puts it back.
+
+   **Only put a posting in the \`/api/delist\` list if you have actually confirmed it dead** - a page that loads and says the role is closed or filled, or a genuine 404. Not being able to check is not the same as dead: a fetch timeout, a blocked domain, a 403/429, truncated content, or a JS shell that renders nothing all mean *unknown*, and an unknown belongs in **neither** list - it leaves the lead exactly as it is while you note the tooling problem in your report. Reporting a live posting as dead is not a mistake that shows up later as a wrong date on a row - it takes a real opening off ${pn.poss} board. When in doubt, leave it out of both lists and say so.
+
+   A url coming back in \`unmatchedUrls\` from either call means you believe you're tracking something the tracker has no lead for - report that plainly rather than retrying it. If the tracker's unreachable, skip both calls and note that in your report.
 8b. ${docUpdateLine}
 9. SYNC NEW POSTINGS TO THE LIVE TRACKER WEBPAGE. If there are zero new verified postings from step 7, skip this step entirely - do not call the API. Otherwise, build a JSON array of only today's new postings and POST it with curl:
 

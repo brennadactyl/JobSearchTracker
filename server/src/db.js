@@ -243,6 +243,16 @@ function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
+// How many lead ids one statement may name in an `IN (...)` list. D1 caps a
+// query at 100 bound parameters, and a nightly run re-confirming the postings
+// it tracks routinely reports more leads than that in one call - the whole
+// reason /api/verified takes a list instead of one URL per request. Over the
+// cap D1 rejects the statement outright, so this splits the ids across several
+// statements sent as one batch rather than letting a busy night be the thing
+// that discovers the limit. 90, not 100: the same statement also binds the
+// date and the user id.
+const ID_CHUNK = 90;
+
 export class Db {
   /**
    * @param {D1Database} d1
@@ -853,6 +863,79 @@ export class Db {
       .run();
     if (result.meta.changes === 0) return null;
     return this.getLead(id);
+  }
+
+  /**
+   * Every lead this user tracks, in the few columns URL matching and the
+   * delisting policy actually need: `id` and `url` to match on, `status` for
+   * the applied-to check, and the company/title/location that
+   * deleteLeadAndScreen copies onto the screened row it leaves behind.
+   *
+   * Whole table rather than a `WHERE url IN (...)` narrowing, because the match
+   * these callers make is canonicalUrl's (see ./url.js) and that is JS, not
+   * SQL. A SQL `IN` list would be the raw string comparison url.js exists
+   * because of: it would miss the `?gh_jid=` variant of a URL the run reports
+   * and hand back "nothing tracked matches this", which for /api/delist means a
+   * dead posting quietly stays on the board.
+   *
+   * Deliberately not scoped to one track, even though both callers are handed a
+   * track key. A run that fills several tabs fetches dedup data per key and
+   * treats it as one combined already-seen set - the prompt says so in as many
+   * words - so the postings it re-checks are not all in the tab it reports
+   * under. Scoping here would drop those from the match and report them back as
+   * unmatched, which is the signal reserved for the run and the tracker
+   * genuinely disagreeing about what is tracked. A posting is live or dead on
+   * its own terms; which of this person's tabs holds it isn't part of that.
+   * @returns {Promise<Array<{id: number, search: string, url: string, status: string, company: string, title: string, location: string}>>}
+   */
+  async getLeadsForUrlMatch() {
+    const res = await this.d1
+      .prepare(
+        `SELECT id, search, url, status, company, title, location
+           FROM leads WHERE user_id = ? ORDER BY id`
+      )
+      .bind(this.userId)
+      .all();
+    return res.results;
+  }
+
+  /**
+   * Stamps `verified` on the given leads - the date someone last confirmed
+   * these postings were still live.
+   *
+   * Nothing wrote this column between a lead being created and this method
+   * existing: 267 of 279 older leads on the live deployment still read
+   * `verified === found`, because the only thing a run ever reported back about
+   * a posting it re-checked was that it was DEAD. Since delisting started
+   * deleting the row (migrations/0004_drop_lead_delisted_on.sql), a lead still
+   * sitting in a tab is implicitly presumed live, and this column is the only
+   * remaining answer to "how long since anyone actually looked?".
+   *
+   * The stamp is unconditional rather than `MAX(verified, on)`. A date that
+   * moves backwards - a run with a wrong clock, a report replayed late - costs
+   * one extra re-check and nothing else, whereas refusing to move it backwards
+   * would silently swallow a correction and leave the column claiming a posting
+   * was confirmed on a day nobody confirmed it. The value is already validated
+   * as YYYY-MM-DD by the caller; this only decides what to do with a real date.
+   * @param {Array<number|string>} ids
+   * @param {string} on - YYYY-MM-DD, the run's own local date
+   * @returns {Promise<number>} how many rows were actually stamped
+   */
+  async markVerified(ids, on) {
+    if (!ids.length) return 0;
+    const chunks = [];
+    for (let i = 0; i < ids.length; i += ID_CHUNK) chunks.push(ids.slice(i, i + ID_CHUNK));
+    const results = await this.d1.batch(
+      chunks.map((chunk) =>
+        this.d1
+          .prepare(
+            `UPDATE leads SET verified = ?
+              WHERE user_id = ? AND id IN (${chunk.map(() => "?").join(", ")})`
+          )
+          .bind(on, this.userId, ...chunk)
+      )
+    );
+    return results.reduce((n, r) => n + (r.meta.changes || 0), 0);
   }
 
   // -------------------------------------------------------- screened --
