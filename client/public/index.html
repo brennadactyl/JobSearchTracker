@@ -951,6 +951,68 @@ function dashboard(){
   h+='</div></div>';
   }
 
+  // Application pipeline: how far things get once you've actually applied,
+  // not just where each one sits today. STAGE_DATE_FIELDS stamps a date the
+  // first time an application reaches a stage and never clears it, so it
+  // survives a later status change (an app rejected after Tech Screen still
+  // shows it reached Tech Screen) - current `status` alone can't tell that
+  // story, only where something landed.
+  var appsApplied=A.filter(function(a){return a.status!=="To Apply";});
+  h+='<div class="sec"><h2>Application pipeline</h2><p>'+
+    (appliedCount?appliedCount+' applied &middot; '+active+' in active conversation':'Nothing applied yet')+
+    '</p></div>';
+  if(!appliedCount){
+    h+='<div class="card empty"><strong>No applications yet</strong>'+
+      (toApply
+        ? 'You have '+toApply+' queued to apply in the Applications tab &mdash; the funnel fills in once you mark one Applied.'
+        : 'Move a lead to Applied, or add one directly from the Applications tab, and its progress shows up here.')+
+      '</div>';
+  }else{
+    var FUNNEL=[["Applied",appliedCount]].concat(STAGE_DATE_FIELDS.slice(0,4).map(function(s){
+      return [s[0],appsApplied.filter(function(a){return a[s[1]];}).length];
+    }));
+    h+='<div class="card" style="padding:19px"><div class="bars">'+
+      FUNNEL.map(function(r,i){
+        var pct=Math.round(r[1]/appliedCount*100);
+        var color=i===0?"var(--ink3)":(i===FUNNEL.length-1?"var(--good)":"var(--accent)");
+        return '<div class="bar"><h3>'+esc(r[0])+' <span>'+r[1]+' &middot; '+pct+'%</span></h3>'+
+          '<div class="meter"><i style="width:'+pct+'%;background:'+color+'"></i></div></div>';
+      }).join("")+'</div>';
+
+    // "Responded" counts a rejection as a response (it is one - just not a
+    // forward one), so it's deliberately a different, larger number than
+    // the funnel's own forward-progress stages. Withdrawn is excluded from
+    // both halves of that count: it's Brenna's action, not the company's.
+    var RESPONSE_FIELDS=["dateRecruiterScreen","dateTechScreen","dateOnsite","dateOffer","dateRejected"];
+    var responded=appsApplied.filter(function(a){
+      return RESPONSE_FIELDS.some(function(f){return a[f];});
+    }).length;
+    var respTimes=appsApplied.map(function(a){
+      if(!a.dateApplied)return null;
+      var d0=Date.parse(a.dateApplied); if(isNaN(d0))return null;
+      var earliest=null;
+      RESPONSE_FIELDS.forEach(function(f){
+        if(!a[f])return;
+        var d=Date.parse(a[f]); if(isNaN(d))return;
+        if(earliest===null||d<earliest)earliest=d;
+      });
+      if(earliest===null)return null;
+      var days=Math.round((earliest-d0)/86400000);
+      return days>=0?days:null;
+    }).filter(function(n){return n!==null;});
+    var avgResp=respTimes.length?Math.round(respTimes.reduce(function(a,b){return a+b;},0)/respTimes.length):null;
+    var offerNow=appsApplied.filter(function(a){return a.status==="Offer";}).length;
+    var rejectedNow=appsApplied.filter(function(a){return a.status==="Rejected";}).length;
+    var withdrawnNow=appsApplied.filter(function(a){return a.status==="Withdrawn";}).length;
+    h+='<div class="legend" style="margin-top:15px;padding-top:14px;border-top:1px solid var(--line)">'+
+      '<span><b style="background:var(--good)"></b>'+offerNow+' offer'+(offerNow===1?'':'s')+'</span>'+
+      '<span><b style="background:var(--crit)"></b>'+rejectedNow+' rejected</span>'+
+      '<span><b style="background:var(--ink3)"></b>'+withdrawnNow+' withdrawn</span>'+
+      '<span class="legend-run">'+Math.round(responded/appliedCount*100)+'% responded'+
+      (avgResp!==null?' &middot; avg '+avgResp+'d to first response':'')+'</span>'+
+      '</div></div>';
+  }
+
   var todo=A.filter(function(a){return a.nextAction;})
     .sort(function(x,y){return String(x.nextActionDate||"9999").localeCompare(String(y.nextActionDate||"9999"));});
   h+='<div class="sec"><h2>What&rsquo;s next</h2><p>From your Applications tab</p></div>';
