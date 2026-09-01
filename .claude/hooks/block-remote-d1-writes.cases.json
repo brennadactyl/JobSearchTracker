@@ -1,0 +1,25 @@
+[
+  ["wrangler d1 delete job-search-tracker-db", "d1 delete (destroys DB + its Time Travel history)"],
+  ["npx wrangler d1 delete job-search-tracker-db --skip-confirmation", "d1 delete --skip-confirmation"],
+  ["wrangler d1 time-travel restore job-search-tracker-db --bookmark=abc", "time-travel restore (destructive rollback)"],
+  ["wrangler delete", "wrangler delete (removes the Worker)"],
+  ["wrangler d1 execute db --remote --command \"DROP TABLE leads\"", "DROP TABLE via execute --remote"],
+  ["Remove-Item C:\\VibeCoding\\private\\backups\\*.sql -Force", "PowerShell: delete every backup"],
+  ["Remove-Item -Recurse -Force C:\\VibeCoding\\private", "PowerShell: remove the whole private folder"],
+  ["rm -rf /c/VibeCoding/private/backups", "bash: remove the backups folder"],
+  ["rm C:/VibeCoding/private/backups/d1-2026-08-31.sql", "bash: remove one backup file"],
+  ["cd /c/VibeCoding && rm -rf .claude/hooks", "bash: remove the guard itself"],
+  ["Move-Item C:\\VibeCoding\\private\\backups D:\\elsewhere", "PowerShell: move the backups away"],
+
+  ["wrangler d1 execute db --remote --command \"SELECT COUNT(*) FROM leads\"", "SELECT --remote (must stay allowed)"],
+  ["wrangler d1 execute db --local --command \"UPDATE leads SET fit = 1\"", "any --local write (must stay allowed)"],
+  ["wrangler d1 export job-search-tracker-db --remote --output b.sql", "export (must stay allowed)"],
+  ["wrangler d1 migrations apply job-search-tracker-db --remote", "migrations apply (must stay allowed)"],
+  ["wrangler d1 time-travel info job-search-tracker-db", "time-travel info, read-only (must stay allowed)"],
+  ["wrangler deploy", "wrangler deploy (must stay allowed)"],
+  ["ls C:/VibeCoding/private/backups", "listing backups (must stay allowed)"],
+  ["cp C:/VibeCoding/private/backups/x.sql D:/safe/", "copying a backup out (must stay allowed)"],
+  ["git commit -m \"note: wrangler d1 delete would destroy the history\"", "commit message mentioning d1 delete (must stay allowed)"],
+  ["grep -rn \"wrangler delete\" docs/", "grepping for the phrase (must stay allowed)"],
+  ["node -e \"const re=/Remove-Item|rm |private/i\"", "a regex literal containing rm and private (must stay allowed)"]
+]
