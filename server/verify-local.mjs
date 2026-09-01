@@ -149,41 +149,47 @@ check("but is new for a user who does not - dedup never reaches across users",
 // and two screened rows were written for one the prompt says to drop without
 // recording at all.
 await req("POST", "/api/config", { token: A_TOK, body: {
-  excluded_companies: ["MrBeast / Beast Industries", "xAI", "X (formerly Twitter)"] } });
+  excluded_companies: ["Quillwork / Quill Industries", "Vela", "Q (formerly Quantex)"] } });
 const exLead = await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
-  { search: "SWE", company: "xAI", title: "MTS", url: `https://x.ai/careers/${Date.now()}` },
+  { search: "SWE", company: "Vela", title: "MTS", url: `https://vela.example.com/careers/${Date.now()}` },
   { search: "SWE", company: "Acme", title: "Fine", url: `https://example.com/ok-${Date.now()}` }] } });
 check("an excluded company is dropped and the rest of the batch still lands",
   exLead.json.added === 1 && exLead.json.excluded === 1, JSON.stringify(exLead.json));
 // The alias case: the list entry carries two names, and the parenthetical one
 // is how the live data actually spells it.
 const exAlias = await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
-  { search: "SWE", company: "Beast Industries (MrBeast)", title: "Eng", url: `https://example.com/mb-${Date.now()}` }] } });
+  { search: "SWE", company: "Quill Industries (Quillwork)", title: "Eng", url: `https://example.com/qw-${Date.now()}` }] } });
 check("an alias from the same list entry is excluded too",
   exAlias.json.added === 0 && exAlias.json.excluded === 1, JSON.stringify(exAlias.json));
-// The short-alias rule. "X (formerly Twitter)" yields the alias "x", and as a
-// bare substring that matches Netflix, Roblox, Perplexity - most of a real
-// board. It must only match a company named exactly "x".
+// The short-alias rule. "Q (formerly Quantex)" yields the alias "q", and as a
+// bare substring that would take out a large slice of any real board. It must
+// only match a company named exactly "q". The second row is the token-boundary
+// rule: "Vela" is on the list, "Velabyte" is a different company.
+// Distinct req ids, not just distinct paths: canonicalUrl keys on the id when
+// there is one, so two urls carrying the same number are one posting however
+// their paths differ.
+const shortStamp = Date.now();
 const exShort = await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
-  { search: "SWE", company: "Roblox", title: "Eng", url: `https://example.com/rbx-${Date.now()}` }] } });
-check("a two-letter alias does not swallow every company containing that letter",
-  exShort.json.added === 1 && exShort.json.excluded === 0, JSON.stringify(exShort.json));
+  { search: "SWE", company: "Torque Interactive", title: "Eng", url: `https://example.com/jobs/${shortStamp}01` },
+  { search: "SWE", company: "Velabyte", title: "Eng", url: `https://example.com/jobs/${shortStamp}02` }] } });
+check("a short alias does not swallow every company containing that letter",
+  exShort.json.added === 2 && exShort.json.excluded === 0, JSON.stringify(exShort.json));
 // Exclusions are dropped WITHOUT a screened row - the opposite of every other
 // rejected candidate. A screened row is a memo saying "considered and ruled
 // out", and an exclusion is never considered.
 const exScreened = await req("POST", "/api/screened", { token: A_TOK, body: { screened: [
-  { search: "SWE", company: "xAI", url: `https://x.ai/careers/s-${Date.now()}`, reason: "excluded" }] } });
+  { search: "SWE", company: "Vela", url: `https://vela.example.com/careers/s-${Date.now()}`, reason: "excluded" }] } });
 check("an excluded company leaves no screened row behind either",
   exScreened.json.added === 0 && exScreened.json.excluded === 1, JSON.stringify(exScreened.json));
 // The self-renewing case: /api/coverage creates a row for any company handed
 // to it, so an excluded one swept once would be served back every cycle.
 const exSweep = await req("POST", "/api/coverage", { token: A_TOK, body: {
-  search: "SWE", on: "2026-09-02", swept: [{ company: "xAI" }, { company: "Acme" }] } });
+  search: "SWE", on: "2026-09-02", swept: [{ company: "Vela" }, { company: "Acme" }] } });
 check("an excluded company cannot join the rotation",
   exSweep.json.recorded === 1 && exSweep.json.excluded === 1, JSON.stringify(exSweep.json));
 check("and does not come back from the rotation afterwards",
   !(await req("GET", "/api/coverage/SWE?all=1", { token: A_TOK })).json.companies
-    .some((c) => c.company === "xAI"));
+    .some((c) => c.company === "Vela"));
 await req("POST", "/api/config", { token: A_TOK, body: { excluded_companies: [] } });
 
 const screenedUrl = `https://example.com/screened-${Date.now()}`;
