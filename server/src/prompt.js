@@ -230,17 +230,28 @@ export function buildSearchPrompt({ user, track, settings, feeds, coverage }) {
 `
     : "";
 
-  const runKeysRule = multi
-    ? `Post one of these **per tab** - \`"search":"${key}"\`, then ${fed
-        .map((t) => `\`"search":"${t.key}"\``)
-        .join(", ")} - not one for the run as a whole. A run record is per track, so the tab that gets none is the one that reads as stale tomorrow morning despite having been searched today. Give each tab its own \`leadsAdded\` (the rows step 9 filed under *that* key) and \`delisted\` (the step-8 leads that were in that tab); put the run's whole \`screenedAdded\` on \`"${key}"\` and send 0 for the others, since step 9b files every screened row there.`
-    : `\`"search"\` must be \`"${key}"\`.`;
-  // The default sentence reads the counts straight off step 9's response,
-  // which is one total for a multi-tab run and so can't be what each tab's
-  // record carries.
-  const countsRule = multi
-    ? "The per-tab `leadsAdded` numbers should add up to the `\"added\"` count step 9's POST returned (all 0 if it was skipped), and `screenedAdded` is the"
-    : "`leadsAdded` / `screenedAdded` are the";
+  // Step 9c used to carry the largest and most error-prone block of text in
+  // this whole prompt: a per-branch explanation of how to split the run's own
+  // counts across the tabs it fills, and a rule that a multi-tab run must post
+  // one record per tab. It was not followed. On 2026-09-01 the live `SWE` run
+  // reported a combined 97 leads against a tab that holds 89 in total, and the
+  // three tabs it feeds recorded nothing at all on a morning one of them took
+  // 133 leads - reading, on the page, as searches that had never run.
+  //
+  // Both jobs now belong to the server: POST /api/runs derives all three
+  // counts from the rows that actually landed and writes a record for each fed
+  // tab itself (see api.js's handleRecordRun). What's left in 9c is only what
+  // the run alone knows - which track it is, whether it worked, its local
+  // date, and a sentence for the page. The route still accepts
+  // leadsAdded/screenedAdded/delisted and ignores them, so a run that fetched
+  // this prompt before the change and is still going records correctly too.
+  const runFanoutNote = multi
+    ? `\n   This one call covers every tab this run fills: the tracker writes a run
+   record for each of the others (${fed
+     .map((t) => `\`${t.key}\``)
+     .join(", ")}) as well, counted from
+   the rows that actually landed in that tab. Don't post a second call per tab.\n`
+    : "";
 
   return `# Scheduled task: ${track.label} - ${track.full_description}
 # Schedule: ${track.schedule_time || "unscheduled"} local (headless, via Windows Task Scheduler + scripts\\run-search.ps1)
@@ -306,15 +317,18 @@ ${filingStep}8. For a previously-tracked lead (from step 1b's \`leads[]\`) confi
    \`\`\`
    curl -s -X POST "$TRACKER_URL/api/runs" \\
      -H "Authorization: Bearer $TRACKER_API_TOKEN" -H "Content-Type: application/json" \\
-     -d '{"search":"${key}","status":"ok","leadsAdded":0,"screenedAdded":0,"delisted":0,"on":"<today YYYY-MM-DD>","note":"..."}'
+     -d '{"search":"${key}","status":"ok","on":"<today YYYY-MM-DD>","note":"..."}'
    \`\`\`
 
-   ${runKeysRule} ${countsRule}
-   \`"added"\` count${multi ? " step 9b returned" : "s the step-9 and step-9b calls actually returned"} (0 if that
-   step was skipped); \`delisted\` is how many leads step 8 reported dead. \`on\` is
+   Those four fields are the whole call. \`"search"\` is \`"${key}"\`. \`on\` is
    today's **local** date - the server can't derive it, and without it a
    morning run records tomorrow's date. \`note\` is one short line summarising
    the run for the webpage (e.g. "no new postings; 34 screened out").
+${runFanoutNote}
+   Don't send counts, and don't tally any. The tracker derives \`leadsAdded\`,
+   \`screenedAdded\` and \`delisted\` itself from what steps 8, 9 and 9b actually
+   wrote${multi ? ", per tab and from that tab's own rows" : ""}, so there is nothing here to add up and nothing that can be
+   added up wrong. Counts sent anyway are ignored rather than refused.
 
    Send \`"status":"error"\` instead of \`"ok"\` if the run couldn't do its job
    properly - the tracker was unreachable, search/fetch tooling failed broadly

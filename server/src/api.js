@@ -32,6 +32,7 @@ import {
   upsertUser,
   verifyPassword,
 } from "./auth.js";
+import { DELISTED_REASON } from "./db.js";
 import { buildSearchPrompt } from "./prompt.js";
 
 export const CORS_HEADERS = {
@@ -323,6 +324,50 @@ export async function handleGetPrompt(db, user, key) {
 // is worth surfacing loudly in the run's own output. Silently accepting it
 // would create an orphan row that no tab ever displays - the failure mode
 // this whole table exists to prevent.
+//
+// ---- What the caller is trusted for, and what it isn't. `search`, `status`,
+// `note` and `on` are things only the run knows: which track it is, whether it
+// believes its own result, a sentence for the page, and the local date the
+// worker genuinely cannot derive (see migrations/0001_schema.sql). The three
+// counts are not. They are arithmetic over rows this database already holds,
+// and they are now done here rather than read off the request.
+//
+// The evidence, from the deployed tracker on 2026-09-01. The `SWE` run claimed
+// `leads_added: 97` against a tab holding 89 leads in total; 97 was the
+// combined figure across all four tabs that one run fills. Worse, `swe-ai`,
+// `swe-tech` and `swe-industry` - the tracks `fed_by` "SWE", see
+// migrations/0003_branched_tracks.sql - had *empty* run records that morning,
+// on a morning when `swe-ai` alone took 133 leads. Empty is the client's
+// "never recorded" state (runState() in client/public/index.html), so three
+// tabs that had just been searched read as never having run. That is the
+// precise failure search_runs exists to make visible, produced by the table
+// meant to prevent it. The single-tab `CPM` run had all three numbers right:
+// only the multi-tab case failed, and it failed because the prose rule for it
+// - the largest and fiddliest block of text in the whole prompt - was simply
+// not followed.
+//
+// A rule a model has to follow to keep the bookkeeping honest is a rule that
+// eventually isn't followed, and there is nowhere to test it and no way to fix
+// it but re-wording English and re-deploying. The same reasoning as
+// removeDelistedLead below applies: the run reports what it saw, and what that
+// adds up to is decided here.
+//
+// The fan-out is the other half of the fix. A run record is per track, so a
+// multi-tab run needs one row per tab or the fed tabs go on reading stale
+// forever - and asking the run for four correctly-split records is exactly
+// what didn't work. One POST from the run, one row per tab written here, each
+// counted from its own rows.
+//
+// leadsAdded / screenedAdded / delisted are still accepted in the body and
+// ignored, deliberately: a scheduled run that fetched its prompt before this
+// deployed is mid-flight with the old wording, and it has to keep recording
+// correctly rather than failing on fields that are now surplus.
+//
+// One honest caveat: counting rows by date means a lead the *user* adds by
+// hand today lands in today's run count for that tab. That is rare, it can
+// only ever move a number by a row or two, and it is still a truer account of
+// what appeared in the tab today than a tally the model computed across four
+// tabs at once and attributed to one.
 export async function handleRecordRun(request, db) {
   let body;
   try {
@@ -352,20 +397,34 @@ export async function handleRecordRun(request, db) {
     ? body.on
     : at.slice(0, 10);
 
-  const count = (v) => (Number.isFinite(Number(v)) && Number(v) >= 0 ? Math.floor(Number(v)) : 0);
   const status = body.status === "error" ? "error" : "ok";
+  const note = typeof body.note === "string" ? body.note.slice(0, 500) : "";
 
-  const run = await db.recordRun(key, {
-    at,
-    on,
-    status,
-    leadsAdded: count(body.leadsAdded),
-    screenedAdded: count(body.screenedAdded),
-    delisted: count(body.delisted),
-    note: typeof body.note === "string" ? body.note.slice(0, 500) : "",
-  });
+  // Every tab this one run fills: the posted track, then the tracks whose
+  // `fed_by` names it. Read through getTracksAndSettings rather than a
+  // purpose-built query because that is exactly how handleGetPrompt decides
+  // which tabs to write the prompt for - the run and its record should be
+  // agreeing about the same set from the same source, not from two lookups
+  // that could one day disagree about what feeds what.
+  const config = await db.getTracksAndSettings();
+  const keys = [key, ...config.tracks.filter((t) => t.fed_by === key).map((t) => t.key)];
 
-  return json({ ok: true, run });
+  // Sequential rather than concurrent, and the posted key first: these are
+  // separate writes, not one transaction, so if the worker dies partway the
+  // row that survives should be the one whose absence the caller could
+  // actually notice and retry. The counts are per key, never shared - that is
+  // the bug being fixed, so each tab gets its own count of its own rows.
+  const runs = [];
+  for (const k of keys) {
+    const counts = await db.countRunActivity(k, on);
+    runs.push(await db.recordRun(k, { at, on, status, ...counts, note }));
+  }
+
+  // `run` stays the posted track's record so existing callers read the same
+  // field they always have; `also` is the fed tabs' records, there so a run's
+  // own report can say what got written on its behalf rather than having to
+  // trust that something did.
+  return json({ ok: true, run: runs[0], also: runs.slice(1) });
 }
 
 export async function handleGetConfig(db) {
@@ -734,7 +793,7 @@ async function removeDelistedLead(db, id, on) {
   // runs reporting the same lead at once both get past getLead, and the second
   // one deletes nothing. Saying so keeps the run's `delisted` count, which is
   // tallied from these responses, from counting that lead twice.
-  const removed = await db.deleteLeadAndScreen(lead, "posting taken down", on);
+  const removed = await db.deleteLeadAndScreen(lead, DELISTED_REASON, on);
   await db.touchUpdated();
   return json({ ok: true, removed, id: lead.id, screened: lead.url });
 }
