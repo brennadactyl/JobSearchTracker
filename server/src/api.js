@@ -457,10 +457,32 @@ export async function handleUpdate(request, db) {
   }
 
   if (body.type === "lead") {
-    // delistedOn is set/cleared by the scheduled searches (see
-    // migrations/0001_schema.sql) - kept separate from `status`
-    // so it never overwrites the installer's own application-progress field.
+    // `delistedOn` is the one field here the server acts on rather than
+    // stores. A scheduled search sending it is reporting a fact it observed -
+    // "this posting is gone from the internet" - and what the tracker does
+    // about that is a decision this file owns, not the caller's: see
+    // removeDelistedLead. Every other key is a plain field write.
     //
+    // An empty string is the "found live again" clear, which no longer has
+    // anything to undo. It falls through to the normal update path, where the
+    // field whitelist ignores it and the lead comes back unchanged - a no-op
+    // rather than an error, so a run using the documented call doesn't fail
+    // on a posting that came back.
+    //
+    // Anything else has to be a real YYYY-MM-DD before it acts. What it
+    // triggers is a permanent delete and the caller is an LLM: "unknown" or
+    // "today" reaching the old code left a bad string in a column, whereas
+    // here it would take a live posting off the board for good. A value that
+    // isn't a date isn't a report of anything, so it's refused rather than
+    // quietly read as "dead, date unknown".
+    if (typeof body.delistedOn === "string" && body.delistedOn.trim()) {
+      const on = body.delistedOn.trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(on)) {
+        return json({ error: "delistedOn must be YYYY-MM-DD" }, 400);
+      }
+      return removeDelistedLead(db, body.id, on);
+    }
+
     // `search` moves the lead to another of this user's tabs. It's the one
     // field here that can fail on its own terms, so both failures are caught
     // rather than left to surface as a 500: an unknown track key is the same
@@ -605,6 +627,63 @@ export async function handleDeleteApplication(request, db) {
   if (!deleted) return json({ error: "application not found" }, 404);
   await db.touchUpdated();
   return json({ ok: true });
+}
+
+/**
+ * What the tracker does when a search reports that a posting it tracks has
+ * been taken down. The rule, in one place, in code:
+ *
+ *   - a lead an application row points at is kept, untouched;
+ *   - any other lead is deleted, and its URL recorded as screened.
+ *
+ * Deleting is the point: a dead posting is nothing anyone can act on, and a
+ * lead's whole reason to sit in a search tab is that it can be applied to.
+ * Recording the URL as screened is what keeps that from undoing itself -
+ * without it tomorrow's run rediscovers the URL, finds nothing tracking it,
+ * and adds it straight back as a new lead. Both happen in one transaction
+ * (see db.js's deleteLeadAndScreen).
+ *
+ * The applied-to exception is the one case where the posting's fate stops
+ * mattering: an application row points at that lead's id, and from the moment
+ * it exists what's being tracked is the application, not whether the listing
+ * outlived it. That lead is kept and the report is simply absorbed - there's
+ * no "delisted" state left to write it into, and nothing on the page would
+ * show one. The test for it is the application row itself rather than the
+ * lead's status: "Applied" is how one normally gets there, but a lead can
+ * carry an application while sitting in another status - nothing deletes the
+ * application when a lead moves back out of "Applied", and handleUpdate
+ * writes `status` without validating it - and deleting that lead would strand
+ * the row pointing at its id.
+ *
+ * Deliberately not the caller's decision. The caller is a nightly LLM run
+ * following a prompt, and a policy written into a prompt is a policy that
+ * drifts, can't be tested, and has to be re-deployed by re-wording English.
+ * The run's job is to report what it saw; this is where what that means gets
+ * decided, and it changes for every existing search the moment it's deployed.
+ *
+ * @param {Db} db
+ * @param {number|string} id
+ * @param {string} on - the date the run confirmed it dead (its own local date, already validated as YYYY-MM-DD by the caller)
+ */
+async function removeDelistedLead(db, id, on) {
+  const lead = await db.getLead(id);
+  if (!lead) return json({ error: "lead not found" }, 404);
+
+  if (lead.status === "Applied" || (await db.getApplicationByLeadId(lead.id))) {
+    return json({ ok: true, lead, removed: false, reason: "applied to - kept" });
+  }
+
+  // `on` is the run's own local date, not the worker's UTC one - same
+  // reasoning as /api/runs' `on`, and here it's the only surviving record of
+  // when the posting died, since the lead row itself is about to be gone.
+  //
+  // `removed` is what the DELETE actually matched, not what was intended: two
+  // runs reporting the same lead at once both get past getLead, and the second
+  // one deletes nothing. Saying so keeps the run's `delisted` count, which is
+  // tallied from these responses, from counting that lead twice.
+  const removed = await db.deleteLeadAndScreen(lead, "posting taken down", on);
+  await db.touchUpdated();
+  return json({ ok: true, removed, id: lead.id, screened: lead.url });
 }
 
 export async function handleGetData(db, user) {

@@ -71,7 +71,13 @@
  *                            `search` is writable here too, which moves it
  *                            to another of this user's tabs - 404 on an
  *                            unknown track, 409 if that tab already has the
- *                            url.
+ *                            url. `delistedOn` is the one field the server
+ *                            acts on rather than stores: a search reporting
+ *                            a posting taken down (a YYYY-MM-DD date, or a
+ *                            400) gets the lead deleted and its URL
+ *                            screened, unless an application points at it,
+ *                            in which case it's kept - see api.js's
+ *                            removeDelistedLead.
  *   POST /api/leads/:id/status       requires Bearer token -> body: { status }
  *                            validates against LEAD_STATUS; if the new
  *                            status is "Applied", atomically (one D1
@@ -89,8 +95,7 @@
  *                            applied to yet) clears it instead
  *   POST /api/delete-application  requires Bearer token -> body: { id } ->
  *                            removes one application row (used by the
- *                            client's "remove" control; leads are never
- *                            deleted, only re-statused)
+ *                            client's "remove" control)
  *   GET  /api/config         requires Bearer token -> { tracks[], settings }
  *                            - this user's config (track tabs, tab labels,
  *                            display title, priority-location rules,
