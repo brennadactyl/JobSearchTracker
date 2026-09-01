@@ -22,6 +22,42 @@
  */
 const WRITE = /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|REPLACE|TRUNCATE|VACUUM|ATTACH)\b/i;
 
+/**
+ * Commands that destroy the deployment itself rather than write to it, each
+ * refused outright with no read-only variant to allow.
+ *
+ * `d1 delete` is the important one: it takes the database AND its Time Travel
+ * history in a single step, which is the one scenario point-in-time recovery
+ * cannot save you from - the recovery mechanism lives inside the thing being
+ * deleted. `time-travel restore` is destructive and whole-database, so with
+ * more than one person on the deployment it rolls back everyone. Deleting the
+ * Worker doesn't touch data but takes the tracker offline.
+ *
+ * None of these should ever be an agent's idea. A human can still run them in
+ * their own terminal; this only binds tool calls.
+ */
+// Match an actual wrangler *invocation* - start of the command, or after a
+// shell operator - not the words appearing somewhere in an argument. Without
+// this the hook refuses a `git commit` whose message merely discusses these
+// commands, which it did on the first attempt.
+const INVOKE = String.raw`(?:^|[;&|(\n]\s*)(?:npx\s+(?:--[\w-]+\s+)*)?wrangler\s+`;
+const invoking = (tail) => new RegExp(INVOKE + tail, "i");
+
+const DESTRUCTIVE = [
+  {
+    re: invoking(String.raw`d1\s+delete\b`),
+    what: "deletes the D1 database outright - and its Time Travel history with it, which is the one loss point-in-time recovery cannot undo",
+  },
+  {
+    re: invoking(String.raw`d1\s+time-travel\s+restore\b`),
+    what: "rolls the whole database back in place, discarding everything written since that point - for every user on the deployment, not just one",
+  },
+  {
+    re: invoking(String.raw`delete\b`),
+    what: "deletes the deployed Worker, taking the tracker offline",
+  },
+];
+
 let input = "";
 process.stdin.on("data", (d) => (input += d));
 process.stdin.on("end", () => {
@@ -33,7 +69,26 @@ process.stdin.on("end", () => {
     process.exit(0); // Unparseable payload is not this hook's problem.
   }
 
-  const isD1Execute = /wrangler[\s\S]{0,80}?\bd1\b[\s\S]{0,80}?\bexecute\b/i.test(command);
+  // Destruction first: these have no allowed variant, so there's nothing to
+  // check for --local or a read-only shape.
+  for (const { re, what } of DESTRUCTIVE) {
+    if (!re.test(command)) continue;
+    console.log(
+      JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason:
+            `Refused: this ${what}. Not an agent's call to make. If it genuinely needs doing, ` +
+            `say so and let the person run it themselves - and take a \`wrangler d1 export\` first, ` +
+            `since that file is the only copy that survives the database being deleted.`,
+        },
+      })
+    );
+    process.exit(0);
+  }
+
+  const isD1Execute = invoking(String.raw`d1\s+execute\b`).test(command);
   const isRemote = /--remote\b/.test(command);
   if (!isD1Execute || !isRemote) process.exit(0);
 

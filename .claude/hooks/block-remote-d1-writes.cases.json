@@ -1,0 +1,54 @@
+[
+  [
+    "wrangler d1 delete job-search-tracker-db",
+    "d1 delete  (destroys DB + its Time Travel history)"
+  ],
+  [
+    "npx wrangler d1 delete job-search-tracker-db --skip-confirmation",
+    "d1 delete --skip-confirmation"
+  ],
+  [
+    "wrangler d1 time-travel restore job-search-tracker-db --bookmark=abc",
+    "time-travel restore (destructive rollback)"
+  ],
+  [
+    "wrangler delete",
+    "wrangler delete (removes the Worker)"
+  ],
+  [
+    "wrangler d1 execute db --remote --command \"DROP TABLE leads\"",
+    "DROP TABLE via execute --remote"
+  ],
+  [
+    "wrangler d1 execute db --remote --command \"SELECT COUNT(*) FROM leads\"",
+    "SELECT --remote (must stay allowed)"
+  ],
+  [
+    "wrangler d1 export job-search-tracker-db --remote --output b.sql",
+    "export (must stay allowed)"
+  ],
+  [
+    "wrangler d1 migrations apply job-search-tracker-db --remote",
+    "migrations apply (must stay allowed)"
+  ],
+  [
+    "wrangler d1 time-travel info job-search-tracker-db",
+    "time-travel info, read-only (must stay allowed)"
+  ],
+  [
+    "wrangler deploy",
+    "wrangler deploy (must stay allowed)"
+  ],
+  [
+    "git commit -m \"note: wrangler d1 delete would destroy the history\"",
+    "a commit message MENTIONING d1 delete (must stay allowed)"
+  ],
+  [
+    "grep -rn \"wrangler delete\" docs/",
+    "grepping for the phrase (must stay allowed)"
+  ],
+  [
+    "echo \"never run wrangler d1 execute --remote with DROP TABLE\"",
+    "echoing advice about it (must stay allowed)"
+  ]
+]
