@@ -174,13 +174,17 @@ ${intro}Do the following:
 6. ${locationGuidance}
 ${fitFilterStep}${captureNum}. While the posting is open, also capture - only when it's stated plainly, never inferred or guessed - the team/org named for the role (\`team\`), the stated work arrangement (\`setup\`, e.g. "Remote", "Hybrid - 3 days/week onsite", "Onsite"), and any posted compensation range (\`comp\`, e.g. "$180,000-$230,000/yr"; many US states disclose this by law). Leave any of these as an empty string when the posting doesn't say. These land in the tracker's per-lead "Details" panel alongside referral/resume/next-action fields that are ${name}'s alone to fill in by hand - this search never touches those.
 7. Compare candidate URLs against \`leads[]\` and \`screened[]\` from step 1b (not a doc table). Sort each candidate into: (a) already tracked or already screened - skip it; (b) ${findingIs} - a finding, goes to step 9; (c) genuinely new but disqualified (${disqualified}) - goes to step 9b instead of being dropped silently.
-8. For a previously-tracked lead (from step 1b's \`leads[]\`) confirmed dead on this check, **never remove or move it** - it stays a lead. Use the step-1b tracker data (match by \`url\`) to call \`POST /api/update\` marking it delisted:
+8. For a previously-tracked lead (from step 1b's \`leads[]\`) confirmed dead on this check, remove it from the tracker - there's nothing left to apply to, so it shouldn't keep taking up room in ${pn.poss} search tab. Use the step-1b tracker data (match by \`url\`) to call \`POST /api/delete-lead\` with its id:
    \`\`\`
-   curl -s -X POST "$TRACKER_URL/api/update" \\
+   curl -s -X POST "$TRACKER_URL/api/delete-lead" \\
      -H "Authorization: Bearer $TRACKER_API_TOKEN" -H "Content-Type: application/json" \\
-     -d '{"type":"lead","id":<its id>,"delistedOn":"<today YYYY-MM-DD>"}'
+     -d '{"id":<its id>,"reason":"posting taken down"}'
    \`\`\`
-   This is independent of \`status\` (Applied, Interviewing, etc. are untouched) - ${name} still needs to track what ${pn.subj} applied to regardless of whether the listing survives. On the tracker webpage this drops the lead out of its search tab, since there's nothing left to apply to, while the row stays in the database for dedup - which is why marking it is the right move and deleting it would not be. If a posting previously marked delisted is found live again, clear it the same way with \`"delistedOn":""\`. If the tracker's unreachable, skip the API call and note it in your report - don't guess an id.
+   **Skip any lead whose step-1b \`status\` is \`"Applied"\` - never send one of those.** ${name} has applied to it; what's tracked from then on is the application, not whether the posting outlived it. The server refuses those anyway (409, \`"kept":true\`), so a 409 here means you sent one you shouldn't have - don't retry it, just leave it alone.
+
+   One call per dead lead. The server deletes the row and records its URL as screened in the same transaction, so tomorrow's run won't rediscover it and add it back - that's why this endpoint exists rather than you posting a delete and a \`/api/screened\` entry separately. Don't also send it to \`/api/screened\` yourself. If the tracker's unreachable, skip the API call and note it in your report - don't guess an id.
+
+   **Only ever send this for a posting you have actually confirmed dead** - a page that loads and says the role is closed or filled, or a genuine 404. Not being able to check is not the same as dead: a fetch timeout, a blocked domain, a 403/429, truncated content, or a JS shell that renders nothing all mean *unknown*, and the lead stays exactly as it is while you note the tooling problem in your report. This call cannot be undone - the row is gone, and because its URL is recorded as screened, a posting deleted by mistake won't be re-added by a later run either. When in doubt, leave it and say so.
 8b. ${docUpdateLine}
 9. SYNC NEW POSTINGS TO THE LIVE TRACKER WEBPAGE. If there are zero new verified postings from step 7, skip this step entirely - do not call the API. Otherwise, build a JSON array of only today's new postings and POST it with curl:
 
@@ -204,7 +208,7 @@ ${fitFilterStep}${captureNum}. While the posting is open, also capture - only wh
    say so in your report. Check the curl response: a JSON body with an
    \`"added"\` count means it worked; anything else (including no response, a
    non-2xx status, or an \`"error"\` field) means it failed - report that
-   plainly, the delisting update from step 8 still stands regardless.
+   plainly, the step-8 deletions still stand regardless.
 9b. RECORD SCREENED-OUT CANDIDATES. If there are zero disqualified-but-new candidates from step 7, skip this step. Otherwise, POST them so tomorrow's run doesn't re-verify them:
 
    \`\`\`
@@ -215,7 +219,7 @@ ${fitFilterStep}${captureNum}. While the posting is open, also capture - only wh
    \`\`\`
 
    \`"search"\` must be \`"${key}"\`. \`reason\` is a short, specific, human-readable explanation (e.g. ${screenedExamples}) - this is what makes the entry useful later, don't leave it vague. Same success/failure check as step 9 (an \`"added"\` count means it worked).
-9c. RECORD THE RUN. **Do this every single run, without exception - including runs that found nothing, runs where every candidate was screened out, and runs where steps 8/9/9b were skipped or failed.** This is the one step with no "skip it if there's nothing to report" clause, and the reason is that a run finding nothing writes nothing anywhere else: no leads, no screened rows, no delistings. Without this call, a search that silently stopped running (expired token, disabled scheduled task, machine asleep) looks identical on the tracker webpage to a genuine zero-result day, and can go unnoticed for weeks.
+9c. RECORD THE RUN. **Do this every single run, without exception - including runs that found nothing, runs where every candidate was screened out, and runs where steps 8/9/9b were skipped or failed.** This is the one step with no "skip it if there's nothing to report" clause, and the reason is that a run finding nothing writes nothing anywhere else: no leads, no screened rows, no deletions. Without this call, a search that silently stopped running (expired token, disabled scheduled task, machine asleep) looks identical on the tracker webpage to a genuine zero-result day, and can go unnoticed for weeks.
 
    \`\`\`
    curl -s -X POST "$TRACKER_URL/api/runs" \\
@@ -225,7 +229,7 @@ ${fitFilterStep}${captureNum}. While the posting is open, also capture - only wh
 
    \`"search"\` must be \`"${key}"\`. \`leadsAdded\` / \`screenedAdded\` are the
    \`"added"\` counts the step-9 and step-9b calls actually returned (0 if that
-   step was skipped); \`delisted\` is how many leads step 8 marked dead. \`on\` is
+   step was skipped); \`delisted\` is how many dead postings step 8 removed. \`on\` is
    today's **local** date - the server can't derive it, and without it a
    morning run records tomorrow's date. \`note\` is one short line summarising
    the run for the webpage (e.g. "no new postings; 34 screened out").

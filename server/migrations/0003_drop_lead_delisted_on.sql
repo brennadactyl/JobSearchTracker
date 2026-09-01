@@ -1,0 +1,27 @@
+-- Removes leads.delistedOn.
+--
+-- A posting confirmed taken down used to be marked with a date in this column
+-- and kept as a row: the webpage drew a "Delisted" badge beside it and the
+-- lead stayed in its search tab. Neither is true any more. A dead posting is
+-- now removed from the tab outright, which left this column as a flag whose
+-- only remaining job was to hide the row carrying it - state the page had to
+-- read in order to draw nothing.
+--
+-- What replaces it: POST /api/delete-lead, which deletes the lead and writes
+-- its URL into `screened` in one transaction (see db.js's
+-- deleteLeadAndScreen). The screened row is what keeps dedup honest - without
+-- it tomorrow's run rediscovers the same URL, sees nothing tracking it, and
+-- adds it straight back as a new lead.
+--
+-- A lead already marked "Applied" is never deleted - the endpoint refuses it.
+-- Its id is pointed at by an application row, and once you've applied what's
+-- being tracked is the application, not whether the posting outlived it.
+--
+-- The dates already in this column are not preserved anywhere. They describe
+-- postings that no longer appear on the page in any form, and every row still
+-- carrying one is a row the next run will delete outright.
+--
+-- search_runs.delisted is deliberately untouched: it counts an event per run
+-- ("2 postings came down today"), not a state on a lead, and the run summary
+-- on the page still reports it.
+ALTER TABLE leads DROP COLUMN delistedOn;

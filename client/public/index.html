@@ -497,11 +497,8 @@ function buildTabs(){
       // The tab badge is a "what hasn't been triaged yet" count, so it only
       // counts New leads - not the whole track (Reviewing/Not a fit are
       // things you've already looked at, and Applied leads have moved to
-      // the Applications tab entirely, see setLeadStatus()). Delisted leads
-      // aren't in the tab to be triaged either (see delistedFromTabs), so a
-      // badge counting them would never come down to zero.
-      n:state.leads.filter(function(l){
-        return l.search===k&&l.status==="New"&&!delistedFromTabs(l);}).length});
+      // the Applications tab entirely, see setLeadStatus()).
+      n:state.leads.filter(function(l){return l.search===k&&l.status==="New";}).length});
   });
   return tabs;
 }
@@ -746,7 +743,9 @@ function runSummary(run){
   var bits=[];
   if(run.leads_added)bits.push(run.leads_added+" new");
   if(run.screened_added)bits.push(run.screened_added+" screened out");
-  if(run.delisted)bits.push(run.delisted+" delisted");
+  // The run record still counts these ("2 postings came down today") even
+  // though nothing on a lead marks it - the rows themselves were deleted.
+  if(run.delisted)bits.push(run.delisted+" taken down");
   return bits.length?bits.join(", "):"found nothing new";
 }
 
@@ -936,27 +935,6 @@ function tabsHtml(){
   }).join("");
 }
 
-// A lead's original posting can be confirmed taken down independent of
-// `status` (which is the installer's own application-progress field), which
-// is why delistedOn is its own column rather than a status value - see
-// migrations/0001_schema.sql.
-//
-// Once the posting is dead there's nothing left to apply to, so the lead
-// drops out of its track's tab - and out of the counts that describe those
-// tabs - rather than sitting in the list as a row that can't be acted on.
-// The row itself stays in state.leads and the DB: URL dedup needs it, and
-// so does the scheduled search, which has to recognise the posting to clear
-// delistedOn if it ever comes back.
-//
-// Leads already marked Applied are the exception, and delisting one changes
-// nothing at all: it has already moved to the Applications tab (see
-// setLeadStatus()), where the thing being tracked is the application, not
-// whether the posting outlived it. It isn't in a track tab to be dropped
-// from, and its application row is never touched by this.
-function delistedFromTabs(l){
-  return !!l.delistedOn&&l.status!=="Applied";
-}
-
 function pillFor(st){
   var m={"New":"new","Reviewing":"hot","Applied":"go","Not a fit":"no",
          "To Apply":"new",
@@ -973,13 +951,7 @@ function selectHtml(opts,val,attrs){
 }
 
 function dashboard(){
-  // Delisted leads are gone from their track tabs, so they're gone from the
-  // numbers summarising those tabs too - counting a posting nobody can open
-  // as "untriaged" or "still open" describes work that can't be done. Leads
-  // already marked Applied stay counted here regardless: delistedFromTabs
-  // exempts them, and they're what the Applied/pipeline numbers are about.
-  var L=state.leads.filter(function(l){return !delistedFromTabs(l);});
-  var A=state.applications;
+  var L=state.leads, A=state.applications;
   var fresh=L.filter(function(l){return l.status==="New";}).length;
   var active=A.filter(function(a){return ACTIVE.indexOf(a.status)>=0;}).length;
   var stale=A.filter(function(a){var d=daysSince(a.dateApplied);
@@ -1029,7 +1001,7 @@ function dashboard(){
 
   h+='<div class="card" style="padding:19px"><div class="bars">';
   keys.forEach(function(k){
-    var rows=L.filter(function(l){return l.search===k;});
+    var rows=state.leads.filter(function(l){return l.search===k;});
     var byStatus=LEAD_STATUS.map(function(st){
       return {s:st,n:rows.filter(function(r){return r.status===st;}).length};});
     var tot=rows.length||1;
@@ -1116,16 +1088,17 @@ function dashboard(){
 }
 
 function leadsTab(key){
-  // Two reasons a tracked lead isn't shown here, both of which leave the
-  // row itself alone in state.leads/the DB (URL dedup and delistedOn
-  // tracking keep working either way): it's been marked "Applied" and moved
-  // to the Applications tab (see setLeadStatus()), or its posting has been
-  // confirmed taken down (see delistedFromTabs). `tracked` keeps the
-  // unfiltered set only so the empty state below can tell "this search has
-  // never found anything" apart from "everything it found is gone now".
+  // One reason a tracked lead isn't shown here: it's been marked "Applied"
+  // and moved to the Applications tab (see setLeadStatus()). The row itself
+  // stays in state.leads/the DB, which URL dedup needs. A lead whose posting
+  // has been taken down isn't filtered out here because it isn't in
+  // state.leads at all - the daily search deletes it (POST /api/delete-lead),
+  // so there's no dead-posting state left for this function to know about.
+  // `tracked` keeps the unfiltered set only so the empty state below can tell
+  // a search that has never found anything from one whose finds have all been
+  // applied to.
   var tracked=state.leads.filter(function(l){return l.search===key;});
-  var all=tracked.filter(function(l){
-    return l.status!=="Applied"&&!delistedFromTabs(l);});
+  var all=tracked.filter(function(l){return l.status!=="Applied";});
   var q=ui.q.toLowerCase();
   var rows=all.filter(function(l){
     if(ui.filter!=="All"&&l.status!==ui.filter)return false;
@@ -1156,18 +1129,21 @@ function leadsTab(key){
 
   if(!all.length){
     // An empty track has more than one story behind it, and they read very
-    // differently. Whether the search has ever found anything separates the
-    // first two; the run record separates a real zero (the search ran this
-    // morning and there was nothing) from a search that hasn't run in a
-    // week, which isn't a result at all.
+    // differently. Whether anything is still tracked separates a search that
+    // has turned up nothing from one whose finds have all been applied to;
+    // the run record separates a real zero (the search ran this morning and
+    // there was nothing) from a search that hasn't run in a week, which isn't
+    // a result at all. A track whose postings have all been taken down reads
+    // as the first of those - the rows were deleted, so nothing here can know
+    // they ever existed.
     var st0=runState(TRACKS[key].run);
     var warn0=(st0==="stale"||st0==="error")
       ? '<div class="empty-warn">But this search hasn&rsquo;t reported a clean run recently &mdash; check the scheduled task before reading this as a genuine zero.</div>'
       : '';
     if(tracked.length){
       return h+'<div class="card empty"><strong>Nothing open right now</strong>'+
-        'Every posting this search has turned up has since been applied to or taken down. '+
-        'New ones land here as the daily run finds them.'+warn0+'</div>';
+        'Everything this search is still tracking has been applied to &mdash; it&rsquo;s all in the Applications tab. '+
+        'New postings land here as the daily run finds them.'+warn0+'</div>';
     }
     return h+'<div class="card empty"><strong>No postings yet</strong>The '+esc(TRACKS[key].label).toLowerCase()+
       ' search hasn&rsquo;t turned up a verified opening yet. An empty day is a real result &mdash; nothing gets padded in here.'+
@@ -1518,8 +1494,10 @@ function replaceById(list,item){
 // was two sequential POSTs from the client, which could leave a lead
 // marked Applied with no application if the second one never landed).
 // The lead row itself is untouched beyond its status: it stays in
-// state.leads/the DB (URL dedup and delistedOn tracking both need it to
-// still exist), it just no longer shows in the Leads tab - see leadsTab().
+// state.leads/the DB (URL dedup needs it to still exist), it just no longer
+// shows in the Leads tab - see leadsTab(). It's also the one kind of lead the
+// daily search will never delete when its posting comes down: an application
+// row points at this id. See api.js's handleDeleteLead.
 function setLeadStatus(id,value){
   setSaved("Saving…",false);
   api("/api/leads/"+id+"/status",{method:"POST",body:JSON.stringify({status:value})}).then(function(res){

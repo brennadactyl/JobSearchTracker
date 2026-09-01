@@ -377,9 +377,6 @@ export async function handleUpdate(request, db) {
   }
 
   if (body.type === "lead") {
-    // delistedOn is set/cleared by the scheduled searches (see
-    // migrations/0001_schema.sql) - kept separate from `status`
-    // so it never overwrites the installer's own application-progress field.
     const lead = await db.updateLead(body.id, body);
     if (!lead) return json({ error: "lead not found" }, 404);
     await db.touchUpdated();
@@ -506,6 +503,51 @@ export async function handleDeleteApplication(request, db) {
   if (!deleted) return json({ error: "application not found" }, 404);
   await db.touchUpdated();
   return json({ ok: true });
+}
+
+/**
+ * The daily search reporting that a posting it tracks is gone from the
+ * internet. The lead row is deleted and its URL written to `screened` in one
+ * transaction - see db.js's deleteLeadAndScreen for why neither half is
+ * useful without the other.
+ *
+ * A lead already marked "Applied" is refused rather than deleted, and this
+ * guard - not the wording of the prompt - is what makes that reliable: the
+ * caller is an LLM working from a list of ids, and the row it must not touch
+ * is the one an application row points at. Once you've applied, what's being
+ * tracked is the application, not whether the posting outlived it. 409 rather
+ * than a quiet no-op, because a run asking for that deletion has made a
+ * mistake worth seeing in its report.
+ */
+export async function handleDeleteLead(request, db) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "invalid JSON body" }, 400);
+  }
+  if (!body.id) return json({ error: "missing id" }, 400);
+
+  const lead = await db.getLead(body.id);
+  if (!lead) return json({ error: "lead not found" }, 404);
+  if (lead.status === "Applied") {
+    return json(
+      {
+        error: `lead ${lead.id} is marked "Applied" - a lead that has been applied to is never deleted, leave it as it is`,
+        kept: true,
+      },
+      409
+    );
+  }
+
+  const reason =
+    typeof body.reason === "string" && body.reason.trim()
+      ? body.reason.trim()
+      : "posting taken down";
+  const deleted = await db.deleteLeadAndScreen(lead, reason);
+  if (!deleted) return json({ error: "lead not found" }, 404);
+  await db.touchUpdated();
+  return json({ ok: true, deleted: 1, screened: lead.url });
 }
 
 export async function handleGetData(db, user) {

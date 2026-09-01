@@ -51,7 +51,6 @@
  * @property {string} fit
  * @property {string} status - one of LEAD_STATUS in api.js
  * @property {string} notes
- * @property {string} delistedOn - YYYY-MM-DD, or '' if still live
  * @property {string} team
  * @property {string} setup
  * @property {string} source
@@ -299,8 +298,9 @@ export class Db {
    * keeps it roughly flat instead.
    *
    * `status` is here because the run needs it to tell a stale lead nobody has
-   * touched from one already applied to; `id` because delisting posts back
-   * against it.
+   * touched from one already applied to - the applied ones are exactly the
+   * rows a run must never delete; `id` because a posting confirmed dead posts
+   * back against it (see deleteLeadAndScreen).
    * @param {string} trackKey
    * @returns {Promise<{leads: Array<{id: number, url: string, status: string}>, screened: string[]}>}
    */
@@ -601,7 +601,7 @@ export class Db {
    * @returns {Promise<Lead|null>} the updated row, or null if no row matched
    */
   async updateLead(id, patch) {
-    const fields = ["status", "notes", "delistedOn", ...EXTRA_FIELDS];
+    const fields = ["status", "notes", ...EXTRA_FIELDS];
     const setClause = fields.map((f) => `${f} = COALESCE(?, ${f})`).join(", ");
     const values = fields.map((f) => (typeof patch[f] === "string" ? patch[f] : null));
     const result = await this.d1
@@ -777,5 +777,53 @@ export class Db {
       application = await this.getApplication(results[1].meta.last_row_id);
     }
     return { lead, application };
+  }
+
+  /**
+   * Atomically (one D1 batch/transaction) deletes a lead and records its URL
+   * in `screened` - what the daily search does when a posting it tracked is
+   * confirmed gone from the internet.
+   *
+   * Both halves have to land together, and they fail in opposite directions:
+   * the delete alone leaves a URL nothing remembers, so tomorrow's run
+   * rediscovers it and adds it back as a brand-new lead; the screened row
+   * alone permanently hides a lead that is still sitting in the tab. Hence one
+   * batch rather than two calls from the run.
+   *
+   * The screened insert is ordered first so that the recoverable direction is
+   * the one a partial failure can take: a screened row with its lead still
+   * present is visible and fixable, a deleted lead is gone. INSERT OR IGNORE
+   * because (user, search, url) is unique and a re-reported posting is a
+   * no-op, not an error.
+   *
+   * Deleting an "Applied" lead would strand the application row pointing at
+   * its id - see api.js's handleDeleteLead, which refuses those before
+   * reaching this method.
+   * @param {Lead} lead - the already-fetched row, so this doesn't re-read it
+   * @param {string} reason - short human-readable note stored on the screened row
+   * @returns {Promise<boolean>} true if the lead row was actually deleted
+   */
+  async deleteLeadAndScreen(lead, reason) {
+    const results = await this.d1.batch([
+      this.d1
+        .prepare(
+          `INSERT OR IGNORE INTO screened (user_id, search, url, company, title, location, reason, date)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          this.userId,
+          lead.search,
+          lead.url,
+          lead.company || "",
+          lead.title || "",
+          lead.location || "",
+          reason,
+          today()
+        ),
+      this.d1
+        .prepare("DELETE FROM leads WHERE id = ? AND user_id = ?")
+        .bind(lead.id, this.userId),
+    ]);
+    return (results[1].meta.changes || 0) > 0;
   }
 }
