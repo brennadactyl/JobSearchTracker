@@ -361,6 +361,50 @@ check("the feeding track's prompt covers both tabs",
 check("a fed track still accepts a run record - that's what keeps its tab from reading stale",
   (await req("POST", "/api/runs", { token: A_TOK, body: { search: "LEAD", on: "2026-08-31", note: "filed by SWE" } })).status === 200);
 
+console.log("\n== url-keyed routes ==");
+// These are the first routes that find a lead by url rather than by id, so
+// they do not inherit the protection every other cross-user check in this file
+// relies on - an id that simply doesn't resolve for the wrong user. A
+// `WHERE url IN (...)` missing its user_id would match the other person's row
+// perfectly, and one of these routes deletes. Hence the two checks below.
+const bothUrl = `https://careers.example.com/jobs/${Date.now()}4210`;
+for (const tok of [A_TOK, B_TOK]) {
+  await req("POST", "/api/leads", { token: tok, body: { leads: [
+    { search: "SWE", company: "Acme", title: "Shared", url: bothUrl, verified: "2026-01-01" }] } });
+}
+// Sent as a variant, to prove the canonical match is what resolves it.
+const bStamp = await req("POST", "/api/verified", { token: B_TOK, body: {
+  search: "SWE", on: "2026-09-02", urls: [`${bothUrl}?gh_src=search-snippet`] } });
+check("a url variant re-confirms the lead it names", bStamp.json.stamped === 1, JSON.stringify(bStamp.json));
+const aRow = (await req("GET", "/api/data", { token: A_TOK })).json.leads.find((l) => l.url === bothUrl);
+check("and stamping it did not touch the other user's copy",
+  aRow && aRow.verified === "2026-01-01", JSON.stringify(aRow && aRow.verified));
+
+const bDel = await req("POST", "/api/delist", { token: B_TOK, body: {
+  search: "SWE", on: "2026-09-02", urls: [bothUrl] } });
+check("delisting removes the caller's lead", bDel.json.removed === 1, JSON.stringify(bDel.json));
+const aData2 = await req("GET", "/api/data", { token: A_TOK });
+const bData2 = await req("GET", "/api/data", { token: B_TOK });
+check("and leaves the other user's lead for the same posting alone",
+  aData2.json.leads.some((l) => l.url === bothUrl) && !bData2.json.leads.some((l) => l.url === bothUrl));
+
+// A date that isn't a date is not a report of anything, and what this triggers
+// is a permanent delete - so it is refused for the whole batch, before
+// anything is removed.
+const liveUrl = `https://careers.example.com/jobs/${Date.now()}5511`;
+await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
+  { search: "SWE", company: "Acme", title: "Still live", url: liveUrl }] } });
+const badOn = await req("POST", "/api/delist", { token: A_TOK, body: { search: "SWE", on: "today", urls: [liveUrl] } });
+check("delist refuses a non-date and deletes nothing",
+  badOn.status === 400 &&
+  (await req("GET", "/api/data", { token: A_TOK })).json.leads.some((l) => l.url === liveUrl),
+  badOn.text.slice(0, 100));
+const noMatch = await req("POST", "/api/delist", { token: A_TOK, body: {
+  search: "SWE", on: "2026-09-02", urls: ["https://example.com/nothing-tracks-this"] } });
+check("a url nothing tracks is reported back as a raw url, not a count",
+  noMatch.json.unmatched === 1 && noMatch.json.unmatchedUrls[0] === "https://example.com/nothing-tracks-this",
+  JSON.stringify(noMatch.json));
+
 console.log("\n== moving a lead between tabs ==");
 const moved = await req("POST", "/api/update", { token: A_TOK, body: { type: "lead", id: aLeadId, search: "LEAD" } });
 check("a lead moves to another of your own tabs", moved.status === 200 && moved.json.lead.search === "LEAD", moved.text.slice(0, 120));

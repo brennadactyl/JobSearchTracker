@@ -137,7 +137,7 @@ export function buildSearchPrompt({ user, track, settings, feeds, coverage }) {
     ? settings.excluded_companies.filter((c) => typeof c === "string" && c.trim())
     : [];
   const exclusionNote = excluded.length
-    ? ` Never search ${joinAnd(excluded)} - permanently excluded from this search, including via broader discovery: drop any hit there without verifying it and without a \`/api/screened\` row.`
+    ? ` Don't spend the run's time on ${joinAnd(excluded)} - permanently excluded from this search, including via broader discovery. Skip a hit there rather than verifying it, and don't post one to \`/api/screened\`: an exclusion isn't a candidate that was considered and ruled out, so it earns no row. The tracker drops them on the way in regardless - this is here to save you the fetch, not to be the thing enforcing it.`
     : "";
 
   const resumeLine = track.resume_line || "Read the resume.";
