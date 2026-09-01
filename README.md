@@ -58,6 +58,7 @@ scripts/
   backup-tracker.ps1           exports the whole database to a dated .sql file + an off-machine mirror
   archive-backups.ps1          copies those exports into an archive this account can't modify (runs as SYSTEM)
   protect-backups.ps1          one-time elevated setup that creates that archive and its task
+  verify-backups.ps1           proves the archive really refuses writes, from an unelevated shell
 server/                        API only - Cloudflare Worker + D1, no HTML served
   src/index.js                  routing, session resolution, CORS preflight
   src/auth.js                   passwords, session tokens, who a token belongs to
@@ -281,6 +282,19 @@ scheduler run is exactly the failure you'd only find out about when you needed
 it. The export runs under the same Interactive logon as the searches, so like
 them it only fires while you're logged in; the archive runs as SYSTEM and
 doesn't care.
+
+Then check it from an ordinary, **unelevated** window - a permission scheme that
+quietly stopped applying looks exactly like one that works:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "C:\VibeCoding\scripts\verify-backups.ps1"
+```
+
+It makes real attempts to overwrite, rename and delete an archived backup, to
+edit the script SYSTEM runs, and to grant itself the permissions back - all of
+which must be refused. Safe to run: every archived file also exists in the
+working folder and the mirror, so even a probe that unexpectedly succeeded
+costs nothing.
 
 To restore, feed a `.sql` file back with `wrangler d1 execute <db> --remote
 --file <backup.sql>` - see `server/README.md`, which covers doing that against
