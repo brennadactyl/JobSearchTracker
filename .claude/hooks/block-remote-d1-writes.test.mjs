@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 
 const HOOK = "C:/VibeCoding/.claude/hooks/block-remote-d1-writes.mjs";
-const cases = JSON.parse(readFileSync(new URL("./hook-cases.json", import.meta.url), "utf8"));
+const cases = JSON.parse(readFileSync(new URL("./block-remote-d1-writes.cases.json", import.meta.url), "utf8"));
 
 for (const [command, label] of cases) {
   const r = spawnSync("node", [HOOK], {
