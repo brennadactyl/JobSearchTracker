@@ -207,8 +207,9 @@ export function buildSearchPrompt({ user, track, settings, feeds, coverage }) {
   const coverageStep = rotates
     ? `1c. Decide which companies this run covers. The list in step 3 is longer than one run can verify properly, and covering all of it every night is what makes a run shallow - the failure isn't a company being missed, it's everything being skimmed. \`curl -s "$TRACKER_URL/api/coverage/${key}" -H "Authorization: Bearer $TRACKER_API_TOKEN"\` returns one row per company this search tracks, least-recently-swept first: \`{company, last_swept, board, note}\`. Cover, in this order:
    (a) every company with a \`board\` recorded - one fetch there is both the discovery source and the verification, so they cost almost nothing and never rotate out;
-   (b) every company whose \`last_swept\` is empty or more than 7 days old - these have waited longest, and they take priority even when there are more of them than the cap;
-   (c) the least-recently-swept of whatever is left, up to 8 companies.
+   (b) every company whose \`last_swept\` is a date more than 7 days ago - the staleness guarantee, and the one rule that overrides the cap;
+   (c) then, in the order the endpoint returned them, up to 8 more.
+   A company that has never been swept has an empty \`last_swept\` and sorts first of all, so a freshly seeded list gets worked through 8 a run over the following days. Empty is not stale: treating it as (b) would make the first run after seeding sweep the entire list at once, which is the thing this step exists to prevent.
    Whatever broader discovery turns up is covered as well, regardless of this list.
 `
     : "";

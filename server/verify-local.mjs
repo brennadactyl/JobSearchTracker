@@ -206,6 +206,11 @@ check("the prompt gains the rotation steps once a track has rows",
   (await req("GET", "/api/prompt/SWE", { token: A_TOK })).text.includes("1c. Decide which companies"));
 check("and B's, with no rows, does not",
   !(await req("GET", "/api/prompt/SWE", { token: B_TOK })).text.includes("1c. Decide which companies"));
+// A freshly seeded list is entirely never-swept. If the step reads that as
+// stale, the first run sweeps every company at once - the exact failure the
+// rotation exists to prevent, and it only shows up on day one.
+check("never-swept is not described as stale, or the cap means nothing on the first run",
+  !(await req("GET", "/api/prompt/SWE", { token: A_TOK })).text.includes("is empty or more than 7 days"));
 
 console.log("\n== branched tracks ==");
 check("fed_by naming a track that isn't in the list is refused",
