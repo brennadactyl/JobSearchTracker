@@ -96,6 +96,45 @@ const aDupe = await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
   { search: "SWE", company: "Acme", title: "Senior Backend", location: "Remote (U.S.)", url: sharedUrl }] } });
 check("the same user re-posting the same url is deduped", aDupe.json.added === 0);
 
+// The variant cases - a posting arriving under a URL that isn't byte-identical
+// to the one already stored. This is what actually happened in production: 8
+// leads filed in one night that were already tracked, each differing only by a
+// ?gh_jid= suffix or a slug. The UNIQUE constraint cannot see any of these.
+const aVariant = await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
+  { search: "SWE", company: "Acme", title: "Senior Backend", url: `${sharedUrl}?gh_src=search-snippet` }] } });
+check("a tracking parameter doesn't make it a new posting",
+  aVariant.json.added === 0 && aVariant.json.duplicates === 1, JSON.stringify(aVariant.json));
+
+// Two rows for one posting inside a single payload. INSERT OR IGNORE can't see
+// this either, since the two urls differ as strings.
+const reqUrl = `https://boards.example.com/jobs/${Date.now()}7104`;
+const aBatch = await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
+  { search: "SWE", company: "Acme", title: "Staff Backend", url: reqUrl },
+  { search: "SWE", company: "Acme", title: "Staff Backend", url: `${reqUrl}/senior-staff-backend-engineer` }] } });
+check("one posting twice in one payload is inserted once",
+  aBatch.json.added === 1 && aBatch.json.duplicates === 1, JSON.stringify(aBatch.json));
+
+// The distinguishing case that stops the rule being "strip the query string":
+// some boards give every posting an identical path and tell them apart only by
+// a query param, so those must stay separate rows.
+const sharedPath = `https://ats.example.com/careers/job/?jid=${Date.now()}`;
+const aTwoJobs = await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
+  { search: "SWE", company: "Acme", title: "One", url: `${sharedPath}1` },
+  { search: "SWE", company: "Acme", title: "Two", url: `${sharedPath}2` }] } });
+check("two postings sharing a path but not an id stay two leads",
+  aTwoJobs.json.added === 2, JSON.stringify(aTwoJobs.json));
+
+// The multi-user version of the variant case. Dedup widened from "same string"
+// to "same posting", and the whole point of doing that lookup in db.js is that
+// it can only ever see the calling user's rows - so B posting a variant of a
+// url A already tracks must still be a new lead for B.
+// Deliberately the same variant `aVariant` above proved IS a duplicate for A -
+// anything else would pass without testing the scoping.
+const bVariant = await req("POST", "/api/leads", { token: B_TOK, body: { leads: [
+  { search: "SWE", company: "Acme", title: "Senior Backend", url: `${sharedUrl}?gh_src=search-snippet` }] } });
+check("canonical dedup does not reach across users",
+  bVariant.json.added === 1, JSON.stringify(bVariant.json));
+
 const screenedUrl = `https://example.com/screened-${Date.now()}`;
 await req("POST", "/api/screened", { token: A_TOK, body: { screened: [{ search: "SWE", url: screenedUrl, reason: "out of scope" }] } });
 const bScreened = await req("POST", "/api/screened", { token: B_TOK, body: { screened: [{ search: "SWE", url: screenedUrl, reason: "out of scope" }] } });
