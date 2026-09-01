@@ -181,6 +181,10 @@ note after each step if you'd rather do it the traditional way instead.
    it found. Until a track's first run reports in it reads "No run recorded
    yet", which is also what you'll see on a brand-new install.
 
+7. **Set up backups** - see [Backups](#backups) below. One elevated command,
+   and it's the step you won't think to do until you need it: nothing above
+   this line leaves a copy of your data anywhere but Cloudflare.
+
 Tasks run daily while you're logged in - no stored Windows password required.
 If the machine is off or you're logged out at the scheduled time, that run is
 skipped (not queued/retried). The webpage itself, unlike the tasks, is always
