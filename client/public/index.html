@@ -230,11 +230,17 @@ td textarea{font-size:13px;min-height:32px;min-width:130px}
 .dh-fit{font-size:13px;color:var(--ink2);margin-top:10px;line-height:1.5}
 .dh-app-head{display:flex;gap:14px;flex-wrap:wrap}
 .dh-app-head .mf{flex:1;min-width:180px}
+.dh-app-head .icon-btn{align-self:flex-end}
 .dh-status{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:20px}
 .dh-status select{width:auto;min-width:150px}
 .dh-status input[type=date]{width:auto}
 .dh-dates{font-size:12px;color:var(--ink3);display:flex;align-items:center;gap:6px}
 .dh-notes{margin-top:22px}
+.icon-btn{appearance:none;flex:none;border:1px solid transparent;border-radius:7px;
+  background:none;cursor:pointer;padding:7px;display:inline-flex;color:var(--ink3)}
+.icon-btn:hover{background:var(--surface2);color:var(--ink)}
+.icon-btn.danger{color:var(--crit)}
+.icon-btn.danger:hover{background:var(--surface2);border-color:var(--crit)}
 .mf-label{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ink3);margin-bottom:6px}
 .facts-card{margin-top:22px;padding:18px 20px;background:var(--surface2);border:1px solid var(--line);border-radius:10px}
 .facts-card .more-grid{padding:0}
@@ -348,15 +354,16 @@ try{
 </div>
 
 <!--
-  Asks for the date a status change actually happened on, instead of
-  silently stamping today - see the change listener's stage-date
-  interception and confirmStageDate() in the script below. Only ever
-  opened for an application's status select, moving into a stage whose
-  history column is still blank.
+  Asks for the date a status change actually happened (or is scheduled
+  for) instead of silently stamping today - see the change listener's
+  stage-date interception and openStageDateModal()/confirmStageDate() in
+  the script below. Only ever opened for an application's status select,
+  moving into a stage whose history column is still blank. The title text
+  is set from JS, not here - it depends on which stage, see STAGE_SCHEDULED.
 -->
 <div id="stageDateModal" class="modal-overlay hidden">
   <div class="card modal-card">
-    <h3>When did this happen?</h3>
+    <h3 id="stageDateTitle">When did this happen?</h3>
     <p id="stageDateSub"></p>
     <input type="date" id="stageDateInput">
     <div class="modal-actions">
@@ -412,6 +419,14 @@ var LEAD_STATUS=["New","Reviewing","Applied","Not a fit"];
 // api.js's handleSetApplicationStatus.
 var APP_STATUS=["To Apply","Applied","Recruiter Screen","Tech Screen","Onsite / Loop","Offer","Rejected","Withdrawn"];
 var ACTIVE=["Recruiter Screen","Tech Screen","Onsite / Loop"];
+// Primitive shapes rather than one hand-authored path - easier to eyeball
+// as an actual trash can. stroke="currentColor" so .icon-btn's CSS color
+// (see .icon-btn.danger) is what colors it, not a value baked in here.
+var TRASH_ICON='<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" '+
+  'stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+
+  '<path d="M3 4.5h10"/><path d="M6 4.5V3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.5"/>'+
+  '<path d="M4.5 4.5 5 13a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1l.5-8.5"/>'+
+  '<path d="M6.7 7v4M9.3 7v4"/></svg>';
 // Populated from state.tracks on boot (see buildTracks/applyConfig below) -
 // not baked in, so this same deployed code serves any installer's tracks.
 var TRACKS={};
@@ -1315,11 +1330,11 @@ function appDetailHtml(a){
   var h='<div class="dh-app-head">'+
     '<div class="mf"><label>Company</label><input type="text" data-id="'+a.id+'" data-field="company" data-app="1" value="'+esc(a.company)+'" placeholder="Company"></div>'+
     '<div class="mf"><label>Role</label><input type="text" data-id="'+a.id+'" data-field="title" data-app="1" value="'+esc(a.title)+'" placeholder="Role"></div>'+
+    '<button class="icon-btn danger" data-del="'+a.id+'" title="Remove application" aria-label="Remove application">'+TRASH_ICON+'</button>'+
   '</div>';
   h+='<div class="dh-status">'+selectHtml(APP_STATUS,a.status,'data-id="'+a.id+'" data-field="status" data-app="1"')+
     '<span class="dh-dates">Applied <input type="date" data-id="'+a.id+'" data-field="dateApplied" data-app="1" value="'+esc(a.dateApplied)+'">'+
-      (d!==null?' &middot; '+d+' days':'')+'</span>'+
-    '<button class="btn ghost" data-del="'+a.id+'" style="margin-left:auto">Remove</button></div>';
+      (d!==null?' &middot; '+d+' days':'')+'</span></div>';
   h+=factsCardsHtml(a,true,false);
   h+='<div class="dh-notes"><div class="mf-label">Notes</div>'+
     '<textarea data-id="'+a.id+'" data-field="notes" data-app="1" rows="3">'+esc(a.notes)+'</textarea></div>';
@@ -1534,8 +1549,18 @@ function setApplicationStatus(id,value,date){
 // fires), and the select element itself. Null whenever the modal is closed.
 var pendingStage=null;
 
+// These three stages are booked ahead of time - a recruiter reaches out to
+// set up a call, a loop gets scheduled for next week - so the date being
+// logged is often still in the future relative to today, not a done thing.
+// The rest (Applied, Offer, Rejected, Withdrawn) are only ever logged after
+// the fact. The modal's title asks the question that actually fits either
+// way, instead of "did this happen" for a screen that's booked for Friday.
+var STAGE_SCHEDULED={"Recruiter Screen":1,"Tech Screen":1,"Onsite / Loop":1};
+
 function openStageDateModal(app,newStatus,dateField,selectEl){
   pendingStage={id:app.id,status:newStatus,dateField:dateField,prevStatus:app.status,selectEl:selectEl};
+  document.getElementById("stageDateTitle").textContent=
+    STAGE_SCHEDULED[newStatus]?"When is this scheduled?":"When did this happen?";
   document.getElementById("stageDateSub").textContent=
     (app.company||app.title||"This application")+" — "+newStatus;
   var input=document.getElementById("stageDateInput");
