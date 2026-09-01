@@ -21,10 +21,31 @@
 -- application, not whether the posting outlived it - so the report is simply
 -- absorbed, which is the other reason this column has nothing left to hold.
 --
--- The dates already in this column are not preserved anywhere. They describe
--- postings that no longer appear on the page in any form, and every row still
--- carrying one is a row the next run will delete outright.
---
+-- The rows already carrying a date get the same treatment first, rather than
+-- just losing the flag. Dropping the column on its own would put every
+-- known-dead lead back on the board looking live - the badge that used to mark
+-- it is gone too - and leave it there until some later run happens to re-fetch
+-- that exact URL and confirm it dead again, which isn't guaranteed: a domain
+-- under a confirmed blanket fetch block is re-attempted about weekly or
+-- skipped entirely. So this does by hand what removeDelistedLead now does per
+-- report - screened row first, then the delete, same reason and the original
+-- delistedOn as the date, so what was there and when it went survives the
+-- column that recorded it. Leads an application row points at are left alone
+-- here for the same reason the endpoint leaves them alone.
+INSERT OR IGNORE INTO screened (user_id, search, url, company, title, location, reason, date)
+SELECT user_id, search, url, company, title, location, 'posting taken down', delistedOn
+  FROM leads
+ WHERE delistedOn != ''
+   AND status != 'Applied'
+   AND NOT EXISTS (SELECT 1 FROM applications a
+                    WHERE a.user_id = leads.user_id AND a.leadId = CAST(leads.id AS TEXT));
+
+DELETE FROM leads
+ WHERE delistedOn != ''
+   AND status != 'Applied'
+   AND NOT EXISTS (SELECT 1 FROM applications a
+                    WHERE a.user_id = leads.user_id AND a.leadId = CAST(leads.id AS TEXT));
+
 -- search_runs.delisted is deliberately untouched: it counts an event per run
 -- ("2 postings came down today"), not a state on a lead, and the run summary
 -- on the page still reports it.

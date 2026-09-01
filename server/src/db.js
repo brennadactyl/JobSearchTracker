@@ -799,8 +799,10 @@ export class Db {
    * carries the company/title/location too, not just the URL - enough to read
    * later as "this is what was here and when it went".
    *
-   * Deleting an "Applied" lead would strand the application row pointing at
-   * its id; removeDelistedLead keeps those and never calls this for them.
+   * Deleting a lead an application points at would strand that row;
+   * removeDelistedLead checks for one (not just for status "Applied", which a
+   * lead carrying an application can be moved out of) and never calls this
+   * when one exists.
    * @param {Lead} lead - the already-fetched row, so this doesn't re-read it
    * @param {string} reason - short human-readable note stored on the screened row
    * @param {string|null} date - YYYY-MM-DD the posting was confirmed dead (the run's own local date), or null for today

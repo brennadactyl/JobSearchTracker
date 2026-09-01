@@ -388,8 +388,19 @@ export async function handleUpdate(request, db) {
     // field whitelist ignores it and the lead comes back unchanged - a no-op
     // rather than an error, so a run using the documented call doesn't fail
     // on a posting that came back.
+    //
+    // Anything else has to be a real YYYY-MM-DD before it acts. What it
+    // triggers is a permanent delete and the caller is an LLM: "unknown" or
+    // "today" reaching the old code left a bad string in a column, whereas
+    // here it would take a live posting off the board for good. A value that
+    // isn't a date isn't a report of anything, so it's refused rather than
+    // quietly read as "dead, date unknown".
     if (typeof body.delistedOn === "string" && body.delistedOn.trim()) {
-      return removeDelistedLead(db, body.id, body.delistedOn.trim());
+      const on = body.delistedOn.trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(on)) {
+        return json({ error: "delistedOn must be YYYY-MM-DD" }, 400);
+      }
+      return removeDelistedLead(db, body.id, on);
     }
     const lead = await db.updateLead(body.id, body);
     if (!lead) return json({ error: "lead not found" }, 404);
@@ -523,7 +534,7 @@ export async function handleDeleteApplication(request, db) {
  * What the tracker does when a search reports that a posting it tracks has
  * been taken down. The rule, in one place, in code:
  *
- *   - a lead that has been applied to is kept, untouched;
+ *   - a lead an application row points at is kept, untouched;
  *   - any other lead is deleted, and its URL recorded as screened.
  *
  * Deleting is the point: a dead posting is nothing anyone can act on, and a
@@ -538,7 +549,12 @@ export async function handleDeleteApplication(request, db) {
  * it exists what's being tracked is the application, not whether the listing
  * outlived it. That lead is kept and the report is simply absorbed - there's
  * no "delisted" state left to write it into, and nothing on the page would
- * show one.
+ * show one. The test for it is the application row itself rather than the
+ * lead's status: "Applied" is how one normally gets there, but a lead can
+ * carry an application while sitting in another status - nothing deletes the
+ * application when a lead moves back out of "Applied", and handleUpdate
+ * writes `status` without validating it - and deleting that lead would strand
+ * the row pointing at its id.
  *
  * Deliberately not the caller's decision. The caller is a nightly LLM run
  * following a prompt, and a policy written into a prompt is a policy that
@@ -548,23 +564,27 @@ export async function handleDeleteApplication(request, db) {
  *
  * @param {Db} db
  * @param {number|string} id
- * @param {string} on - the date the run confirmed it dead (its own local date)
+ * @param {string} on - the date the run confirmed it dead (its own local date, already validated as YYYY-MM-DD by the caller)
  */
 async function removeDelistedLead(db, id, on) {
   const lead = await db.getLead(id);
   if (!lead) return json({ error: "lead not found" }, 404);
 
-  if (lead.status === "Applied") {
+  if (lead.status === "Applied" || (await db.getApplicationByLeadId(lead.id))) {
     return json({ ok: true, lead, removed: false, reason: "applied to - kept" });
   }
 
-  // The run's own local date, not the worker's UTC one - same reasoning as
-  // /api/runs' `on`, and here it's the only surviving record of when the
-  // posting died, since the lead row itself is about to be gone.
-  const date = /^\d{4}-\d{2}-\d{2}$/.test(on) ? on : null;
-  await db.deleteLeadAndScreen(lead, "posting taken down", date);
+  // `on` is the run's own local date, not the worker's UTC one - same
+  // reasoning as /api/runs' `on`, and here it's the only surviving record of
+  // when the posting died, since the lead row itself is about to be gone.
+  //
+  // `removed` is what the DELETE actually matched, not what was intended: two
+  // runs reporting the same lead at once both get past getLead, and the second
+  // one deletes nothing. Saying so keeps the run's `delisted` count, which is
+  // tallied from these responses, from counting that lead twice.
+  const removed = await db.deleteLeadAndScreen(lead, "posting taken down", on);
   await db.touchUpdated();
-  return json({ ok: true, removed: true, id: lead.id, screened: lead.url });
+  return json({ ok: true, removed, id: lead.id, screened: lead.url });
 }
 
 export async function handleGetData(db, user) {
