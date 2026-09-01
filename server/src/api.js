@@ -33,6 +33,7 @@ import {
   verifyPassword,
 } from "./auth.js";
 import { DELISTED_REASON } from "./db.js";
+import { excludedCompanyMatcher } from "./exclude.js";
 import { buildSearchPrompt } from "./prompt.js";
 
 export const CORS_HEADERS = {
@@ -258,8 +259,20 @@ export async function handleRecordSweeps(request, db) {
       ? body.on
       : new Date().toISOString().slice(0, 10);
 
-  const recorded = await db.recordSweeps(key, valid, on);
-  return json({ recorded, on });
+  // The rotation is the surface where an exclusion would become permanent.
+  // This route creates a row for any company it is handed - that is how a
+  // company broader discovery turned up joins the rotation - so an excluded
+  // company swept once would be stored, then handed back by
+  // GET /api/coverage as a company to cover, every cycle, forever. Every other
+  // exclusion leak is one row; this one is self-renewing.
+  const { settings } = await db.getTracksAndSettings();
+  const isExcluded = excludedCompanyMatcher(settings.excluded_companies);
+  const allowed = valid.filter((i) => !isExcluded(i.company));
+  const excluded = valid.length - allowed.length;
+  if (allowed.length === 0) return json({ recorded: 0, excluded, on });
+
+  const recorded = await db.recordSweeps(key, allowed, on);
+  return json({ recorded, excluded, on });
 }
 
 export async function handleGetPrompt(db, user, key) {
@@ -503,14 +516,25 @@ export async function handleAddLeads(request, db) {
   // derive the day the search believes it is having.
   const on = typeof body.on === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.on) ? body.on : "";
 
-  const { added, duplicates } = await db.addLeads(valid, on);
+  // Companies this person will not work for, enforced rather than asked for.
+  // The list has been structured config for a while, but the only thing acting
+  // on it was a sentence in the prompt, and it leaked: lead 238 in the live
+  // data is xAI, which is on the list. A sentence is a request; this is the
+  // answer. See ./exclude.js for the matching rules.
+  const { settings } = await db.getTracksAndSettings();
+  const isExcluded = excludedCompanyMatcher(settings.excluded_companies);
+  const allowed = valid.filter((lead) => !isExcluded(lead.company));
+  const excluded = valid.length - allowed.length;
+  if (allowed.length === 0) return json({ added: 0, duplicates: 0, excluded });
+
+  const { added, duplicates } = await db.addLeads(allowed, on);
   if (added > 0) await db.touchUpdated();
 
   // `duplicates` is reported rather than swallowed so a run can say what it
   // actually contributed. Silently returning a smaller `added` than the number
   // of rows posted is how a run comes to believe it found more than it did -
   // and the run summary on the page is built out of exactly these numbers.
-  return json({ added, duplicates });
+  return json({ added, duplicates, excluded });
 }
 
 // Records postings the search looked at and decided NOT to add as a lead
@@ -544,7 +568,22 @@ export async function handleAddScreened(request, db) {
   // The prompt used to say this in a sentence and rely on the model to do it.
   // Doing it here means the rule holds whether or not that sentence was read,
   // and the sentence comes out of the prompt.
-  const { tracks } = await db.getTracksAndSettings();
+  const { tracks, settings } = await db.getTracksAndSettings();
+
+  // An excluded company is dropped outright here, and deliberately does NOT
+  // become a screened row - which is the opposite of what happens to every
+  // other rejected candidate. A screened row is a memo to tomorrow's run
+  // saying "this one was considered and ruled out", and the whole point of an
+  // exclusion is that it is never considered: it costs a fetch to write, it
+  // grows a table that a run reads back every night, and it records a decision
+  // that was already permanent. The prompt says this too, and the prompt was
+  // not enough - rows 210 and 211 in the live data are Beast Industries,
+  // written by a run that verified them first.
+  const isExcluded = excludedCompanyMatcher(settings.excluded_companies);
+  const allowed = valid.filter((item) => !isExcluded(item.company));
+  const excluded = valid.length - allowed.length;
+  if (allowed.length === 0) return json({ added: 0, duplicates: 0, excluded });
+
   const fedBy = new Map(tracks.map((t) => [t.key, t.fed_by || ""]));
   const rootOf = (key) => {
     // Bounded rather than a while(true): fed_by is validated as pointing at
@@ -554,10 +593,10 @@ export async function handleAddScreened(request, db) {
     for (let i = 0; i < tracks.length && fedBy.get(k); i++) k = fedBy.get(k);
     return k;
   };
-  const filed = valid.map((item) => ({ ...item, search: rootOf(item.search) }));
+  const filed = allowed.map((item) => ({ ...item, search: rootOf(item.search) }));
 
   const { added, duplicates } = await db.addScreened(filed, on);
-  return json({ added, duplicates });
+  return json({ added, duplicates, excluded });
 }
 
 export async function handleUpdate(request, db) {

@@ -128,12 +128,63 @@ check("two postings sharing a path but not an id stay two leads",
 // to "same posting", and the whole point of doing that lookup in db.js is that
 // it can only ever see the calling user's rows - so B posting a variant of a
 // url A already tracks must still be a new lead for B.
-// Deliberately the same variant `aVariant` above proved IS a duplicate for A -
-// anything else would pass without testing the scoping.
+// A url only A holds - `sharedUrl` above is deliberately tracked by BOTH
+// users, so a variant of it is B's own duplicate and would pass this check
+// while proving nothing about scoping.
+const soloUrl = `https://example.com/a-only-${Date.now()}`;
+await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
+  { search: "SWE", company: "Acme", title: "Solo", url: soloUrl }] } });
+const aSoloDupe = await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
+  { search: "SWE", company: "Acme", title: "Solo", url: `${soloUrl}?gh_src=search-snippet` }] } });
+check("the variant is a duplicate for the user who holds the original",
+  aSoloDupe.json.added === 0, JSON.stringify(aSoloDupe.json));
 const bVariant = await req("POST", "/api/leads", { token: B_TOK, body: { leads: [
-  { search: "SWE", company: "Acme", title: "Senior Backend", url: `${sharedUrl}?gh_src=search-snippet` }] } });
-check("canonical dedup does not reach across users",
+  { search: "SWE", company: "Acme", title: "Solo", url: `${soloUrl}?gh_src=search-snippet` }] } });
+check("but is new for a user who does not - dedup never reaches across users",
   bVariant.json.added === 1, JSON.stringify(bVariant.json));
+
+// Excluded companies. The list has been structured config for a while; until
+// now the only thing acting on it was a sentence in the prompt, and both
+// directions leaked in production - a lead got filed for an excluded company,
+// and two screened rows were written for one the prompt says to drop without
+// recording at all.
+await req("POST", "/api/config", { token: A_TOK, body: {
+  excluded_companies: ["MrBeast / Beast Industries", "xAI", "X (formerly Twitter)"] } });
+const exLead = await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
+  { search: "SWE", company: "xAI", title: "MTS", url: `https://x.ai/careers/${Date.now()}` },
+  { search: "SWE", company: "Acme", title: "Fine", url: `https://example.com/ok-${Date.now()}` }] } });
+check("an excluded company is dropped and the rest of the batch still lands",
+  exLead.json.added === 1 && exLead.json.excluded === 1, JSON.stringify(exLead.json));
+// The alias case: the list entry carries two names, and the parenthetical one
+// is how the live data actually spells it.
+const exAlias = await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
+  { search: "SWE", company: "Beast Industries (MrBeast)", title: "Eng", url: `https://example.com/mb-${Date.now()}` }] } });
+check("an alias from the same list entry is excluded too",
+  exAlias.json.added === 0 && exAlias.json.excluded === 1, JSON.stringify(exAlias.json));
+// The short-alias rule. "X (formerly Twitter)" yields the alias "x", and as a
+// bare substring that matches Netflix, Roblox, Perplexity - most of a real
+// board. It must only match a company named exactly "x".
+const exShort = await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
+  { search: "SWE", company: "Roblox", title: "Eng", url: `https://example.com/rbx-${Date.now()}` }] } });
+check("a two-letter alias does not swallow every company containing that letter",
+  exShort.json.added === 1 && exShort.json.excluded === 0, JSON.stringify(exShort.json));
+// Exclusions are dropped WITHOUT a screened row - the opposite of every other
+// rejected candidate. A screened row is a memo saying "considered and ruled
+// out", and an exclusion is never considered.
+const exScreened = await req("POST", "/api/screened", { token: A_TOK, body: { screened: [
+  { search: "SWE", company: "xAI", url: `https://x.ai/careers/s-${Date.now()}`, reason: "excluded" }] } });
+check("an excluded company leaves no screened row behind either",
+  exScreened.json.added === 0 && exScreened.json.excluded === 1, JSON.stringify(exScreened.json));
+// The self-renewing case: /api/coverage creates a row for any company handed
+// to it, so an excluded one swept once would be served back every cycle.
+const exSweep = await req("POST", "/api/coverage", { token: A_TOK, body: {
+  search: "SWE", on: "2026-09-02", swept: [{ company: "xAI" }, { company: "Acme" }] } });
+check("an excluded company cannot join the rotation",
+  exSweep.json.recorded === 1 && exSweep.json.excluded === 1, JSON.stringify(exSweep.json));
+check("and does not come back from the rotation afterwards",
+  !(await req("GET", "/api/coverage/SWE?all=1", { token: A_TOK })).json.companies
+    .some((c) => c.company === "xAI"));
+await req("POST", "/api/config", { token: A_TOK, body: { excluded_companies: [] } });
 
 const screenedUrl = `https://example.com/screened-${Date.now()}`;
 await req("POST", "/api/screened", { token: A_TOK, body: { screened: [{ search: "SWE", url: screenedUrl, reason: "out of scope" }] } });
@@ -299,10 +350,14 @@ const fedPrompt = await req("GET", "/api/prompt/LEAD", { token: A_TOK });
 check("a fed track has no prompt of its own, and the refusal names the one to run",
   fedPrompt.status === 409 && /"SWE"/.test(fedPrompt.json.error), fedPrompt.text.slice(0, 120));
 const feedPrompt = (await req("GET", "/api/prompt/SWE", { token: A_TOK })).text;
+// The third clause used to look for `"search":"LEAD"`, which only ever
+// appeared in the per-tab run-record instruction. The server fans that out
+// now, so the literal is gone by design; what still has to be true is that the
+// fed tab is a place step 9 can file a posting under.
 check("the feeding track's prompt covers both tabs",
   feedPrompt.includes("/api/dedup/LEAD") &&
   feedPrompt.includes("a role leading a team") &&
-  feedPrompt.includes('"search":"LEAD"'));
+  feedPrompt.includes('`"LEAD"`'));
 check("a fed track still accepts a run record - that's what keeps its tab from reading stale",
   (await req("POST", "/api/runs", { token: A_TOK, body: { search: "LEAD", on: "2026-08-31", note: "filed by SWE" } })).status === 200);
 
