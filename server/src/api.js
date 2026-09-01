@@ -340,48 +340,28 @@ export async function handleGetPrompt(db, user, key) {
 // this whole table exists to prevent.
 //
 // ---- What the caller is trusted for, and what it isn't. `search`, `status`,
-// `note` and `on` are things only the run knows: which track it is, whether it
-// believes its own result, a sentence for the page, and the local date the
-// worker genuinely cannot derive (see migrations/0001_schema.sql). The three
-// counts are not. They are arithmetic over rows this database already holds,
-// and they are now done here rather than read off the request.
+// `note` and `on` are things only the run knows. The three counts are not:
+// they are arithmetic over rows this database already holds, so they are done
+// here (db.countRunActivity) and the caller's own tally is ignored.
 //
-// The evidence, from the deployed tracker on 2026-09-01. The `SWE` run claimed
-// `leads_added: 97` against a tab holding 89 leads in total; 97 was the
-// combined figure across all four tabs that one run fills. Worse, `swe-ai`,
-// `swe-tech` and `swe-industry` - the tracks `fed_by` "SWE", see
-// migrations/0003_branched_tracks.sql - had *empty* run records that morning,
-// on a morning when `swe-ai` alone took 133 leads. Empty is the client's
-// "never recorded" state (runState() in client/public/index.html), so three
-// tabs that had just been searched read as never having run. That is the
-// precise failure search_runs exists to make visible, produced by the table
-// meant to prevent it. The single-tab `CPM` run had all three numbers right:
-// only the multi-tab case failed, and it failed because the prose rule for it
-// - the largest and fiddliest block of text in the whole prompt - was simply
-// not followed.
+// The evidence, 2026-09-01: the `SWE` run claimed `leads_added: 97` against a
+// tab holding 89 leads, 97 being the combined figure across all four tabs it
+// fills - while the three tabs `fed_by` "SWE" had *empty* run records that
+// morning, which is the client's "never recorded" state, on a morning one of
+// them took 133 leads. The single-tab `CPM` run got all three numbers right.
+// Only the multi-tab case failed, because its rule was the longest and
+// fiddliest block of prose in the prompt.
 //
-// A rule a model has to follow to keep the bookkeeping honest is a rule that
-// eventually isn't followed, and there is nowhere to test it and no way to fix
-// it but re-wording English and re-deploying. The same reasoning as
-// removeDelistedLead below applies: the run reports what it saw, and what that
-// adds up to is decided here.
+// Hence the fan-out too: a run record is per track, and asking the run for
+// four correctly-split records is precisely what didn't work. One POST in, one
+// row per tab out, each counted from its own rows.
 //
-// The fan-out is the other half of the fix. A run record is per track, so a
-// multi-tab run needs one row per tab or the fed tabs go on reading stale
-// forever - and asking the run for four correctly-split records is exactly
-// what didn't work. One POST from the run, one row per tab written here, each
-// counted from its own rows.
+// The retired count fields are still accepted and ignored, so a run mid-flight
+// on a prompt fetched before this deployed still records correctly.
 //
-// leadsAdded / screenedAdded / delisted are still accepted in the body and
-// ignored, deliberately: a scheduled run that fetched its prompt before this
-// deployed is mid-flight with the old wording, and it has to keep recording
-// correctly rather than failing on fields that are now surplus.
-//
-// One honest caveat: counting rows by date means a lead the *user* adds by
-// hand today lands in today's run count for that tab. That is rare, it can
-// only ever move a number by a row or two, and it is still a truer account of
-// what appeared in the tab today than a tally the model computed across four
-// tabs at once and attributed to one.
+// One honest caveat: counting by date means a lead the *user* adds by hand
+// today lands in today's run count for that tab. Rare, and still truer than a
+// tally computed across four tabs and attributed to one.
 export async function handleRecordRun(request, db) {
   let body;
   try {
@@ -585,16 +565,12 @@ export async function handleAddScreened(request, db) {
   const excluded = valid.length - allowed.length;
   if (allowed.length === 0) return json({ added: 0, duplicates: 0, excluded });
 
+  // One hop, not a walk to a root: a fed track is a tab, and the track that
+  // fills it runs its own search, so `fed_by` chains have no meaning in the
+  // model (see migrations/0003_branched_tracks.sql) and none exist. Resolving
+  // repeatedly would only be guessing at what a chain ought to mean.
   const fedBy = new Map(tracks.map((t) => [t.key, t.fed_by || ""]));
-  const rootOf = (key) => {
-    // Bounded rather than a while(true): fed_by is validated as pointing at
-    // another track when config is written, but nothing there rules out a
-    // cycle, and an insert path is the wrong place to hang.
-    let k = key;
-    for (let i = 0; i < tracks.length && fedBy.get(k); i++) k = fedBy.get(k);
-    return k;
-  };
-  const filed = allowed.map((item) => ({ ...item, search: rootOf(item.search) }));
+  const filed = allowed.map((item) => ({ ...item, search: fedBy.get(item.search) || item.search }));
 
   const { added, duplicates } = await db.addScreened(filed, on);
   return json({ added, duplicates, excluded });

@@ -174,21 +174,16 @@ export const APP_STAGE_DATE_FIELDS = [
   "dateOffer", "dateRejected", "dateWithdrawn",
 ];
 
-// The `reason` written on the screened row that a delisted lead leaves
-// behind. It used to be a bare string literal at the one call site that
-// needed it (api.js's removeDelistedLead), which was fine while nothing read
-// it back. countRunActivity now does: since 0004_drop_lead_delisted_on.sql the
-// lead row is deleted outright, so this screened row is the *only* surviving
-// evidence that a posting came down, and matching on this exact text is what
-// separates "a posting we were tracking died" from "a candidate we looked at
-// and rejected". Two copies of a string that a run's delisted count silently
-// depends on is one copy too many, so it lives here beside EXTRA_FIELDS for
-// the same reason those do - one definition, not two that can drift.
+// The `reason` written on the screened row a delisted lead leaves behind.
+// Since 0004_drop_lead_delisted_on.sql deletes the lead outright, that row is
+// the only surviving evidence a posting came down, and countRunActivity splits
+// the day's screened rows on this exact text to tell a delisting from an
+// ordinary rejection. A string a run's `delisted` count depends on gets one
+// definition, for the same reason EXTRA_FIELDS above does.
 //
-// migrations/0004_drop_lead_delisted_on.sql hardcodes this same text in SQL
-// and cannot import it. If this ever changes, that file is the other place to
-// look - though changing it also silently reclassifies every historical row,
-// which is a good reason not to.
+// 0004 hardcodes the same text in SQL and cannot import it. Changing this
+// would also silently reclassify every historical row, which is a good reason
+// not to.
 export const DELISTED_REASON = "posting taken down";
 
 // Everything on a track row that isn't its identity (key) or its ordering.
@@ -664,12 +659,6 @@ export class Db {
         .first(),
       // One pass over the day's screened rows rather than two queries that
       // would have to agree with each other about what "not delisted" means.
-      // The two reason binds come before this.userId here, unlike everywhere
-      // else in this file: `?` is positional and these two sit in the SELECT
-      // list, which SQLite reads before the WHERE clause. The user scope is
-      // still the first thing the WHERE clause does, as it is in every other
-      // statement here - a count is exactly the kind of query where another
-      // person's rows would land in this one's total and still look plausible.
       this.d1
         .prepare(
           `SELECT SUM(CASE WHEN reason = ? THEN 1 ELSE 0 END) AS delisted,
@@ -716,39 +705,57 @@ export class Db {
   // ------------------------------------------------------------ leads --
 
   /**
-   * Every URL this user already has under the given tracks, as canonical keys
-   * (see ./url.js) - both the leads they track and the postings they have
-   * already screened out, since a candidate matching either one is not new.
+   * Splits a batch into the rows whose posting this user doesn't already have,
+   * and a count of the rest. Both insert paths dedup identically, so they
+   * share this - see addLeads for what the two layers are and why.
    *
-   * Keyed per track, not per user, because that is the scope the UNIQUE
-   * constraint has always had: two tracks legitimately tracking the same
-   * posting are two rows on purpose, and widening the check here would start
-   * silently dropping the second one.
+   * A row is already-known if its canonical URL (see ./url.js) matches a lead
+   * OR a screened row under the same track: both mean "this run has met this
+   * posting before". Matching is per track, not per user, because that is the
+   * scope the UNIQUE constraint has always had - two tracks legitimately
+   * tracking one posting are two rows on purpose, and widening it here would
+   * start silently dropping the second.
    *
-   * @param {string[]} searches track keys appearing in the batch
-   * @returns {Promise<Map<string, Set<string>>>} track key -> canonical URL keys
+   * Rows already accepted from this same batch are added to the set as it
+   * goes, which is what catches one payload naming the same posting twice.
+   *
+   * @param {Array<{search: string, url: string}>} rows
+   * @returns {Promise<{fresh: Array<Object>, duplicates: number}>}
    */
-  async existingUrlKeys(searches) {
-    const keys = [...new Set(searches.filter(Boolean))];
+  async dropKnownUrls(rows) {
+    const keys = [...new Set(rows.map((r) => r.search).filter(Boolean))];
     const seen = new Map(keys.map((k) => [k, new Set()]));
-    if (keys.length === 0) return seen;
 
-    const placeholders = keys.map(() => "?").join(", ");
-    const [leads, screened] = await Promise.all([
-      this.d1
-        .prepare(`SELECT search, url FROM leads WHERE user_id = ? AND search IN (${placeholders})`)
-        .bind(this.userId, ...keys)
-        .all(),
-      this.d1
-        .prepare(`SELECT search, url FROM screened WHERE user_id = ? AND search IN (${placeholders})`)
-        .bind(this.userId, ...keys)
-        .all(),
-    ]);
-    for (const row of [...leads.results, ...screened.results]) {
-      const set = seen.get(row.search);
-      if (set) set.add(canonicalUrl(row.url));
+    if (keys.length) {
+      const placeholders = keys.map(() => "?").join(", ");
+      const [leads, screened] = await Promise.all([
+        this.d1
+          .prepare(`SELECT search, url FROM leads WHERE user_id = ? AND search IN (${placeholders})`)
+          .bind(this.userId, ...keys)
+          .all(),
+        this.d1
+          .prepare(`SELECT search, url FROM screened WHERE user_id = ? AND search IN (${placeholders})`)
+          .bind(this.userId, ...keys)
+          .all(),
+      ]);
+      for (const row of [...leads.results, ...screened.results]) {
+        seen.get(row.search)?.add(canonicalUrl(row.url));
+      }
     }
-    return seen;
+
+    const fresh = [];
+    let duplicates = 0;
+    for (const row of rows) {
+      const key = canonicalUrl(row.url);
+      const set = seen.get(row.search);
+      if (!key || set?.has(key)) {
+        duplicates++;
+        continue;
+      }
+      set?.add(key);
+      fresh.push(row);
+    }
+    return { fresh, duplicates };
   }
 
   /**
@@ -789,19 +796,7 @@ export class Db {
     // behaviour every existing caller already gets.
     const t = /^\d{4}-\d{2}-\d{2}$/.test(String(on || "")) ? on : today();
 
-    const seen = await this.existingUrlKeys(leads.map((l) => l.search));
-    const fresh = [];
-    let duplicates = 0;
-    for (const lead of leads) {
-      const key = canonicalUrl(lead.url);
-      const set = seen.get(lead.search);
-      if (!key || (set && set.has(key))) {
-        duplicates++;
-        continue;
-      }
-      if (set) set.add(key);
-      fresh.push(lead);
-    }
+    const { fresh, duplicates } = await this.dropKnownUrls(leads);
     if (fresh.length === 0) return { added: 0, duplicates };
 
     const stmt = this.d1.prepare(
@@ -824,11 +819,7 @@ export class Db {
       )
     );
     const results = await this.d1.batch(batch);
-    const added = results.reduce((n, r) => n + (r.meta.changes || 0), 0);
-    // A row the constraint rejected was a byte-identical repeat the canonical
-    // filter should already have caught, so counting the shortfall here keeps
-    // the two layers reporting one honest number rather than two.
-    return { added, duplicates: duplicates + (fresh.length - added) };
+    return { added: results.reduce((n, r) => n + (r.meta.changes || 0), 0), duplicates };
   }
 
   /** @param {number|string} id @returns {Promise<Lead|null>} */
@@ -961,19 +952,7 @@ export class Db {
   async addScreened(items, on) {
     const t = /^\d{4}-\d{2}-\d{2}$/.test(String(on || "")) ? on : today();
 
-    const seen = await this.existingUrlKeys(items.map((i) => i.search));
-    const fresh = [];
-    let duplicates = 0;
-    for (const item of items) {
-      const key = canonicalUrl(item.url);
-      const set = seen.get(item.search);
-      if (!key || (set && set.has(key))) {
-        duplicates++;
-        continue;
-      }
-      if (set) set.add(key);
-      fresh.push(item);
-    }
+    const { fresh, duplicates } = await this.dropKnownUrls(items);
     if (fresh.length === 0) return { added: 0, duplicates };
 
     const stmt = this.d1.prepare(
@@ -993,8 +972,7 @@ export class Db {
       )
     );
     const results = await this.d1.batch(batch);
-    const added = results.reduce((n, r) => n + (r.meta.changes || 0), 0);
-    return { added, duplicates: duplicates + (fresh.length - added) };
+    return { added: results.reduce((n, r) => n + (r.meta.changes || 0), 0), duplicates };
   }
 
   // ----------------------------------------------------- applications --
