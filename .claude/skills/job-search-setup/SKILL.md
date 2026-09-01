@@ -152,12 +152,30 @@ the worker from the track's config in D1 (see
 `../../../server/src/prompt.js`), so this step produces *config*, posted in
 step 6 - plus one real file:
 
-- Fill `templates/tracked-postings.template.md` (read it first - it's
-  commented with what each placeholder means) and write it to
+- Fill `templates/tracked-postings.template.md` and write it to
   `<data dir>/<user id>/docs/tracked_<key>_postings.md`. This one stays a
   file because the search itself edits it: it accumulates fetch-reliability
   notes run over run. If it already exists, ask before overwriting - it holds
   real history, not something to regenerate casually.
+
+  Every `{{PLACEHOLDER}}` in it, and what goes there (the template carries no
+  comments of its own - anything left in it would be copied into the live doc
+  the search reads every morning):
+
+  | Placeholder | What it takes |
+  |---|---|
+  | `{{TRACK_TITLE}}` | The track's title for the doc heading - "Software Engineering", "Engineering Management". |
+  | `{{SEARCH_GOAL_SENTENCE}}` | One sentence naming what this search looks for, quoted in the intro line. |
+  | `{{SIBLING_DOCS_NOTE}}` | A sentence pointing at this person's other track docs, or empty for their first. Say "do not merge them" - a run that reads a sibling doc as its own searches the wrong thing. |
+  | `{{TRACK_KEY}}` | The track key slug. It appears in the API paths the doc quotes, so a wrong one sends every run at another tab's data. |
+  | `{{ROLE_SEARCH_LINE}}` | Same text as the track's `role_search_line` config, so the doc and the prompt agree. |
+  | `{{GEO_SCOPE_PARAGRAPH}}` | Same text as the `geo_scope_line` setting, worked examples and all. |
+  | `{{SCOPE_ADJECTIVE}}` | Fills "any other{{SCOPE_ADJECTIVE}} location" in the tier table - " US" for a US-only search, empty when there's no geographic scope. Note the leading space. |
+  | `{{CANDIDATE_PROFILE_PARAGRAPH}}` | The profile paragraph from step 2, as agreed with the installer. |
+  | `{{BEST_FIT_SENTENCE}}` | The best-fit-roles sentence from step 2. |
+  | `{{RESUME_FILENAME}}` | The resume the profile came from, named in the section heading. |
+  | `{{TARGET_COMPANIES_CORE}}` | The starter company list, comma-separated. The same list seeds coverage in step 6. |
+
 - `{{LOCATION_TIER_ROWS}}`: one Markdown table row per priority tier, e.g.
   `| Top | Seattle, Bellevue, ... - or remote within scope | teal stripe +
   "Seattle area" / "Remote US" tag, sorted to the top of its tab |`. Keep
