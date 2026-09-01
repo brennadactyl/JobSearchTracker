@@ -284,6 +284,10 @@ td textarea{font-size:13px;min-height:32px;min-width:130px}
 
 .more-grid{display:grid;gap:14px 18px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
 .mf label{display:block;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink3);margin-bottom:4px;font-weight:600}
+.mf-labelrow{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+.mf-labelrow label{margin-bottom:0}
+.mf-open{font-size:11px;font-weight:600;color:var(--accent);text-decoration:none;white-space:nowrap;margin-bottom:4px}
+.mf-open:hover{text-decoration:underline}
 .note{font-size:12.5px;color:var(--ink3);padding:14px 0 0;line-height:1.6}
 @media (max-width:900px){
   .wrap{padding:0 13px 60px}
@@ -574,6 +578,19 @@ var STAGE_HISTORY_FIELDS=[["dateApplied","Applied"]].concat(
 var APP_STAGE_DATE_MAP={"Applied":"dateApplied"};
 STAGE_DATE_FIELDS.forEach(function(s){APP_STAGE_DATE_MAP[s[0]]=s[1];});
 
+// A hand-typed link field is still just text, so only http(s) becomes a
+// real anchor. A bare "acme.com/jobs/1" is common enough to be worth
+// accepting (https:// assumed); anything else - javascript:, data:, a note
+// to self - gets no link rather than an href built from whatever was typed.
+// Returns "" when there is nothing safe to open.
+function safeUrl(v){
+  var t=String(v==null?"":v).trim();
+  if(!t)return "";
+  if(/^https?:\/\//i.test(t))return t;
+  if(/^[\w.-]+\.[a-z]{2,}([\/?#]|$)/i.test(t))return "https://"+t;
+  return "";
+}
+
 function factsGridHtml(item,fields,isApp){
   var appAttr=isApp?' data-app="1"':'';
   return '<div class="more-grid">'+fields.map(function(f){
@@ -582,7 +599,14 @@ function factsGridHtml(item,fields,isApp){
     var input=type==="date"
       ?'<input type="date" data-id="'+item.id+'" data-field="'+key+'"'+appAttr+' value="'+esc(val)+'">'
       :'<input type="text" data-id="'+item.id+'" data-field="'+key+'"'+appAttr+' value="'+esc(val)+'" placeholder="'+esc(label)+'">';
-    return '<div class="mf"><label>'+esc(label)+'</label>'+input+'</div>';
+    // The link field stays an editable input - that is how a posting URL
+    // gets entered or corrected - so the way to open it is an anchor beside
+    // the label rather than turning the field itself into a link.
+    var href=key==="link"?safeUrl(val):"";
+    var lab='<label>'+esc(label)+'</label>';
+    if(href)lab='<div class="mf-labelrow">'+lab+
+      '<a class="mf-open" href="'+esc(href)+'" target="_blank" rel="noopener">Open &#8599;</a></div>';
+    return '<div class="mf">'+lab+input+'</div>';
   }).join("")+'</div>';
 }
 
@@ -1474,6 +1498,11 @@ function commit(el){
   api("/api/update",{method:"POST",body:JSON.stringify(body)}).then(function(){
     setSaved("Saved",true);
   }).catch(function(){setSaved("Couldn't save — try again","bad");});
+  // Every other field renders the same whatever you type into it, but the
+  // link field grows (or loses) its "Open" anchor depending on the value -
+  // so it needs a re-render to show up, rather than waiting for the next
+  // unrelated click to repaint the panel.
+  if(field==="link")render();
 }
 
 // Replaces the entry in `list` matching item.id (in place, preserving its
