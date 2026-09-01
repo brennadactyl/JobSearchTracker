@@ -521,27 +521,30 @@ function applyConfig(){
 }
 var ui={tab:"dashboard",q:"",filter:"All",selected:{},expanded:{},view:"detail",leadSort:"priority",appSort:"applied-desc"};
 
-// Fields shown in leads' and applications' facts cards. ROLE_FIELDS is
-// facts about the opportunity itself (stable once entered - comp doesn't
-// change because you looked at it again yesterday) and is all a lead
-// shows: follow-up tracking isn't a meaningful concept until you've
-// actually applied, so TRACKING_FIELDS only appears on applications (see
-// factsCardsHtml/appDetailHtml/appsGridHtml) - a lead never renders it.
-// "link" is omitted from ROLE_FIELDS for leads - a lead already has its
-// own url (the header link points at it), so a second link input here
-// would just duplicate it; applications get it via APP_ROLE_FIELDS
-// instead, since a manually-added application has no posting URL to fall
-// back on.
+// Fields shown in leads' and applications' facts cards. Facts about the
+// opportunity itself (stable once entered - comp doesn't change because
+// you looked at it again yesterday) and is all a lead shows. "link" is
+// omitted from ROLE_FIELDS for leads - a lead already has its own url
+// (the header link points at it), so a second link input here would just
+// duplicate it; applications get it via APP_ROLE_FIELDS instead, since a
+// manually-added application has no posting URL to fall back on.
+//
+// There used to be a third field group here - lastContact/nextAction/
+// nextActionDate, a manually-typed reminder shown in its own "Follow-up"
+// facts card and surfaced on the Overview as "What's next". Removed: once
+// the stage-date modal (see openStageDateModal) asks "when is this
+// scheduled?" at the moment a status actually changes, a hand-typed
+// reminder about the same upcoming stage is a second, easily-stale copy
+// of the same fact - the screenshot that prompted this showed exactly
+// that drift (a stale "Recruiter screen · 9/3" row after the application
+// had already moved on to Tech Screen). The DB columns still exist
+// (nothing reads or writes them now) rather than being dropped - no
+// upside to a migration for columns nothing points at.
 var ROLE_FIELDS=[
   ["referral","Referral"],
   ["comp","Comp range"],
   ["team","Team / product"],
   ["setup","Work setup"]
-];
-var TRACKING_FIELDS=[
-  ["lastContact","Last contact","date"],
-  ["nextAction","Next action"],
-  ["nextActionDate","When","date"]
 ];
 var APP_ROLE_FIELDS=ROLE_FIELDS.concat([["link","Link"]]);
 
@@ -599,17 +602,15 @@ function stageHistoryHtml(item){
   '</tbody></table></div>';
 }
 
-// Renders the facts boxes (role details, follow-up tracking, then - for an
-// application - stage history) for either a lead or an application.
-// `compact` drops the first box's default top margin - used in Grid view's
-// expanded row, which is already padded by its containing cell and doesn't
-// want the extra gap Detail view does.
+// Renders the facts boxes (role details, then - for an application - stage
+// history) for either a lead or an application. `compact` drops the first
+// box's default top margin - used in Grid view's expanded row, which is
+// already padded by its containing cell and doesn't want the extra gap
+// Detail view does.
 function factsCardsHtml(item,isApp,compact){
   var roleFields=isApp?APP_ROLE_FIELDS:ROLE_FIELDS;
   var h='<div class="facts-card"'+(compact?' style="margin-top:0"':'')+'><div class="mf-label">Role details</div>'+
-      factsGridHtml(item,roleFields,isApp)+'</div>'+
-    '<div class="facts-card"><div class="mf-label">Follow-up</div>'+
-      factsGridHtml(item,TRACKING_FIELDS,isApp)+'</div>';
+      factsGridHtml(item,roleFields,isApp)+'</div>';
   if(isApp)h+='<div class="facts-card"><div class="mf-label">Stage history</div>'+
       stageHistoryHtml(item)+'</div>';
   return h;
@@ -1085,19 +1086,6 @@ function dashboard(){
       '</div></div>';
   }
 
-  var todo=A.filter(function(a){return a.nextAction;})
-    .sort(function(x,y){return String(x.nextActionDate||"9999").localeCompare(String(y.nextActionDate||"9999"));});
-  h+='<div class="sec"><h2>What&rsquo;s next</h2><p>From your Applications tab</p></div>';
-  if(!todo.length){
-    h+='<div class="card empty"><strong>Nothing queued</strong>Add a next action to an application and it shows up here.</div>';
-  }else{
-    h+='<div class="card"><div class="scroller"><table><thead><tr><th>Company</th><th>Role</th><th>Next action</th><th>When</th><th>Stage</th></tr></thead><tbody>'+
-      todo.map(function(a){
-        return '<tr><td class="co">'+esc(a.company)+'</td><td>'+esc(a.title)+'</td>'+
-          '<td>'+esc(a.nextAction)+'</td><td class="dt mono">'+esc(a.nextActionDate||"&mdash;")+'</td>'+
-          '<td><span class="pill '+pillFor(a.status)+'">'+esc(a.status||"&mdash;")+'</span></td></tr>';
-      }).join("")+'</tbody></table></div></div>';
-  }
   h+='<div class="note">'+(trackCount
     ? 'Scheduled searches across your '+trackCount+' tracked search'+(trackCount===1?'':'es')+' add rows here every day.'
     : 'Once a tracked search is set up, its scheduled run adds rows here every day.')+
@@ -1279,20 +1267,10 @@ function appsTab(){
   return h;
 }
 
-// Same "fast scan, not the full field set" philosophy as LEAD_GRID_FIELDS -
-// referral and notes cut too, same as leads; they're one Details click away.
-// Next action/When stay because chasing follow-ups is the main reason to be
-// glancing at Applications at all.
-var APP_GRID_FIELDS=[
-  ["nextAction","Next action"],
-  ["nextActionDate","When","date"]
-];
-
 function appsGridHtml(A){
-  var COLS=7+APP_GRID_FIELDS.length; // company/role/status/applied/days + extras + details/remove
+  var COLS=7; // company/role/status/applied/days/details/remove
   var h='<div class="card grid-wrap"><table><thead><tr>'+
     '<th>Company</th><th>Role</th><th>Status</th><th>Applied</th><th>Days</th>'+
-    APP_GRID_FIELDS.map(function(f){return '<th>'+esc(f[1])+'</th>';}).join("")+
     '<th></th><th></th>'+
   '</tr></thead><tbody>'+A.map(function(a){
     var d=daysSince(a.dateApplied);
@@ -1308,12 +1286,6 @@ function appsGridHtml(A){
       '<td>'+selectHtml(APP_STATUS,a.status,'data-id="'+a.id+'" data-field="status" data-app="1"')+'</td>'+
       '<td><input type="date" data-id="'+a.id+'" data-field="dateApplied" data-app="1" value="'+esc(a.dateApplied)+'"></td>'+
       '<td class="dt mono">'+(d===null?"&mdash;":d)+'</td>'+
-      APP_GRID_FIELDS.map(function(f){
-        var key=f[0],type=f[2]||"text",val=a[key]||"";
-        return '<td>'+(type==="date"
-          ?'<input type="date" data-id="'+a.id+'" data-field="'+key+'" data-app="1" value="'+esc(val)+'">'
-          :'<input type="text" data-id="'+a.id+'" data-field="'+key+'" data-app="1" value="'+esc(val)+'">')+'</td>';
-      }).join("")+
       '<td class="exp-ind">'+(open?'Hide':'Details')+'</td>'+
       '<td><button class="btn ghost" data-del="'+a.id+'" title="Remove">&times;</button></td>'+
     '</tr>';
@@ -1426,8 +1398,7 @@ document.addEventListener("click",function(e){
     setSaved("Saving…",false);
     api("/api/update",{method:"POST",body:JSON.stringify({
       type:"application",company:"",title:"",dateApplied:today(),status:"Applied",notes:"",
-      team:"",setup:"",source:"",link:"",lastContact:"",nextAction:"",nextActionDate:"",
-      resume:"",referral:"",comp:""
+      team:"",setup:"",source:"",link:"",resume:"",referral:"",comp:""
     })}).then(function(res){
       state.applications.unshift(res.application);
       render();
