@@ -35,6 +35,12 @@
      privilege escalation handed over for free. The repo copy stays the source
      of truth; re-run this script after changing it.
 
+  3. The nightly export task itself (backup-tracker.ps1), registered as the
+     person running this rather than as SYSTEM - it only writes to the repo's
+     own folder and has no business holding SYSTEM's rights. That half needs no
+     elevation; it's here so one command sets up the whole chain instead of
+     leaving the other half as something to remember.
+
   Deliberately left alone: the repo's own private\backups folder. The daily
   export has to be able to write there, and anything that can write can delete.
   It is the working copy; the archive is the safeguard.
@@ -59,11 +65,18 @@
   the repository on purpose.
 
 .PARAMETER At
-  When the daily archive task runs. Defaults to 03:00, meant to sit after the
-  export task rather than race it.
+  When the daily archive task runs. Defaults to 03:45, meant to sit clear of the
+  nightly searches and the export that follows them, rather than racing either.
 
 .PARAMETER TaskName
-  Name of the scheduled task.
+  Name of the archive task.
+
+.PARAMETER ExportAt
+  When the nightly export runs. Defaults to 03:15 - after the searches, before
+  the archive picks its output up.
+
+.PARAMETER ExportTaskName
+  Name of the export task.
 
 .EXAMPLE
   # From an Administrator PowerShell:
@@ -72,9 +85,16 @@
 param(
     [string]$SourceDir,
     [string]$ArchiveDir = (Join-Path $env:ProgramData "JobSearchTracker\backups"),
-    [string]$At = "03:00",
-    [string]$TaskName = "JobSearchTracker-ArchiveBackups"
+    [string]$At = "03:45",
+    [string]$TaskName = "JobSearchTracker-ArchiveBackups",
+    [string]$ExportAt = "03:15",
+    [string]$ExportTaskName = "JobSearchTracker-Backup"
 )
+
+# Note the task names: neither matches "JobSearch-*", which is what
+# setup-scheduler.ps1 sweeps for stale search tasks. A backup job quietly
+# unregistered by the next scheduler run would be the worst kind of failure -
+# invisible until you needed it.
 
 $ErrorActionPreference = "Stop"
 
@@ -120,7 +140,27 @@ if (-not (Test-Path $srcScript)) { throw "archive-backups.ps1 not found next to 
 Copy-Item $srcScript (Join-Path $binDir "archive-backups.ps1") -Force
 $runScript = Join-Path $binDir "archive-backups.ps1"
 
-# ---- 3. The scheduled task ------------------------------------------------
+# ---- 3. The nightly export, running as the person who set this up ---------
+# This half needs no elevation - it only writes to the repo's own folder - but
+# it belongs here so one command sets up the whole chain rather than leaving
+# half of it as something to remember. Registered as the invoking user with the
+# same Interactive logon the search tasks use, so it inherits their behaviour:
+# runs while that person is logged in, no stored password.
+Step "Registering '$ExportTaskName' to run as $env:USERNAME daily at $ExportAt"
+$exportScript = Join-Path $PSScriptRoot "backup-tracker.ps1"
+if (-not (Test-Path $exportScript)) { throw "backup-tracker.ps1 not found next to this script." }
+$exportAction = New-ScheduledTaskAction -Execute "powershell.exe" `
+    -Argument ("-NoProfile -ExecutionPolicy Bypass -File `"{0}`" -RepoDir `"{1}`"" -f $exportScript, $repoDir)
+$exportPrincipal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
+$exportSettings  = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun `
+    -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30) `
+    -MultipleInstances IgnoreNew
+Register-ScheduledTask -TaskName $ExportTaskName -Action $exportAction `
+    -Trigger (New-ScheduledTaskTrigger -Daily -At $ExportAt) `
+    -Principal $exportPrincipal -Settings $exportSettings -Force `
+    -Description "Exports the job-search tracker database to a dated .sql file, locally and to an off-machine mirror." | Out-Null
+
+# ---- 4. The archive task ---------------------------------------------------
 Step "Registering '$TaskName' to run as SYSTEM daily at $At"
 $action = New-ScheduledTaskAction -Execute "powershell.exe" `
     -Argument ("-NoProfile -ExecutionPolicy Bypass -File `"{0}`" -SourceDir `"{1}`" -ArchiveDir `"{2}`"" -f $runScript, $SourceDir, $ArchiveDir)
@@ -133,7 +173,7 @@ Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
     -Principal $principal -Settings $settings -Force `
     -Description "Copies job-search tracker database exports into an archive the everyday account cannot modify or delete." | Out-Null
 
-# ---- 4. Prove it works now, not tomorrow at 3am ---------------------------
+# ---- 5. Prove it works now, not tomorrow at 3am ---------------------------
 Step "Running it once"
 Start-ScheduledTask -TaskName $TaskName
 $deadline = (Get-Date).AddSeconds(60)
@@ -145,7 +185,8 @@ $result = (Get-ScheduledTaskInfo -TaskName $TaskName).LastTaskResult
 
 Write-Host ""
 Write-Host "----- result -----"
-Write-Host "Task last run result: $result  (0 = clean, 2 = ran with warnings, anything else = look at the log)"
+Write-Host "Archive task last run result: $result  (0 = clean, 2 = ran with warnings, anything else = look at $ArchiveDir\archive.log)"
+Write-Host ("Nightly export '{0}' registered for {1} at {2}; archive '{3}' as SYSTEM at {4}." -f $ExportTaskName, $env:USERNAME, $ExportAt, $TaskName, $At)
 $archived = Get-ChildItem $ArchiveDir -Filter "*.sql" -File -ErrorAction SilentlyContinue
 Write-Host ("Archived backups: {0} file(s), {1:N1} MB" -f $archived.Count, (($archived | Measure-Object -Property Length -Sum).Sum / 1MB))
 Write-Host ""

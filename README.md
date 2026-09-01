@@ -267,7 +267,15 @@ Set it up once, from an **Administrator** PowerShell:
 That creates the archive, sets its ownership and permissions, installs its own
 copy of the archiver inside it (a task running as SYSTEM must never execute a
 script you can edit - that turns the task into free administrator access), and
-registers the daily job. Re-run it after changing `archive-backups.ps1`.
+registers both daily tasks: the export at 03:15 as you, the archive at 03:45 as
+SYSTEM. Re-run it after changing `archive-backups.ps1`.
+
+Neither task name matches `JobSearch-*`, which is what `setup-scheduler.ps1`
+sweeps for stale search tasks - a backup job silently unregistered by the next
+scheduler run is exactly the failure you'd only find out about when you needed
+it. The export runs under the same Interactive logon as the searches, so like
+them it only fires while you're logged in; the archive runs as SYSTEM and
+doesn't care.
 
 To restore, feed a `.sql` file back with `wrangler d1 execute <db> --remote
 --file <backup.sql>` - see `server/README.md`, which covers doing that against
