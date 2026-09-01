@@ -58,6 +58,32 @@ const DESTRUCTIVE = [
   },
 ];
 
+/**
+ * Paths that must not be deleted by a tool call, and the delete verbs to
+ * watch for.
+ *
+ * The backups are the only copy of the tracker's data that survives the
+ * Cloudflare account itself - Time Travel lives inside the account it
+ * protects, so a local export is the whole of the off-account story. A guard
+ * that stops an agent wiping the database but leaves it free to `rm` the
+ * exports protects nothing.
+ *
+ * The hook directory is here too, so the guard can't be removed by the thing
+ * it guards against. That is a speed bump, not a wall - see the honesty note
+ * at the bottom of this file.
+ *
+ * Verbs are matched at an invocation boundary, same as the wrangler rules, so
+ * a command that merely mentions a path isn't refused.
+ */
+const PROTECTED = /(?:private[\\/]+backups|[a-z]:[\\/]+vibecoding[\\/]+private(?![\w-])|\.claude[\\/]+hooks)/i;
+// No `|` in the boundary set, unlike the wrangler rules: a pipe appears inside
+// regex literals and quoted strings far more often than it precedes a delete,
+// and `|rm ` in someone's regex was enough to refuse an innocent command. A
+// piped `... | xargs rm` slips through as a result - accepted, because the
+// filesystem permissions are the real control and this is the reminder.
+const DELETE_VERB =
+  /(?:^|[;&(\n]\s*)(?:sudo\s+)?(?:rm|rmdir|unlink|del|erase|rd|remove-item|ri|clear-content|move-item|mv)\b/i;
+
 let input = "";
 process.stdin.on("data", (d) => (input += d));
 process.stdin.on("end", () => {
@@ -67,6 +93,25 @@ process.stdin.on("end", () => {
     command = (payload.tool_input && payload.tool_input.command) || "";
   } catch {
     process.exit(0); // Unparseable payload is not this hook's problem.
+  }
+
+  // Deleting the local backups, or the guard itself.
+  if (DELETE_VERB.test(command) && PROTECTED.test(command)) {
+    console.log(
+      JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason:
+            "Refused: this deletes (or moves) local backups or the hook guarding them. Those " +
+            "exports are the only copy of the tracker's data that survives losing the Cloudflare " +
+            "account - Time Travel lives inside the account it protects. Pruning old backups is a " +
+            "reasonable thing to want, but it's the person's call, not an agent's: say which files " +
+            "and let them run it.",
+        },
+      })
+    );
+    process.exit(0);
   }
 
   // Destruction first: these have no allowed variant, so there's nothing to
