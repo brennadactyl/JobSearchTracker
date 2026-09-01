@@ -202,15 +202,10 @@ export function buildSearchPrompt({ user, track, settings, feeds, coverage }) {
   // Steps 1c and 9d appear only once a track has company_sweeps rows. Gating
   // on the data rather than on a config flag keeps this off for every track
   // that hasn't been seeded, and turns it on for one that has, with nothing to
-  // remember to set - see migrations/0004_company_sweeps.sql.
+  // remember to set - see migrations/0005_company_sweeps.sql.
   const rotates = Number(coverage) > 0;
   const coverageStep = rotates
-    ? `1c. Decide which companies this run covers. The list in step 3 is longer than one run can verify properly, and covering all of it every night is what makes a run shallow - the failure isn't a company being missed, it's everything being skimmed. \`curl -s "$TRACKER_URL/api/coverage/${key}" -H "Authorization: Bearer $TRACKER_API_TOKEN"\` returns one row per company this search tracks, least-recently-swept first: \`{company, last_swept, board, note}\`. Cover, in this order:
-   (a) every company with a \`board\` recorded - one fetch there is both the discovery source and the verification, so they cost almost nothing and never rotate out;
-   (b) every company whose \`last_swept\` is a date more than 7 days ago - the staleness guarantee, and the one rule that overrides the cap;
-   (c) then, in the order the endpoint returned them, up to 8 more.
-   A company that has never been swept has an empty \`last_swept\` and sorts first of all, so a freshly seeded list gets worked through 8 a run over the following days. Empty is not stale: treating it as (b) would make the first run after seeding sweep the entire list at once, which is the thing this step exists to prevent.
-   Whatever broader discovery turns up is covered as well, regardless of this list.
+    ? `1c. Get this run's companies: \`curl -s "$TRACKER_URL/api/coverage/${key}" -H "Authorization: Bearer $TRACKER_API_TOKEN"\`. The server picks them - the least-recently-swept of the list, capped at what one run can actually verify - and returns \`{companies: [{company, last_swept, board, note}], total, batch}\`. **Cover exactly these, all of them**, and don't reach past them into the rest of the list in step 3: that list is longer than one run can do properly, and the failure mode isn't a company going uncovered for a day, it's every company being skimmed. They come back round - what you cover today sorts last tomorrow. \`board\` is a JSON endpoint already confirmed for that company (\`greenhouse\`, \`ashby\`, \`workday cxs\`, ...); it makes a company cheap to cover, not privileged - use it where it's there. Anything broader discovery turns up is covered as well, whether or not it is in this list.
 `
     : "";
   const sweepStep = rotates
@@ -257,7 +252,7 @@ ${intro}Do the following:
 1. Read \`${doc}\` - ${docSummary}. Follow its numbered process. The doc doesn't keep a found-postings table or a screened/dead-link list of its own - dedup data comes from step 1b instead.
 1b. Fetch what this track has already seen: \`curl -s "$TRACKER_URL/api/dedup/${key}" -H "Authorization: Bearer $TRACKER_API_TOKEN"\`. Scoped to this track and deliberately minimal. It returns \`leads[]\` as \`{id, url, status}\` - postings already tracked; keep each \`url\` and \`status\` on hand for step 8 (that's how you tell a stale lead nobody's touched from one ${name} has already applied to) and the \`id\` because delisting posts back against it - and \`screened[]\` as a plain list of urls already looked at and rejected, which is what stops you re-verifying the same dead or out-of-scope candidate every run. Don't fetch \`/api/data\` for this: it returns every field of every row across every track, which is far larger and grows every day.${dedupNote}
 ${coverageStep}2. ${resumeLine}
-3. Search ${rotates ? "the companies step 1c selected" : "target companies"}' careers sites (web search as backup) for current ${roleLine}. ${rotates ? "The full list this rotates through" : "Companies"}: ${companies}.${searchNote} Also run the doc's broader-discovery step.${exclusionNote}
+3. Search ${rotates ? "the step-1c companies" : "target companies"}' careers sites (web search as backup) for current ${roleLine}. ${rotates ? "Step 1c is the list for today, drawn from" : "Companies"}: ${companies}.${searchNote} Also run the doc's broader-discovery step.${exclusionNote}
 4. MANDATORY VERIFICATION: fetch every candidate URL directly and confirm it renders an actual job description (real title, responsibilities/qualifications - not a landing page, 404, "job not found," a loading placeholder, or a listing/index page that merely contains the title text). A search-snippet URL is a lead, not a finding, until opened and confirmed. If a site won't reveal real content, skip that company today rather than report something unverified.
 5. ${geoStep}
 6. ${locationGuidance}

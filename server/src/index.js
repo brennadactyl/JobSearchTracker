@@ -243,7 +243,7 @@ export default {
     }
 
     if ((m = url.pathname.match(/^\/api\/coverage\/([^/]+)$/)) && request.method === "GET") {
-      return handleGetCoverage(db, decodeURIComponent(m[1]));
+      return handleGetCoverage(db, decodeURIComponent(m[1]), url.searchParams.get("all") === "1");
     }
 
     if (url.pathname === "/api/coverage" && request.method === "POST") {

@@ -321,21 +321,39 @@ export class Db {
   // ---------------------------------------------------- company sweeps --
 
   /**
-   * One row per company this search tracks, least-recently-swept first so the
-   * caller can take the first N and be right. '' (never swept) sorts before
-   * any date, which is what makes a newly-seeded list get worked through
-   * before anything gets re-covered.
-   * @param {string} search @returns {Promise<{company: string, last_swept: string, board: string, note: string}[]>}
+   * The companies a run should cover, least-recently-swept first - '' (never
+   * swept) sorts before any date, so a freshly seeded list is worked through
+   * before anything is re-covered.
+   *
+   * The cap is applied here rather than described to the run, because a cap a
+   * model is asked to respect is not a cap. There is no privileged tier on top
+   * of it either: a cheap JSON board is a reason a company is quick to cover,
+   * not a reason to cover it every single night while the rest of the list
+   * waits.
+   *
+   * `limit` of 0 returns everything, for seeding and for looking at the table.
+   * @param {string} search @param {number} [limit]
+   * @returns {Promise<{company: string, last_swept: string, board: string, note: string}[]>}
    */
-  async getCoverage(search) {
+  async getCoverage(search, limit = 0) {
     const rows = await this.d1
       .prepare(
         `SELECT company, last_swept, board, note FROM company_sweeps
-         WHERE user_id = ? AND search = ? ORDER BY last_swept, company`
+         WHERE user_id = ? AND search = ? ORDER BY last_swept, company` +
+          (limit > 0 ? " LIMIT ?" : "")
       )
-      .bind(this.userId, search)
+      .bind(...(limit > 0 ? [this.userId, search, limit] : [this.userId, search]))
       .all();
     return rows.results;
+  }
+
+  /** @param {string} search @returns {Promise<number>} how many companies this search tracks */
+  async countCoverage(search) {
+    const row = await this.d1
+      .prepare("SELECT COUNT(*) AS n FROM company_sweeps WHERE user_id = ? AND search = ?")
+      .bind(this.userId, search)
+      .first();
+    return row ? row.n : 0;
   }
 
   /**

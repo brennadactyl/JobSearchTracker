@@ -37,8 +37,8 @@ last-attempted date; `POST /api/coverage` stamps it. Don't keep a parallel
 table here: what belongs in this doc is which companies are worth searching
 (Target Companies below) and what is known about fetching each one (Fetch
 efficiency above). A confirmed board endpoint belongs in both - here as the
-URL shape, and as `board` on the coverage row, which is what moves a company
-into the every-run tier.
+URL shape, and as `board` on the coverage row, so a run that draws that company
+knows it can be had in one fetch.
 
 ## Scope rules (apply on every run)
 

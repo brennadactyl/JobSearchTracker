@@ -181,7 +181,9 @@ await req("POST", "/api/coverage", { token: A_TOK, body: { search: "SWE", on: "2
 // By name, not by index: this file is meant to be re-run against a database
 // that still holds the last run's fixtures, and every check that assumed a
 // position broke the moment a later one added a row.
-const cov = (await req("GET", "/api/coverage/SWE", { token: A_TOK })).json.companies;
+// ?all=1: these two are about what the table holds, not about the slice a run
+// is handed, and the default response is capped.
+const cov = (await req("GET", "/api/coverage/SWE?all=1", { token: A_TOK })).json.companies;
 const at = (name) => cov.findIndex((c) => c.company === name);
 check("least-recently-swept sorts first", at("Globex") < at("Acme"), JSON.stringify(cov));
 const acme = cov[at("Acme")];
@@ -190,7 +192,7 @@ check("a later stamp keeps the board an earlier run confirmed",
   JSON.stringify(acme));
 await req("POST", "/api/coverage", { token: A_TOK, body: { search: "SWE", on: "",
   swept: [{ company: "Acme" }, { company: "Initech" }] } });
-const seeded = (await req("GET", "/api/coverage/SWE", { token: A_TOK })).json.companies;
+const seeded = (await req("GET", "/api/coverage/SWE?all=1", { token: A_TOK })).json.companies;
 check("registering with an empty date doesn't overwrite a real sweep",
   seeded.find((c) => c.company === "Acme").last_swept === "2026-08-28");
 check("a newly registered company sorts ahead of everything already swept",
@@ -203,14 +205,40 @@ check("an empty sweep list is refused rather than stamping nothing",
 check("B's coverage for the same track key is B's own",
   (await req("GET", "/api/coverage/SWE", { token: B_TOK })).json.companies.length === 0);
 check("the prompt gains the rotation steps once a track has rows",
-  (await req("GET", "/api/prompt/SWE", { token: A_TOK })).text.includes("1c. Decide which companies"));
+  (await req("GET", "/api/prompt/SWE", { token: A_TOK })).text.includes("1c. Get this run's companies"));
 check("and B's, with no rows, does not",
-  !(await req("GET", "/api/prompt/SWE", { token: B_TOK })).text.includes("1c. Decide which companies"));
-// A freshly seeded list is entirely never-swept. If the step reads that as
-// stale, the first run sweeps every company at once - the exact failure the
-// rotation exists to prevent, and it only shows up on day one.
-check("never-swept is not described as stale, or the cap means nothing on the first run",
-  !(await req("GET", "/api/prompt/SWE", { token: A_TOK })).text.includes("is empty or more than 7 days"));
+  !(await req("GET", "/api/prompt/SWE", { token: B_TOK })).text.includes("1c. Get this run's companies"));
+// The cap is the whole point, and it has to hold on the night it matters most:
+// a freshly seeded list, where every row is never-swept and nothing has a date
+// to sort by. It also has to be the *server's* cap - the prompt describing one
+// is what this replaced.
+// A's list, not B's - B is the "no coverage rows" control for the check above,
+// and seeding B here is what quietly broke it the first time. Company names are
+// unique per run, and there are enough of them that stamping one batch still
+// leaves a full batch of never-swept behind: that's what makes the last check
+// below true on a re-run against a database that kept the last run's rows.
+const runId = Date.now().toString(36);
+await req("POST", "/api/coverage", { token: A_TOK, body: { search: "SWE", on: "", swept:
+  Array.from({ length: 40 }, (_, i) => ({ company: `Co-${runId}-${String(i).padStart(2, "0")}` })) } });
+const due = (await req("GET", "/api/coverage/SWE", { token: A_TOK })).json;
+const all = (await req("GET", "/api/coverage/SWE?all=1", { token: A_TOK })).json;
+check("a run is handed a capped slice, not the whole list",
+  due.companies.length === 12 && due.batch === 12 && due.total > 12,
+  JSON.stringify({ n: due.companies.length, total: due.total, batch: due.batch }));
+check("?all=1 returns the whole table, for seeding and for looking",
+  all.companies.length === all.total && all.total === due.total);
+// The ordering contract the cap rests on: nothing already covered outranks
+// something never covered, and dates only ever go forwards down the list.
+const dates = all.companies.map((c) => c.last_swept);
+check("never-swept outranks swept, and older outranks newer",
+  dates.every((d, i) => i === 0 || d >= dates[i - 1]), JSON.stringify(dates.slice(0, 15)));
+const today = "2026-09-01";
+await req("POST", "/api/coverage", { token: A_TOK, body: { search: "SWE", on: today,
+  swept: due.companies.map((c) => ({ company: c.company })) } });
+const next = (await req("GET", "/api/coverage/SWE", { token: A_TOK })).json.companies;
+check("what a run covers goes to the back of the queue, not round again",
+  next.every((c) => c.last_swept !== today),
+  JSON.stringify(next.map((c) => `${c.company}:${c.last_swept}`).slice(0, 4)));
 
 console.log("\n== branched tracks ==");
 check("fed_by naming a track that isn't in the list is refused",

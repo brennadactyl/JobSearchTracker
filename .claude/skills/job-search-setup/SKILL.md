@@ -301,10 +301,10 @@ without stamping a date, which is what makes them sort first so the early runs
 work through the whole list before re-covering anything. Never seed with
 today's date: that claims a sweep that didn't happen and starts the rotation
 with no idea what it has actually seen. `board` is the JSON-board kind where
-one is already known (`greenhouse`, `ashby`, `lever`, `workday cxs`); those
-companies cost one fetch for discovery *and* verification, so they're covered
-every run rather than rotated. Leave it empty where you don't know - a run
-fills it in when it finds one. Seed against the track that *runs* the search:
+one is already known (`greenhouse`, `ashby`, `lever`, `workday cxs`); one fetch
+there covers discovery *and* verification, so it makes a company cheap to
+cover - it doesn't buy it a place in every run, the rotation is the rotation.
+Leave it empty where you don't know - a run fills it in when it finds one. Seed against the track that *runs* the search:
 a `fed_by` tab shares its feeder's coverage list, it doesn't get one of its
 own.
 

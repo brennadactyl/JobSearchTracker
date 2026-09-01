@@ -194,15 +194,35 @@ export async function handleGetDedup(db, key) {
   return json(await db.getDedupData(key));
 }
 
-// The rotation's memory: which companies this search has covered and when,
-// least-recently-swept first. Same 404-on-unknown-track reasoning as the dedup
-// route - an empty list from a mistyped key would read as "nothing has ever
-// been swept" and send the run at the whole company list at once.
-export async function handleGetCoverage(db, key) {
+// How many companies one run covers. A whole list is more than a run can
+// verify properly, and the failure isn't that a company gets missed - it's
+// that all of them get skimmed. Twelve is the number that keeps a list the
+// size these actually are (35-60) inside a week's cycle while leaving a run's
+// budget for what it's for: opening every candidate posting and confirming it
+// renders a real job description.
+//
+// A constant, not config: nobody has wanted a different number, and a setting
+// nobody sets is a setting that goes stale. It moves here the day someone does.
+export const COVERAGE_BATCH = 12;
+
+// Which companies this run covers, chosen by the server. Least-recently-swept
+// first, capped - the run is told what to sweep rather than how to choose,
+// because a cap in prose is a cap a run can talk itself out of on a night when
+// the list looks short. `?all=1` returns the whole table instead, for seeding
+// and for looking at it.
+//
+// Same 404-on-unknown-track reasoning as the dedup route: an empty list from a
+// mistyped key would read as "nothing to sweep", and a run would quietly
+// search nothing at all.
+export async function handleGetCoverage(db, key, all = false) {
   if (!(await db.trackExists(key))) {
     return json({ error: `unknown track "${key}" - not in the configured tracks` }, 404);
   }
-  return json({ companies: await db.getCoverage(key) });
+  const [companies, total] = await Promise.all([
+    db.getCoverage(key, all ? 0 : COVERAGE_BATCH),
+    db.countCoverage(key),
+  ]);
+  return json({ companies, total, batch: all ? total : COVERAGE_BATCH });
 }
 
 // Records what a run actually attempted. Attempted, not found: a company whose
@@ -285,7 +305,7 @@ export async function handleGetPrompt(db, user, key) {
   const feeds = config.tracks.filter((t) => t.fed_by === key);
   // Whether this search rotates through its company list, which is true once
   // it has any coverage rows at all - see buildSearchPrompt.
-  const coverage = (await db.getCoverage(key)).length;
+  const coverage = await db.countCoverage(key);
 
   return text(buildSearchPrompt({ user, track, settings: config.settings, feeds, coverage }));
 }
