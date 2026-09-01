@@ -172,6 +172,23 @@ export const APP_STAGE_DATE_FIELDS = [
   "dateOffer", "dateRejected", "dateWithdrawn",
 ];
 
+// The `reason` written on the screened row that a delisted lead leaves
+// behind. It used to be a bare string literal at the one call site that
+// needed it (api.js's removeDelistedLead), which was fine while nothing read
+// it back. countRunActivity now does: since 0004_drop_lead_delisted_on.sql the
+// lead row is deleted outright, so this screened row is the *only* surviving
+// evidence that a posting came down, and matching on this exact text is what
+// separates "a posting we were tracking died" from "a candidate we looked at
+// and rejected". Two copies of a string that a run's delisted count silently
+// depends on is one copy too many, so it lives here beside EXTRA_FIELDS for
+// the same reason those do - one definition, not two that can drift.
+//
+// migrations/0004_drop_lead_delisted_on.sql hardcodes this same text in SQL
+// and cannot import it. If this ever changes, that file is the other place to
+// look - though changing it also silently reclassifies every historical row,
+// which is a good reason not to.
+export const DELISTED_REASON = "posting taken down";
+
 // Everything on a track row that isn't its identity (key) or its ordering.
 // Split in two because the two halves have different audiences: the first is
 // read by the client to draw tabs, the second only by prompt.js to compose
@@ -596,6 +613,68 @@ export class Db {
   }
 
   // ------------------------------------------------------------- runs --
+
+  /**
+   * What one track actually gained on one date, counted from the rows
+   * themselves. This is what a run record's three numbers are derived from
+   * instead of being taken from the caller - see api.js's handleRecordRun for
+   * why the caller's own tally isn't trusted.
+   *
+   * Three counts, three different places they can be read from, and only one
+   * of them is obvious:
+   *
+   *   - `leadsAdded` is leads filed under this key with `found` = this date.
+   *     `found` rather than an insert timestamp because that is the column the
+   *     table actually has, and it is the date the run itself supplies.
+   *   - `delisted` is counted out of `screened`, not out of `leads`, and that
+   *     is not a stylistic choice: 0004_drop_lead_delisted_on.sql removed
+   *     leads.delistedOn, and removeDelistedLead now DELETEs the lead and
+   *     writes a screened row in its place. By the time anything could count
+   *     the delisting, the lead row is gone - the screened row carrying
+   *     DELISTED_REASON is the only trace left.
+   *   - `screenedAdded` is therefore everything else screened that day. The
+   *     two live in the same table on the same date under the same key, so
+   *     without splitting them on the reason string every delisting would be
+   *     counted twice, once in each column.
+   *
+   * A multi-tab run calls this once per tab; each key counts only its own
+   * rows, which is the whole point of deriving them here.
+   *
+   * @param {string} key - track key
+   * @param {string} on - YYYY-MM-DD, the run's own local date
+   * @returns {Promise<{leadsAdded: number, screenedAdded: number, delisted: number}>}
+   */
+  async countRunActivity(key, on) {
+    const [leads, screened] = await Promise.all([
+      this.d1
+        .prepare("SELECT COUNT(*) AS n FROM leads WHERE user_id = ? AND search = ? AND found = ?")
+        .bind(this.userId, key, on)
+        .first(),
+      // One pass over the day's screened rows rather than two queries that
+      // would have to agree with each other about what "not delisted" means.
+      // The two reason binds come before this.userId here, unlike everywhere
+      // else in this file: `?` is positional and these two sit in the SELECT
+      // list, which SQLite reads before the WHERE clause. The user scope is
+      // still the first thing the WHERE clause does, as it is in every other
+      // statement here - a count is exactly the kind of query where another
+      // person's rows would land in this one's total and still look plausible.
+      this.d1
+        .prepare(
+          `SELECT SUM(CASE WHEN reason = ? THEN 1 ELSE 0 END) AS delisted,
+                  SUM(CASE WHEN reason <> ? THEN 1 ELSE 0 END) AS screened
+             FROM screened WHERE user_id = ? AND search = ? AND date = ?`
+        )
+        .bind(DELISTED_REASON, DELISTED_REASON, this.userId, key, on)
+        .first(),
+    ]);
+    // SUM over zero rows is NULL in SQLite, not 0, and a quiet day is the
+    // normal case here - so both sums are floored rather than passed through.
+    return {
+      leadsAdded: (leads && leads.n) || 0,
+      screenedAdded: (screened && screened.screened) || 0,
+      delisted: (screened && screened.delisted) || 0,
+    };
+  }
 
   /**
    * @param {string} key
