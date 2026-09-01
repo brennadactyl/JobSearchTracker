@@ -1092,8 +1092,9 @@ function leadsTab(key){
   // and moved to the Applications tab (see setLeadStatus()). The row itself
   // stays in state.leads/the DB, which URL dedup needs. A lead whose posting
   // has been taken down isn't filtered out here because it isn't in
-  // state.leads at all - the daily search deletes it (POST /api/delete-lead),
-  // so there's no dead-posting state left for this function to know about.
+  // state.leads at all - the server deletes it when a search reports it dead
+  // (see api.js's removeDelistedLead), so there's no dead-posting state left
+  // for this function to know about.
   // `tracked` keeps the unfiltered set only so the empty state below can tell
   // a search that has never found anything from one whose finds have all been
   // applied to.
@@ -1496,8 +1497,8 @@ function replaceById(list,item){
 // The lead row itself is untouched beyond its status: it stays in
 // state.leads/the DB (URL dedup needs it to still exist), it just no longer
 // shows in the Leads tab - see leadsTab(). It's also the one kind of lead the
-// daily search will never delete when its posting comes down: an application
-// row points at this id. See api.js's handleDeleteLead.
+// server will never delete when its posting comes down: an application row
+// points at this id. See api.js's removeDelistedLead.
 function setLeadStatus(id,value){
   setSaved("Saving…",false);
   api("/api/leads/"+id+"/status",{method:"POST",body:JSON.stringify({status:value})}).then(function(res){

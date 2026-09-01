@@ -298,9 +298,8 @@ export class Db {
    * keeps it roughly flat instead.
    *
    * `status` is here because the run needs it to tell a stale lead nobody has
-   * touched from one already applied to - the applied ones are exactly the
-   * rows a run must never delete; `id` because a posting confirmed dead posts
-   * back against it (see deleteLeadAndScreen).
+   * touched from one already applied to; `id` because a posting confirmed
+   * dead posts back against it (see api.js's removeDelistedLead).
    * @param {string} trackKey
    * @returns {Promise<{leads: Array<{id: number, url: string, status: string}>, screened: string[]}>}
    */
@@ -781,14 +780,14 @@ export class Db {
 
   /**
    * Atomically (one D1 batch/transaction) deletes a lead and records its URL
-   * in `screened` - what the daily search does when a posting it tracked is
-   * confirmed gone from the internet.
+   * in `screened` - the mechanism behind api.js's removeDelistedLead, which
+   * owns the decision about when this should happen at all.
    *
    * Both halves have to land together, and they fail in opposite directions:
    * the delete alone leaves a URL nothing remembers, so tomorrow's run
    * rediscovers it and adds it back as a brand-new lead; the screened row
    * alone permanently hides a lead that is still sitting in the tab. Hence one
-   * batch rather than two calls from the run.
+   * batch rather than two writes.
    *
    * The screened insert is ordered first so that the recoverable direction is
    * the one a partial failure can take: a screened row with its lead still
@@ -796,14 +795,18 @@ export class Db {
    * because (user, search, url) is unique and a re-reported posting is a
    * no-op, not an error.
    *
+   * The screened row it leaves behind is all that remains of the lead, so it
+   * carries the company/title/location too, not just the URL - enough to read
+   * later as "this is what was here and when it went".
+   *
    * Deleting an "Applied" lead would strand the application row pointing at
-   * its id - see api.js's handleDeleteLead, which refuses those before
-   * reaching this method.
+   * its id; removeDelistedLead keeps those and never calls this for them.
    * @param {Lead} lead - the already-fetched row, so this doesn't re-read it
    * @param {string} reason - short human-readable note stored on the screened row
+   * @param {string|null} date - YYYY-MM-DD the posting was confirmed dead (the run's own local date), or null for today
    * @returns {Promise<boolean>} true if the lead row was actually deleted
    */
-  async deleteLeadAndScreen(lead, reason) {
+  async deleteLeadAndScreen(lead, reason, date = null) {
     const results = await this.d1.batch([
       this.d1
         .prepare(
@@ -818,7 +821,7 @@ export class Db {
           lead.title || "",
           lead.location || "",
           reason,
-          today()
+          date || today()
         ),
       this.d1
         .prepare("DELETE FROM leads WHERE id = ? AND user_id = ?")

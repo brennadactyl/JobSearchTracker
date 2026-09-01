@@ -67,7 +67,12 @@
  *                            purpose-built routes below instead, which
  *                            validate the value and own the side effects
  *                            (application creation, stage-date stamping)
- *                            that a plain field write can't.
+ *                            that a plain field write can't. `delistedOn` is
+ *                            the one field the server acts on rather than
+ *                            stores: a search reporting a posting taken down
+ *                            gets the lead deleted and its URL screened,
+ *                            unless it's been applied to, in which case it's
+ *                            kept - see api.js's removeDelistedLead.
  *   POST /api/leads/:id/status       requires Bearer token -> body: { status }
  *                            validates against LEAD_STATUS; if the new
  *                            status is "Applied", atomically (one D1
@@ -86,12 +91,6 @@
  *   POST /api/delete-application  requires Bearer token -> body: { id } ->
  *                            removes one application row (used by the
  *                            client's "remove" control)
- *   POST /api/delete-lead    requires Bearer token -> body: { id, reason? } ->
- *                            the daily search reporting a tracked posting is
- *                            gone: deletes the lead and records its URL in
- *                            `screened` in one transaction, so tomorrow's run
- *                            doesn't rediscover it and add it back. 409s on a
- *                            lead marked "Applied" - those are never deleted
  *   GET  /api/config         requires Bearer token -> { tracks[], settings }
  *                            - this user's config (track tabs, tab labels,
  *                            display title, priority-location rules,
@@ -138,7 +137,6 @@ import {
   handleSetLeadStatus,
   handleSetApplicationStatus,
   handleDeleteApplication,
-  handleDeleteLead,
   handleGetConfig,
   handleSetConfig,
   handleGetData,
@@ -226,10 +224,6 @@ export default {
 
     if (url.pathname === "/api/delete-application" && request.method === "POST") {
       return handleDeleteApplication(request, db);
-    }
-
-    if (url.pathname === "/api/delete-lead" && request.method === "POST") {
-      return handleDeleteLead(request, db);
     }
 
     return new Response("Not found", { status: 404, headers: CORS_HEADERS });
