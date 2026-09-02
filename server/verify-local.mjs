@@ -641,6 +641,56 @@ check("B's lead is still there afterwards",
 check("and no screened row was invented in B's data",
   !(await req("GET", "/api/data", { token: B_TOK })).json.screened.some((sc) => sc.reason === "should not work"));
 
+console.log("\n== a person's pruning is not the search's work ==");
+// Two changes that are each right alone: run counts derive from rows, and a
+// person removing a posting writes a screened row so it isn't rediscovered.
+// Together they let one person's pruning be reported as the night's search
+// work. Measured before the fix: one hand-deletion moved a run record from
+// {leads:3, screened:2} to {leads:2, screened:3}.
+const attrDay = new Date().toISOString().slice(0, 10);
+const aStamp = Date.now();
+const amk = (n) => ({ search: "SWE", company: "Acme", title: "Attr" + n, url: `https://attr.example.com/jobs/${aStamp}${n}` });
+await req("POST", "/api/leads", { token: B_TOK, body: { on: attrDay, leads: [amk(41), amk(42), amk(43)] } });
+await req("POST", "/api/screened", { token: B_TOK, body: { search: "SWE", on: attrDay, screened: [
+  { search: "SWE", url: `https://attr.example.com/jobs/${aStamp}44`, reason: "below target level" }] } });
+const attrBase = (await req("POST", "/api/runs", { token: B_TOK, body: { search: "SWE", status: "ok", on: attrDay } })).json.run;
+
+const attrLeads = (await req("GET", "/api/data", { token: B_TOK })).json.leads
+  .filter((l) => l.url.startsWith(`https://attr.example.com/jobs/${aStamp}`));
+const handDel = await req("POST", "/api/delete-leads", { token: B_TOK, body: {
+  ids: [attrLeads[0].id], reason: "not interested" } });
+check("a hand removal deletes the lead and screens its url", handDel.json.removed === 1, JSON.stringify(handDel.json));
+const attrAfter = (await req("POST", "/api/runs", { token: B_TOK, body: { search: "SWE", status: "ok", on: attrDay } })).json.run;
+check("it does not turn up in the run's screened count",
+  attrAfter.screened_added === attrBase.screened_added,
+  JSON.stringify({ before: attrBase.screened_added, after: attrAfter.screened_added }));
+check("nor in its delisted count",
+  attrAfter.delisted === attrBase.delisted,
+  JSON.stringify({ before: attrBase.delisted, after: attrAfter.delisted }));
+
+// `added_by` must be a closed set: every write path sets it explicitly, so ''
+// means exactly "written before the column existed" and nothing else. A new ''
+// appearing is a code path that forgot, and the column stops meaning anything.
+const attrRows = (await req("GET", "/api/data", { token: B_TOK })).json.screened
+  .filter((s) => s.url.startsWith(`https://attr.example.com/jobs/${aStamp}`));
+check("both write paths stamp added_by - '' stays a closed historical set",
+  attrRows.length === 2 && attrRows.every((s) => s.added_by === "run" || s.added_by === "hand"),
+  JSON.stringify(attrRows.map((s) => ({ by: s.added_by, reason: s.reason.slice(0, 24) }))));
+check("the search's row is 'run' and the person's is 'hand'",
+  attrRows.some((s) => s.added_by === "run" && s.reason === "below target level") &&
+  attrRows.some((s) => s.added_by === "hand" && s.reason === "not interested"),
+  JSON.stringify(attrRows.map((s) => s.added_by + ":" + s.reason.slice(0, 20))));
+
+// A delisting report is a run's work and must still count as delisted.
+const delUrl = `https://attr.example.com/jobs/${aStamp}51`;
+await req("POST", "/api/leads", { token: B_TOK, body: { on: attrDay, leads: [
+  { search: "SWE", company: "Acme", title: "Doomed", url: delUrl }] } });
+await req("POST", "/api/delist", { token: B_TOK, body: { search: "SWE", on: attrDay, urls: [delUrl] } });
+const attrDelisted = (await req("POST", "/api/runs", { token: B_TOK, body: { search: "SWE", status: "ok", on: attrDay } })).json.run;
+check("a delisting reported by the search still counts as delisted",
+  attrDelisted.delisted === attrBase.delisted + 1,
+  JSON.stringify({ before: attrBase.delisted, after: attrDelisted.delisted }));
+
 console.log("\n== purging a retired search ==");
 // A's track list is now just DATA (above), so SWE is retired for A and its
 // rows are eligible. B still has a live SWE, which is what makes the
