@@ -555,5 +555,52 @@ check("A's old track is gone for A", (await req("GET", "/api/config", { token: a
 check("A's leads survive their track being removed",
   mine((await req("GET", "/api/data", { token: aSecond.json.token })).json.leads, sharedUrl) === 1);
 
+console.log("\n== purging a retired search ==");
+// A's track list is now just DATA (above), so SWE is retired for A and its
+// rows are eligible. B still has a live SWE, which is what makes the
+// cross-user and still-configured guards testable in the same breath.
+const A2 = aSecond.json.token;
+check("a session token cannot reach the purge route, only the admin secret",
+  (await req("POST", "/api/purge", { token: A2, body: { user: "Ada", search: "SWE" } })).status === 401);
+check("no token at all is 401",
+  (await req("POST", "/api/purge", { body: { user: "Ada", search: "SWE" } })).status === 401);
+check("an unknown user is 404, not a silent no-op",
+  (await req("POST", "/api/purge", { admin: true, body: { user: "Nobody", search: "SWE" } })).status === 404);
+const liveGuard = await req("POST", "/api/purge", { admin: true, body: { user: "Bo", search: "SWE" } });
+check("purging a key that is still a configured track is refused",
+  liveGuard.status === 409 && /configured track/.test(liveGuard.json.error), liveGuard.text.slice(0, 140));
+
+const dry = await req("POST", "/api/purge", { admin: true, body: { user: "Ada", search: "SWE", dryRun: true } });
+check("dryRun reports what it would remove and removes nothing",
+  dry.json.dryRun === true && dry.json.wouldPurge.leads > 0 &&
+  (await req("GET", "/api/data", { token: A2 })).json.leads.some((l) => l.search === "SWE"),
+  JSON.stringify(dry.json));
+
+// An application pointing at a lead that is about to be deleted. The record of
+// having applied is the least recoverable thing here - the posting is gone
+// from the internet too - so it must survive with its pointer cleared.
+const appLead = (await req("GET", "/api/data", { token: A2 })).json.leads.find((l) => l.search === "SWE");
+await req("POST", `/api/leads/${appLead.id}/status`, { token: A2, body: { status: "Applied" } });
+const appsBefore = (await req("GET", "/api/data", { token: A2 })).json.applications;
+const linked = appsBefore.find((a) => String(a.leadId) === String(appLead.id));
+check("the fixture application is linked to a lead about to be purged", !!linked);
+
+const purged = await req("POST", "/api/purge", { admin: true, body: { user: "Ada", search: "SWE" } });
+check("purging removes the retired search's leads and screened rows",
+  purged.json.purged.leads > 0 && purged.json.purged.screened >= 0, JSON.stringify(purged.json));
+const afterPurge = await req("GET", "/api/data", { token: A2 });
+check("nothing is left under that search",
+  !afterPurge.json.leads.some((l) => l.search === "SWE") &&
+  !afterPurge.json.screened.some((s) => s.search === "SWE"));
+check("the application survived, un-pointed rather than deleted",
+  afterPurge.json.applications.length === appsBefore.length &&
+  afterPurge.json.applications.find((a) => a.id === linked.id).leadId === "",
+  JSON.stringify(afterPurge.json.applications.find((a) => a.id === linked.id) || null));
+check("B's identically-keyed live track is untouched",
+  (await req("GET", "/api/data", { token: B_TOK })).json.leads.some((l) => l.search === "SWE"));
+const twice = await req("POST", "/api/purge", { admin: true, body: { user: "Ada", search: "SWE" } });
+check("purging again is a no-op, not an error",
+  twice.status === 200 && twice.json.purged.leads === 0, twice.text.slice(0, 120));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

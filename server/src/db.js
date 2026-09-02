@@ -494,6 +494,81 @@ export class Db {
   }
 
   /**
+   * How many rows a retired search still has, per table. Read-only, and the
+   * thing a purge should be able to show someone before it runs.
+   * @param {string} key
+   * @returns {Promise<{leads: number, screened: number, sweeps: number, runs: number, applications: number}>}
+   */
+  async countSearchRows(key) {
+    const one = async (sql) =>
+      ((await this.d1.prepare(sql).bind(this.userId, key).first()) || {}).n || 0;
+    const [leads, screened, sweeps, runs] = await Promise.all([
+      one("SELECT COUNT(*) AS n FROM leads WHERE user_id = ? AND search = ?"),
+      one("SELECT COUNT(*) AS n FROM screened WHERE user_id = ? AND search = ?"),
+      one("SELECT COUNT(*) AS n FROM company_sweeps WHERE user_id = ? AND search = ?"),
+      one("SELECT COUNT(*) AS n FROM search_runs WHERE user_id = ? AND track_key = ?"),
+    ]);
+    // Applications don't carry a search of their own; they point at a lead id.
+    // This is the count that would be left pointing at nothing.
+    const apps = await this.d1
+      .prepare(
+        `SELECT COUNT(*) AS n FROM applications
+          WHERE user_id = ? AND leadId != ''
+            AND leadId IN (SELECT CAST(id AS TEXT) FROM leads WHERE user_id = ? AND search = ?)`
+      )
+      .bind(this.userId, this.userId, key)
+      .first();
+    return { leads, screened, sweeps, runs, applications: (apps && apps.n) || 0 };
+  }
+
+  /**
+   * Removes every trace of one retired search: its leads, the postings it
+   * screened, its slice of the company rotation, and its run record.
+   *
+   * All four tables in one transaction, because a half-purged search is worse
+   * than an un-purged one - screened rows with no leads still suppress
+   * rediscovery, and a surviving rotation slice still hands companies to a
+   * search that no longer exists.
+   *
+   * ---- Applications are kept, and un-pointed rather than deleted. An
+   * application row references its originating lead by id, and that lead is
+   * about to stop existing. Deleting the application would throw away the
+   * record of having applied to a job, which is the single least recoverable
+   * thing in this database - the posting is gone from the internet too, so
+   * nothing could reconstruct it. Leaving the id would leave a pointer into
+   * nothing. So `leadId` is cleared to '', which the schema already defines as
+   * "added by hand" (see migrations/0001_schema.sql) - exactly what such a row
+   * becomes once the lead behind it is gone.
+   *
+   * Deliberately no status check. deleteLeadAndScreen refuses to remove an
+   * applied-to lead, because there it is acting on one posting's report of
+   * being taken down and the application is the thing still being tracked.
+   * This is a different operation: the whole search is being retired on
+   * purpose, and the caller has said so. The applications survive it either
+   * way, which is what makes that safe.
+   *
+   * @param {string} key
+   * @returns {Promise<{leads: number, screened: number, sweeps: number, runs: number, applications: number}>} rows affected
+   */
+  async purgeSearch(key) {
+    const before = await this.countSearchRows(key);
+    await this.d1.batch([
+      this.d1
+        .prepare(
+          `UPDATE applications SET leadId = ''
+            WHERE user_id = ? AND leadId != ''
+              AND leadId IN (SELECT CAST(id AS TEXT) FROM leads WHERE user_id = ? AND search = ?)`
+        )
+        .bind(this.userId, this.userId, key),
+      this.d1.prepare("DELETE FROM leads WHERE user_id = ? AND search = ?").bind(this.userId, key),
+      this.d1.prepare("DELETE FROM screened WHERE user_id = ? AND search = ?").bind(this.userId, key),
+      this.d1.prepare("DELETE FROM company_sweeps WHERE user_id = ? AND search = ?").bind(this.userId, key),
+      this.d1.prepare("DELETE FROM search_runs WHERE user_id = ? AND track_key = ?").bind(this.userId, key),
+    ]);
+    return before;
+  }
+
+  /**
    * Replaces this user's whole track list in one batch (one real transaction)
    * and keeps `search_runs` 1:1 with it - a new track gets an empty "never
    * ran" row, a removed track's run row goes with it. Scoped to this user

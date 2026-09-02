@@ -42,6 +42,21 @@
  *                            resets an existing one's password. There is no
  *                            self-signup; this is how people are provisioned.
  *   GET  /api/me             requires Bearer token -> { id, name }
+ *   POST /api/purge          requires the ADMIN_TOKEN secret as Bearer ->
+ *                            body: { user, search, dryRun? } - removes every
+ *                            row belonging to a RETIRED search: its leads,
+ *                            the postings it screened, its slice of the
+ *                            company rotation, and its run record, in one
+ *                            transaction. Application rows survive with their
+ *                            `leadId` cleared, so the record of having
+ *                            applied is never lost to this. 409s if the key
+ *                            is still a configured track - retiring the track
+ *                            is the deliberate step that makes its data
+ *                            eligible, and that guard is what keeps a typo
+ *                            from emptying a live tab. `dryRun` reports the
+ *                            counts without deleting. The only destructive
+ *                            route in the API, and the only write a scheduled
+ *                            search cannot reach.
  *   GET  /api/data           requires Bearer token -> { user, updated, leads[], applications[], screened[], tracks[], settings }
  *   POST /api/leads          requires Bearer token -> body: { on?, leads: [...] }
  *                            appends leads whose posting this user doesn't
@@ -202,6 +217,7 @@ import {
   handleLogin,
   handleLogout,
   handleUpsertUser,
+  handlePurgeSearch,
   handleGetMe,
   handleGetDedup,
   handleGetCoverage,
@@ -236,6 +252,13 @@ export default {
 
     if (url.pathname === "/api/users" && request.method === "POST") {
       return handleUpsertUser(request, env, env.DB);
+    }
+
+    // Admin-gated like /api/users, and for the same reason: it names its
+    // subject rather than being the caller. Sits here, above the session
+    // lookup, so a session token is not even a candidate credential for it.
+    if (url.pathname === "/api/purge" && request.method === "POST") {
+      return handlePurgeSearch(request, env, env.DB);
     }
 
     const token = bearer(request);
