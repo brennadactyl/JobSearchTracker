@@ -1096,7 +1096,12 @@ export async function handleDeleteLeads(request, db) {
       kept.push(lead.id);
       continue;
     }
-    if (await db.deleteLeadAndScreen(lead, reason)) removed++;
+    // 'hand': a person is clearing this off their own board, which is not the
+    // night's search work and must not be counted as it. The screened row is
+    // still written, so tomorrow's run doesn't rediscover and re-add the
+    // posting - it just isn't attributed to a run. See
+    // migrations/0007_screened_added_by.sql.
+    if (await db.deleteLeadAndScreen(lead, reason, null, "hand")) removed++;
   }
 
   if (removed) await db.touchUpdated();
@@ -1167,7 +1172,7 @@ async function delistLead(db, lead, on) {
   // It no longer feeds the tracker's `delisted` count - countRunActivity
   // derives that from the screened rows a delisting leaves behind, precisely so
   // it doesn't depend on a caller adding these up correctly.
-  const removed = await db.deleteLeadAndScreen(lead, DELISTED_REASON, on);
+  const removed = await db.deleteLeadAndScreen(lead, DELISTED_REASON, on, "run");
   return { kept: false, removed };
 }
 

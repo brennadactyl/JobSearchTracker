@@ -737,9 +737,15 @@ export class Db {
       // would have to agree with each other about what "not delisted" means.
       this.d1
         .prepare(
+          // `added_by = 'run'` is the whole point of migration 0007: a person
+          // clearing a posting off their board also writes a screened row, and
+          // without this it lands in the night's numbers as work the search
+          // did. Rows predating the column are '' and count as neither, which
+          // under-reports one day's history rather than inventing any.
           `SELECT SUM(CASE WHEN reason = ? THEN 1 ELSE 0 END) AS delisted,
                   SUM(CASE WHEN reason <> ? THEN 1 ELSE 0 END) AS screened
-             FROM screened WHERE user_id = ? AND search = ? AND date = ?`
+             FROM screened
+            WHERE user_id = ? AND search = ? AND date = ? AND added_by = 'run'`
         )
         .bind(DELISTED_REASON, DELISTED_REASON, this.userId, key, on)
         .first(),
@@ -1103,8 +1109,12 @@ export class Db {
     if (fresh.length === 0) return { added: 0, duplicates };
 
     const stmt = this.d1.prepare(
-      `INSERT OR IGNORE INTO screened (user_id, search, url, company, title, location, reason, date)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      // added_by is hardcoded 'run' rather than taken from the caller: this
+      // path is POST /api/screened, which exists for a search reporting what
+      // it ruled out. A person removing a posting goes through
+      // deleteLeadAndScreen instead. See migrations/0007_screened_added_by.sql.
+      `INSERT OR IGNORE INTO screened (user_id, search, url, company, title, location, reason, date, added_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'run')`
     );
     const batch = fresh.map((item) =>
       stmt.bind(
@@ -1288,14 +1298,34 @@ export class Db {
    * @param {Lead} lead - the already-fetched row, so this doesn't re-read it
    * @param {string} reason - short human-readable note stored on the screened row
    * @param {string|null} date - YYYY-MM-DD the posting was confirmed dead (the run's own local date), or null for today
+   * @param {'run'|'hand'} addedBy - who removed it. Required rather than
+   *   defaulted: both callers know the answer, and a default would silently
+   *   attribute one to the other the next time a third caller appears. A
+   *   search reporting a posting gone is 'run'; a person clearing it off their
+   *   board is 'hand'. countRunActivity counts only 'run', which is what stops
+   *   a person's pruning being reported as the night's search work - see
+   *   migrations/0007_screened_added_by.sql.
    * @returns {Promise<boolean>} true if the lead row was actually deleted
    */
-  async deleteLeadAndScreen(lead, reason, date = null) {
+  async deleteLeadAndScreen(lead, reason, date, addedBy) {
+    // Refused rather than coerced. A ternary picking a fallback here would be
+    // the very default the parameter exists to prevent - a caller that forgets
+    // the argument passes `undefined`, which JavaScript reports as nothing at
+    // all, and its rows would be silently counted as the night's search work.
+    // That is this file's own bug, reintroduced at the one line that promises
+    // it cannot happen. Falling back to '' instead would fail safe but let ''
+    // grow, and 0007 states in writing that it does not.
+    //
+    // Both call sites are in this repo and a test covers the refusal, so this
+    // throws on a programming error rather than on anything a request can do.
+    if (addedBy !== "run" && addedBy !== "hand") {
+      throw new Error(`deleteLeadAndScreen: addedBy must be 'run' or 'hand', got ${JSON.stringify(addedBy)}`);
+    }
     const results = await this.d1.batch([
       this.d1
         .prepare(
-          `INSERT OR IGNORE INTO screened (user_id, search, url, company, title, location, reason, date)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT OR IGNORE INTO screened (user_id, search, url, company, title, location, reason, date, added_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .bind(
           this.userId,
@@ -1305,7 +1335,8 @@ export class Db {
           lead.title || "",
           lead.location || "",
           reason,
-          date || today()
+          date || today(),
+          addedBy
         ),
       this.d1
         .prepare("DELETE FROM leads WHERE id = ? AND user_id = ?")

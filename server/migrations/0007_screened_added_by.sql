@@ -1,0 +1,95 @@
+-- Records who put a row in `screened`: a search, or a person.
+--
+-- Two changes landed on the same day and interact badly. Run records stopped
+-- trusting the caller's tally and started deriving their counts from the rows
+-- themselves (countRunActivity in src/db.js). Independently, POST
+-- /api/delete-leads let a person remove a posting from their board, and it
+-- writes a `screened` row so the next run doesn't rediscover and re-add it.
+--
+-- Both are right on their own. Together, countRunActivity attributes every
+-- screened row carrying (search, date) to that date's *run*, so a person
+-- pruning their own board makes the nightly search's record claim work the
+-- search never did. Measured against a local copy of this schema, a single
+-- hand-deletion moved one run record from {leads:3, screened:2} to
+-- {leads:2, screened:3}. On the live deployment the same afternoon, 242
+-- hand-removals landed against tracks whose stored records read screened=0 and
+-- screened=6 - true only because those records were written hours earlier and
+-- nothing recomputes them. Recompute one and it moves by 94.
+--
+-- ---- Why a column and not the `reason` string.
+-- The obvious cheaper answer is to encode this in `reason`, and src/api.js
+-- already demonstrates why that fails: DELISTED_REASON ("posting taken down")
+-- had to be *reserved* from callers, because a run screening a dead-on-arrival
+-- candidate would very reasonably describe it in exactly those words and be
+-- counted as a delisting. Stacking a second reserved meaning onto the same
+-- free-text field repeats the mistake the reservation exists to prevent.
+-- Provenance is a fact about which code path wrote the row, so the code path
+-- sets it and no caller can supply it.
+--
+-- ---- Why `added_by` and not `source`.
+-- `source` is already a column on both `leads` and `applications` (EXTRA_FIELDS
+-- in src/db.js), where it means "where did you find this posting" - freeform,
+-- user-entered. A third `source`, in the same schema, meaning something else
+-- entirely, is a trap for whoever next reads all three.
+ALTER TABLE screened ADD COLUMN added_by TEXT NOT NULL DEFAULT '';
+
+-- ---- The backfill, and the one day it deliberately does not cover.
+--
+-- POST /api/delete-leads did not exist before 2026-09-02, so every screened row
+-- dated earlier than that was necessarily written by a search - through
+-- /api/screened, or by a delisting report.
+--
+-- That holds mechanically, not just by the route's age, which matters because
+-- an age argument stops being checkable and a signature doesn't. A
+-- hand-removal reaches the database only through deleteLeadAndScreen, and
+-- handleDeleteLeads passes it no date, so the row is stamped server-side with
+-- the day it happened. There is no caller path that backdates one. Runs *can*
+-- backdate - /api/screened takes a top-level `on` and a delisting report
+-- passes the run's own local date - but those are run rows, where 'run' is the
+-- right answer anyway. The asymmetry runs in this statement's favour.
+--
+-- That reasoning is about the rows that exist right now. It is NOT a rule the
+-- schema enforces going forward: `date` is still a parameter, and the day
+-- someone lets a person supply it ("clear out the postings I rejected last
+-- week") a hand row can carry an old date. Harmless to this one-time UPDATE,
+-- which runs once over rows that already exist - but do not read the boundary
+-- below as an invariant. Attribution from here on comes from added_by, which
+-- is exactly why the column exists.
+--
+-- 2026-09-02 itself is mixed: that morning's runs wrote screened rows, and that
+-- afternoon a person removed 242 leads by hand. The two are not distinguishable
+-- after the fact. They could be told apart by matching the exact `reason` text
+-- of the hand-removals - but only for an account whose rows can be read, and
+-- the removals spanned two accounts. A rule that is verifiably right for one
+-- person and silently wrong for another is worse than no rule, so that day is
+-- left as '' and countRunActivity treats only 'run' as a run's work.
+--
+-- '' therefore means "written before this column existed, and not provably a
+-- search". It applies to exactly one day and it fails in the safe direction:
+-- recomputing that day's run records under-reports rather than inventing work
+-- the search never did. Everything written from here on is attributed at the
+-- moment it is created, so '' does not grow.
+UPDATE screened SET added_by = 'run' WHERE date < '2026-09-02';
+
+-- The one part of 2026-09-02 that can be classified without guessing.
+--
+-- The 242 hand-removals that day were all made through one route with a single
+-- constant reason, so an exact string match identifies them precisely and
+-- account-agnostically - no per-user rule, which is what made the earlier
+-- reason-matching idea unsafe. 196 of them are in one account and 46 in the
+-- other; the 196 were verified directly against production here, the 46 by the
+-- person who made them, in an account these credentials cannot read.
+--
+-- This statement is deliberately a no-op in behaviour: countRunActivity counts
+-- 'run', so 'hand' and '' are already treated identically. It buys legibility,
+-- not correctness - the rows say what they are instead of being ambiguous - and
+-- it shrinks '' to only what is genuinely unclassifiable. It is safe precisely
+-- because being wrong here could not change a count.
+--
+-- Deliberately NOT paired with a complementary `SET added_by='run'` over the
+-- rest of that day. That would rest on "nobody else removed anything by hand
+-- that day", which is an unverifiable claim about the past - the same species
+-- of reasoning this migration otherwise refuses. The remainder stays ''.
+UPDATE screened SET added_by = 'hand'
+ WHERE date = '2026-09-02'
+   AND reason = 'outside target locations (remote / Seattle / Portland only)';
