@@ -104,6 +104,37 @@ async function excluderFor(db) {
   return excludedCompanyMatcher(settings.excluded_companies);
 }
 
+// The guard /api/leads and /api/screened were missing. Every route that reads
+// by track key - /api/dedup/:key, /api/coverage/:key (both verbs), /api/runs -
+// 404s a key that isn't one of the caller's configured tracks, while those two
+// write routes accepted whatever string they were handed. That asymmetry is
+// how 145 leads and 185 screened rows came to sit under a retired "TPM" key:
+// in the database, invisible on the page (a row's tab comes from the track
+// list, and there was no longer a track named TPM), with nothing erroring on
+// either side. Nothing said so until someone counted rows.
+//
+// A fed track passes like any other: `fed_by` marks a tab, not a non-track, so
+// it is a row in `tracks` and a branched run legitimately files into it.
+//
+// @param {{key: string}[]} tracks this user's configured tracks
+// @param {{search: string}[]} rows the payload rows, as the caller sent them
+// @returns {Response|null} the 404 naming every unknown key, or null if clean
+function unknownTrackResponse(tracks, rows) {
+  const configured = new Set(tracks.map((t) => t.key));
+  const unknown = [...new Set(rows.map((r) => r.search))].filter((k) => !configured.has(k));
+  if (unknown.length === 0) return null;
+  // The whole request is refused rather than the drifted rows dropped. Partly
+  // for symmetry with /api/runs, which answers the same drift the same way;
+  // mostly because a partial insert leaves the run believing it filed rows it
+  // did not. It reads `added`, reports that number in its own summary, and
+  // treats those postings as ones it never has to go find again.
+  const named = unknown.map((k) => `"${k}"`).join(", ");
+  return json(
+    { error: `unknown track${unknown.length > 1 ? "s" : ""} ${named} - not in the configured tracks` },
+    404
+  );
+}
+
 // Valid status values, duplicated from page.html's LEAD_STATUS/APP_STATUS
 // (same intentional-duplication pattern as EXTRA_FIELDS in db.js - no build
 // step ties client and server together). Used to validate the two
@@ -610,12 +641,24 @@ export async function handleAddLeads(request, db) {
   // derive the day the search believes it is having.
   const on = isoDate(body.on);
 
+  // One read serves both guards below: the track list says whether these rows
+  // have a tab to land in, the settings build the exclusion matcher. This was
+  // excluderFor(db), which fetches exactly this and discards the tracks.
+  const { tracks, settings } = await db.getTracksAndSettings();
+
+  // Checked before the exclusion filter and before any write, because a
+  // drifted key is drift whether or not the payload also happens to be all
+  // excluded companies - and the early return below would otherwise answer a
+  // mistyped search with a cheerful `{ added: 0 }`.
+  const drift = unknownTrackResponse(tracks, valid);
+  if (drift) return drift;
+
   // Companies this person will not work for, enforced rather than asked for.
   // The list has been structured config for a while, but the only thing acting
   // on it was a sentence in the prompt, and it leaked: lead 238 in the live
   // data is xAI, which is on the list. A sentence is a request; this is the
   // answer. See ./exclude.js for the matching rules.
-  const isExcluded = await excluderFor(db);
+  const isExcluded = excludedCompanyMatcher(settings.excluded_companies);
   const allowed = valid.filter((lead) => !isExcluded(lead.company));
   const excluded = valid.length - allowed.length;
   if (allowed.length === 0) return json({ added: 0, duplicates: 0, excluded });
@@ -663,6 +706,15 @@ export async function handleAddScreened(request, db) {
   // so the sentence is gone - see the note where `screenedNote` used to be
   // built in prompt.js.
   const { tracks, settings } = await db.getTracksAndSettings();
+
+  // Validated against what the caller sent, before the `fed_by` rewrite far
+  // below. The rewrite maps a fed key to the track that owns its search, so
+  // checking afterwards would report the root's name for a mistake made in
+  // the fed tab's name - and the string that drifts is the one in the prompt,
+  // which is the one the caller sent. Same all-or-nothing refusal as
+  // /api/leads; see unknownTrackResponse for why nothing is inserted.
+  const drift = unknownTrackResponse(tracks, valid);
+  if (drift) return drift;
 
   // An excluded company is dropped outright here, and deliberately does NOT
   // become a screened row - which is the opposite of what happens to every

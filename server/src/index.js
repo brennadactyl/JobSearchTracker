@@ -68,6 +68,14 @@
  *                            posting into two of its own tabs. Companies on
  *                            excluded_companies are dropped. `on` is the
  *                            caller's local date, used for found/verified.
+ *                            Every distinct `search` in the payload must be a
+ *                            configured track (a fed tab counts): an unknown
+ *                            one 404s naming it, and NOTHING is inserted, not
+ *                            even the rows whose key was fine - a partial
+ *                            insert would leave the run reporting rows it
+ *                            never filed. The route used to accept any
+ *                            string, which is how 145 leads ended up under a
+ *                            retired key with no tab to show them.
  *                            -> { added, duplicates, excluded }
  *   POST /api/runs           requires Bearer token -> body: { search, status?,
  *                            note?, at?, on? }
@@ -91,7 +99,11 @@
  *                            /api/leads. Filed under the search that did the
  *                            screening, not the tab. `on` matters: it is the
  *                            date these rows carry, and /api/runs counts a
- *                            day's screened rows by it.
+ *                            day's screened rows by it. Same track check as
+ *                            /api/leads, applied to the key the caller sent
+ *                            rather than the rewritten one, since that is the
+ *                            string a drifted prompt gets wrong: unknown ->
+ *                            404, nothing inserted.
  *                            -> { added, duplicates, excluded }
  *   POST /api/update         requires Bearer token -> body: { type: "lead"|"application", ... }
  *                            updates one lead's status/notes, or upserts one
