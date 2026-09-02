@@ -722,10 +722,27 @@ function leadComparator(sortKey){
   if(sortKey==="found-asc")return function(a,b){return String(a.found).localeCompare(String(b.found));};
   if(sortKey==="location-asc")return function(a,b){return String(a.location).localeCompare(String(b.location));};
   if(sortKey==="company-asc")return function(a,b){return String(a.company).localeCompare(String(b.company));};
+  // Location first, then "Not a fit", then newest. The order of those two
+  // keys used to be the other way round, and it produced a list that
+  // contradicted the caption above it: a lead with no matching location rule
+  // could sit at the very top, above several Remote (US) ones, purely because
+  // it hadn't been rejected yet. Seen live as a "US - United States" posting
+  // leading a tab whose header reads "Closest roles sorted first".
+  //
+  // It looked worse than it was - the offending lead really was last within
+  // its own status group, but the leads above it were hidden because they
+  // already have applications, so what remained read as nonsense. Either way
+  // the sort is called Priority and the priority being sorted on is location,
+  // so location is the key that belongs first.
+  //
+  // "Not a fit" still sinks, just within its tier rather than past every
+  // tier. A rejected Remote (US) role now sits below the live Remote (US)
+  // ones and above everything further away, which is what "closest first"
+  // says on the tin.
   return function(a,b){
+    var d=rank(a)-rank(b); if(d)return d;
     var na=a.status==="Not a fit"?1:0, nb=b.status==="Not a fit"?1:0;
     if(na!==nb)return na-nb;
-    var d=rank(a)-rank(b); if(d)return d;
     return String(b.found).localeCompare(String(a.found));
   };
 }
