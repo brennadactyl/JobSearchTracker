@@ -937,6 +937,7 @@ export async function handleSetLeadStatus(request, db, id) {
           leadId: String(id),
           company: lead.company,
           title: lead.title,
+          location: lead.location || "",
           dateApplied: today(),
           status: "Applied",
           notes: lead.notes || "",

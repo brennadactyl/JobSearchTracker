@@ -70,6 +70,7 @@
  * @property {string} leadId - the originating Lead.id as text, or '' if added by hand
  * @property {string} company
  * @property {string} title
+ * @property {string} location - copied from the lead at creation, then editable
  * @property {string} dateApplied - YYYY-MM-DD
  * @property {string} status - one of APP_STATUS in api.js
  * @property {string} notes
@@ -1144,7 +1145,7 @@ export class Db {
    * @returns {Promise<Application>}
    */
   async insertApplication(fields) {
-    const cols = ["leadId", "company", "title", "dateApplied", "status", "notes", ...EXTRA_FIELDS, ...APP_STAGE_DATE_FIELDS];
+    const cols = ["leadId", "company", "title", "location", "dateApplied", "status", "notes", ...EXTRA_FIELDS, ...APP_STAGE_DATE_FIELDS];
     const placeholders = ["?", ...cols.map(() => "?")].join(", ");
     const values = cols.map((f) => {
       if (f === "dateApplied") return fields.dateApplied || today();
@@ -1165,7 +1166,7 @@ export class Db {
    * @returns {Promise<Application|null>}
    */
   async updateApplication(id, patch) {
-    const fields = ["company", "title", "dateApplied", "status", "notes", "leadId", ...EXTRA_FIELDS, ...APP_STAGE_DATE_FIELDS];
+    const fields = ["company", "title", "location", "dateApplied", "status", "notes", "leadId", ...EXTRA_FIELDS, ...APP_STAGE_DATE_FIELDS];
     const setClause = fields.map((f) => `${f} = COALESCE(?, ${f})`).join(", ");
     const values = fields.map((f) => (typeof patch[f] === "string" ? patch[f] : null));
     const result = await this.d1
@@ -1235,7 +1236,7 @@ export class Db {
         .bind(status, id, this.userId),
     ];
     if (newApplicationFields) {
-      const cols = ["leadId", "company", "title", "dateApplied", "status", "notes", "link", "referral", "comp", "team", "setup"];
+      const cols = ["leadId", "company", "title", "location", "dateApplied", "status", "notes", "link", "referral", "comp", "team", "setup"];
       const values = cols.map((f) => {
         if (f === "dateApplied") return newApplicationFields.dateApplied || today();
         if (f === "status") return newApplicationFields.status || "Applied";

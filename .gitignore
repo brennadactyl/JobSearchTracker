@@ -15,6 +15,13 @@ Thumbs.db
 # client/package.json are mainly for the Deploy to Cloudflare button, which
 # installs its own copy)
 node_modules/
+# The lockfile that install writes goes with it. Committing one would pin
+# wrangler for every installer who forks this - off a version that only ever
+# got there because somebody ran `npm install` locally to test a migration -
+# and the Deploy button resolves its own copy regardless. Unanchored, same
+# reason as .wrangler/ above: it appears next to whichever package.json was
+# installed, and both of them can be.
+package-lock.json
 
 # This installer's own API URL - treated like private/ data (see
 # client/public/local-config.example.js). Never commit a real deployment's

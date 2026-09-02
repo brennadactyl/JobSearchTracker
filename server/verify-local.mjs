@@ -233,6 +233,11 @@ check("B cannot update A's lead", (await req("POST", "/api/update", { token: B_T
 await req("POST", `/api/leads/${aLeadId}/status`, { token: A_TOK, body: { status: "Applied" } });
 const aApp = (await req("GET", "/api/data", { token: A_TOK })).json.applications.find((x) => x.leadId === String(aLeadId));
 check("applying created A's application", !!aApp && aApp.company === "Acme");
+// The lead's location has to survive becoming an application - it's the one
+// carried-over field with no other source, since the lead it came from is a
+// row whose posting is expected to die eventually.
+check("A's application carried the lead's location",
+  !!aApp && aApp.location === "Remote (U.S.)");
 check("B cannot delete A's application",
   (await req("POST", "/api/delete-application", { token: B_TOK, body: { id: aApp.id } })).status === 404);
 check("B cannot edit A's application through the generic update route",
