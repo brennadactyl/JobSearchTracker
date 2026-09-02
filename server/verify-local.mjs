@@ -681,6 +681,26 @@ check("the search's row is 'run' and the person's is 'hand'",
   attrRows.some((s) => s.added_by === "hand" && s.reason === "not interested"),
   JSON.stringify(attrRows.map((s) => s.added_by + ":" + s.reason.slice(0, 20))));
 
+// The refusal that keeps the column honest. `addedBy` is a required parameter,
+// and the tempting way to write that - a ternary picking a fallback - IS a
+// default, and would default to 'run': a caller that forgot the argument would
+// have its rows counted as the night's search work, which is the exact bug
+// this whole change exists to fix. JavaScript gives a missing argument as
+// `undefined` rather than an error, so the check has to be explicit.
+const attrDb = await import("./src/db.js");
+let threw = "";
+try {
+  await new attrDb.Db({}, "u").deleteLeadAndScreen({ id: 1, search: "SWE", url: "u" }, "r", null);
+} catch (e) { threw = e.message; }
+check("deleteLeadAndScreen refuses a missing added_by instead of guessing 'run'",
+  /addedBy must be 'run' or 'hand'/.test(threw), JSON.stringify(threw.slice(0, 90)));
+for (const bad of ["", "RUN", "person", null]) {
+  let m = "";
+  try { await new attrDb.Db({}, "u").deleteLeadAndScreen({ id: 1, search: "SWE", url: "u" }, "r", null, bad); }
+  catch (e) { m = e.message; }
+  check(`and refuses ${JSON.stringify(bad)}`, /addedBy must be/.test(m), JSON.stringify(m.slice(0, 60)));
+}
+
 // A delisting report is a run's work and must still count as delisted.
 const delUrl = `https://attr.example.com/jobs/${aStamp}51`;
 await req("POST", "/api/leads", { token: B_TOK, body: { on: attrDay, leads: [

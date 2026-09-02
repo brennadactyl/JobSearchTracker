@@ -1308,6 +1308,19 @@ export class Db {
    * @returns {Promise<boolean>} true if the lead row was actually deleted
    */
   async deleteLeadAndScreen(lead, reason, date, addedBy) {
+    // Refused rather than coerced. A ternary picking a fallback here would be
+    // the very default the parameter exists to prevent - a caller that forgets
+    // the argument passes `undefined`, which JavaScript reports as nothing at
+    // all, and its rows would be silently counted as the night's search work.
+    // That is this file's own bug, reintroduced at the one line that promises
+    // it cannot happen. Falling back to '' instead would fail safe but let ''
+    // grow, and 0007 states in writing that it does not.
+    //
+    // Both call sites are in this repo and a test covers the refusal, so this
+    // throws on a programming error rather than on anything a request can do.
+    if (addedBy !== "run" && addedBy !== "hand") {
+      throw new Error(`deleteLeadAndScreen: addedBy must be 'run' or 'hand', got ${JSON.stringify(addedBy)}`);
+    }
     const results = await this.d1.batch([
       this.d1
         .prepare(
@@ -1323,7 +1336,7 @@ export class Db {
           lead.location || "",
           reason,
           date || today(),
-          addedBy === "hand" ? "hand" : "run"
+          addedBy
         ),
       this.d1
         .prepare("DELETE FROM leads WHERE id = ? AND user_id = ?")

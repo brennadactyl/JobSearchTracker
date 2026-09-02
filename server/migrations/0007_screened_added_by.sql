@@ -70,3 +70,26 @@ ALTER TABLE screened ADD COLUMN added_by TEXT NOT NULL DEFAULT '';
 -- the search never did. Everything written from here on is attributed at the
 -- moment it is created, so '' does not grow.
 UPDATE screened SET added_by = 'run' WHERE date < '2026-09-02';
+
+-- The one part of 2026-09-02 that can be classified without guessing.
+--
+-- The 242 hand-removals that day were all made through one route with a single
+-- constant reason, so an exact string match identifies them precisely and
+-- account-agnostically - no per-user rule, which is what made the earlier
+-- reason-matching idea unsafe. 196 of them are in one account and 46 in the
+-- other; the 196 were verified directly against production here, the 46 by the
+-- person who made them, in an account these credentials cannot read.
+--
+-- This statement is deliberately a no-op in behaviour: countRunActivity counts
+-- 'run', so 'hand' and '' are already treated identically. It buys legibility,
+-- not correctness - the rows say what they are instead of being ambiguous - and
+-- it shrinks '' to only what is genuinely unclassifiable. It is safe precisely
+-- because being wrong here could not change a count.
+--
+-- Deliberately NOT paired with a complementary `SET added_by='run'` over the
+-- rest of that day. That would rest on "nobody else removed anything by hand
+-- that day", which is an unverifiable claim about the past - the same species
+-- of reasoning this migration otherwise refuses. The remainder stays ''.
+UPDATE screened SET added_by = 'hand'
+ WHERE date = '2026-09-02'
+   AND reason = 'outside target locations (remote / Seattle / Portland only)';
