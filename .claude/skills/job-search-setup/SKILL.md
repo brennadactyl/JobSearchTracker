@@ -22,6 +22,13 @@ whether this repo got here via `git clone` or via `/plugin install` - the one
 place that differs is step 7 (registering scheduled tasks), which needs to
 know which one it is.
 
+**Not for the demo account.** A request for a demo, sample or fake account is
+`../../../scripts/seed-demo-user.ps1`, not this skill: what that account needs
+is invented data and *no* private folder and *no* scheduled tasks, which is
+the opposite of steps 2, 4 and 7 below. Running this skill for it would give
+a demo a nightly search that costs real CLI time looking for jobs nobody
+wants. See the README's "The demo account" section.
+
 ## One identifier per track
 
 Pick **one lowercase-hyphenated slug per track** (e.g. `engineering`,
