@@ -190,6 +190,20 @@ check("an excluded company cannot join the rotation",
 check("and does not come back from the rotation afterwards",
   !(await req("GET", "/api/coverage/SWE?all=1", { token: A_TOK })).json.companies
     .some((c) => c.company === "Vela"));
+// The ordinary way an exclusion happens: the company is already in the
+// rotation, and gets excluded later because a posting from it turned up. A
+// guard on the write path alone would go on serving it forever.
+await req("POST", "/api/config", { token: A_TOK, body: { excluded_companies: [] } });
+await req("POST", "/api/coverage", { token: A_TOK, body: {
+  search: "SWE", on: "", swept: [{ company: "Latecomer Ltd" }] } });
+check("a company registered before it was excluded is in the rotation",
+  (await req("GET", "/api/coverage/SWE?all=1", { token: A_TOK })).json.companies
+    .some((c) => c.company === "Latecomer Ltd"));
+await req("POST", "/api/config", { token: A_TOK, body: { excluded_companies: ["Latecomer Ltd"] } });
+const afterEx = await req("GET", "/api/coverage/SWE?all=1", { token: A_TOK });
+check("excluding it afterwards stops it being handed to a run",
+  !afterEx.json.companies.some((c) => c.company === "Latecomer Ltd"),
+  JSON.stringify(afterEx.json.companies.map((c) => c.company).slice(0, 8)));
 await req("POST", "/api/config", { token: A_TOK, body: { excluded_companies: [] } });
 
 const screenedUrl = `https://example.com/screened-${Date.now()}`;
@@ -350,8 +364,31 @@ const branched = await req("POST", "/api/config", { token: A_TOK, body: { tracks
     role_search_line: "Backend roles", target_companies: ["Acme"],
     full_description: "a hands-on backend role" },
   { key: "LEAD", label: "Ada Lead", sort_order: 1, fed_by: "SWE",
-    full_description: "a role leading a team" }] } });
+    full_description: "a role leading a team" },
+  // An independent track, not part of the SWE feed group - the contrast that
+  // makes the dedup-scope checks below mean something.
+  { key: "DATA", label: "Ada Data", sort_order: 2,
+    role_search_line: "Data roles", target_companies: ["Globex"] }] } });
 check("a fed track posts fine alongside the track that feeds it", branched.status === 200, branched.text.slice(0, 120));
+
+// Dedup follows the *search*, not the tab. SWE and LEAD are one search filling
+// two tabs, so one posting cannot sit in both: a run that filed it under LEAD
+// yesterday and sorts it into SWE today would otherwise add it twice, which is
+// the duplicate this whole filter exists to stop arriving by another door.
+const groupUrl = `https://boards.example.com/jobs/${Date.now()}31`;
+const across = await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
+  { search: "SWE", company: "Acme", title: "Shared", url: groupUrl },
+  { search: "LEAD", company: "Acme", title: "Shared", url: groupUrl }] } });
+check("one posting cannot land in two tabs of the same branched search",
+  across.json.added === 1 && across.json.duplicates === 1, JSON.stringify(across.json));
+// ...while two genuinely separate searches tracking one posting stay two rows,
+// which is what UNIQUE(user_id, search, url) has always said.
+const indieUrl = `https://boards.example.com/jobs/${Date.now()}32`;
+const indie = await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
+  { search: "SWE", company: "Acme", title: "Shared", url: indieUrl },
+  { search: "DATA", company: "Acme", title: "Shared", url: indieUrl }] } });
+check("but two independent tracks may each hold it",
+  indie.json.added === 2, JSON.stringify(indie.json));
 const fedPrompt = await req("GET", "/api/prompt/LEAD", { token: A_TOK });
 check("a fed track has no prompt of its own, and the refusal names the one to run",
   fedPrompt.status === 409 && /"SWE"/.test(fedPrompt.json.error), fedPrompt.text.slice(0, 120));
@@ -366,6 +403,44 @@ check("the feeding track's prompt covers both tabs",
   feedPrompt.includes('`"LEAD"`'));
 check("a fed track still accepts a run record - that's what keeps its tab from reading stale",
   (await req("POST", "/api/runs", { token: A_TOK, body: { search: "LEAD", on: "2026-08-31", note: "filed by SWE" } })).status === 200);
+
+console.log("\n== dates and counts line up ==");
+// The bug this catches: /api/screened accepts a local `on`, and a run record
+// counts a day's screened rows by `date = on`. If the caller sends `on` to
+// /api/runs but not to /api/screened, the rows get the worker's UTC date and
+// the run truthfully records having screened nothing. It only diverges when
+// the two dates differ, which a same-day test cannot produce - so this sends a
+// date that is nobody's "today" and checks the counts still find each other.
+const farDay = "2026-11-14";
+// Distinct req ids, not a shared stem with different suffixes: canonicalUrl
+// keys on the number and ignores the rest of the path, so urls built by
+// appending to one stem are all the same posting.
+const dStamp = Date.now();
+// Deltas, not absolutes: this file is re-run against the same local database,
+// and a previous run's rows are still sitting on that date.
+const base = (await req("POST", "/api/runs", { token: A_TOK, body: {
+  search: "SWE", status: "ok", on: farDay, note: "baseline" } })).json.run;
+await req("POST", "/api/leads", { token: A_TOK, body: { on: farDay, leads: [
+  { search: "SWE", company: "Acme", title: "Dated", url: `https://dates.example.com/jobs/${dStamp}10` }] } });
+await req("POST", "/api/screened", { token: A_TOK, body: { search: "SWE", on: farDay, screened: [
+  { search: "SWE", url: `https://dates.example.com/jobs/${dStamp}11`, reason: "below target level" },
+  { search: "SWE", url: `https://dates.example.com/jobs/${dStamp}12`, reason: "outside scope: London, UK" }] } });
+const dated = await req("POST", "/api/runs", { token: A_TOK, body: {
+  search: "SWE", status: "ok", on: farDay, note: "dates" } });
+check("a lead posted with a top-level `on` is stamped and counted on that date",
+  dated.json.run.leads_added - base.leads_added === 1, JSON.stringify(dated.json.run));
+check("screened rows posted with the same `on` are counted on it too",
+  dated.json.run.screened_added - base.screened_added === 2, JSON.stringify(dated.json.run));
+// DELISTED_REASON is the server's marker for "a lead we tracked came down".
+// A run screening a dead-on-arrival candidate would describe it the same way
+// in English, and that row must not be counted as a delisting.
+await req("POST", "/api/screened", { token: A_TOK, body: { search: "SWE", on: farDay, screened: [
+  { search: "SWE", url: `https://dates.example.com/jobs/${dStamp}13`, reason: "posting taken down" }] } });
+const reasoned = await req("POST", "/api/runs", { token: A_TOK, body: { search: "SWE", status: "ok", on: farDay } });
+check("a screened row cannot claim the reason that means 'delisted'",
+  reasoned.json.run.delisted === base.delisted &&
+  reasoned.json.run.screened_added - base.screened_added === 3,
+  JSON.stringify(reasoned.json.run));
 
 console.log("\n== url-keyed routes ==");
 // These are the first routes that find a lead by url rather than by id, so
@@ -420,14 +495,19 @@ check("B cannot move A's lead into one of B's tabs",
   (await req("POST", "/api/update", { token: B_TOK, body: { type: "lead", id: aLeadId, search: "SWE" } })).status === 404);
 // Its own url rather than the shared fixture: a second row for that one would
 // quietly break the "A's leads survive their track being removed" count below.
+//
+// The destination is DATA, an independent track, not LEAD. Since dedup follows
+// the search rather than the tab, one posting can no longer be filed into two
+// tabs of the same branched search at all - so a genuine UNIQUE collision on
+// move can only be built out of two separate searches.
 const conflictUrl = `https://example.com/in-both-tabs-${Date.now()}`;
 await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
   { search: "SWE", company: "Acme", title: "Staff Backend", location: "Remote (U.S.)", url: conflictUrl },
-  { search: "LEAD", company: "Acme", title: "Staff Backend", location: "Remote (U.S.)", url: conflictUrl }] } });
+  { search: "DATA", company: "Acme", title: "Staff Backend", location: "Remote (U.S.)", url: conflictUrl }] } });
 const dupId = (await req("GET", "/api/data", { token: A_TOK })).json.leads
   .find((l) => l.url === conflictUrl && l.search === "SWE").id;
 check("moving onto a url the destination tab already holds is a 409, not a 500",
-  (await req("POST", "/api/update", { token: A_TOK, body: { type: "lead", id: dupId, search: "LEAD" } })).status === 409);
+  (await req("POST", "/api/update", { token: A_TOK, body: { type: "lead", id: dupId, search: "DATA" } })).status === 409);
 
 console.log("\n== sessions ==");
 const aSecond = await req("POST", "/api/login", { body: { name: "Ada", password: "ada-new-password-1", label: "browser" } });

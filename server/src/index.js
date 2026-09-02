@@ -43,23 +43,41 @@
  *                            self-signup; this is how people are provisioned.
  *   GET  /api/me             requires Bearer token -> { id, name }
  *   GET  /api/data           requires Bearer token -> { user, updated, leads[], applications[], screened[], tracks[], settings }
- *   POST /api/leads          requires Bearer token -> body: { leads: [...] }
- *                            appends leads not already present for the same
- *                            (user, search, url) triple (DB-enforced UNIQUE
- *                            constraint + INSERT OR IGNORE - atomic,
- *                            race-free); never touches existing status/notes
- *   POST /api/runs           requires Bearer token -> body: { search, status?, leadsAdded?,
- *                            screenedAdded?, delisted?, note?, at?, on? }
+ *   POST /api/leads          requires Bearer token -> body: { on?, leads: [...] }
+ *                            appends leads whose posting this user doesn't
+ *                            already have. Two layers: a canonical-URL filter
+ *                            (see ./url.js) over the DB-enforced UNIQUE
+ *                            constraint, so the same posting under a
+ *                            different URL is caught too. Scoped to the
+ *                            *search*, so one branched run cannot file a
+ *                            posting into two of its own tabs. Companies on
+ *                            excluded_companies are dropped. `on` is the
+ *                            caller's local date, used for found/verified.
+ *                            -> { added, duplicates, excluded }
+ *   POST /api/runs           requires Bearer token -> body: { search, status?,
+ *                            note?, at?, on? }
  *                            records that one track's scheduled search just
  *                            finished. Called at the end of EVERY run,
  *                            including ones that found nothing - that's the
  *                            case no other table can distinguish from the
- *                            search never having fired. 404s on a track key
- *                            that isn't configured for this user rather than
- *                            creating an orphan row.
- *   POST /api/screened       requires Bearer token -> body: { screened: [...] }
+ *                            search never having fired. The three counts are
+ *                            NOT taken from the caller: leadsAdded /
+ *                            screenedAdded / delisted are derived from the
+ *                            rows themselves (db.countRunActivity), and are
+ *                            accepted-and-ignored in the body so a run on an
+ *                            older prompt still records correctly. One POST
+ *                            also writes a record for every tab this run
+ *                            feeds. 404s on a track key that isn't configured
+ *                            for this user rather than creating an orphan
+ *                            row. -> { ok, run, also }
+ *   POST /api/screened       requires Bearer token -> body: { on?, screened: [...] }
  *                            appends postings the search decided NOT to add
- *                            as a lead - same dedup shape as /api/leads.
+ *                            as a lead - same dedup and exclusion handling as
+ *                            /api/leads. Filed under the search that did the
+ *                            screening, not the tab. `on` matters: it is the
+ *                            date these rows carry, and /api/runs counts a
+ *                            day's screened rows by it.
+ *                            -> { added, duplicates, excluded }
  *   POST /api/update         requires Bearer token -> body: { type: "lead"|"application", ... }
  *                            updates one lead's status/notes, or upserts one
  *                            application record. Generic field-whitelist

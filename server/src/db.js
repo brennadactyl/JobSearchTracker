@@ -710,44 +710,70 @@ export class Db {
    * share this - see addLeads for what the two layers are and why.
    *
    * A row is already-known if its canonical URL (see ./url.js) matches a lead
-   * OR a screened row under the same track: both mean "this run has met this
-   * posting before". Matching is per track, not per user, because that is the
-   * scope the UNIQUE constraint has always had - two tracks legitimately
-   * tracking one posting are two rows on purpose, and widening it here would
-   * start silently dropping the second.
+   * OR a screened row already held by the same *search*: both mean "this run
+   * has met this posting before".
    *
-   * Rows already accepted from this same batch are added to the set as it
-   * goes, which is what catches one payload naming the same posting twice.
+   * The search, not the track. Those differ for a branched search, where one
+   * run fills several tabs (`fed_by`, see migrations/0003_branched_tracks.sql)
+   * and step 7b decides which tab each finding belongs in. Scoped to the track
+   * alone, a posting filed under one tab yesterday and sorted into a sibling
+   * tab today reads as new, and the run adds it a second time - the same
+   * duplicate this whole filter exists to stop, arriving by a different door.
+   * The prompt already tells such a run to fetch dedup data per key and treat
+   * it as one combined set; this is the server agreeing with it.
+   *
+   * Two *independent* tracks tracking one posting are still two rows on
+   * purpose, which is what the UNIQUE constraint has always said. A feed group
+   * is not two searches, it is one search with several outputs, so widening to
+   * the group changes nothing for anyone who isn't running a branched search.
+   *
+   * Rows already accepted from this same batch join the set as it goes, which
+   * is what catches one payload naming the same posting twice.
    *
    * @param {Array<{search: string, url: string}>} rows
    * @returns {Promise<{fresh: Array<Object>, duplicates: number}>}
    */
   async dropKnownUrls(rows) {
-    const keys = [...new Set(rows.map((r) => r.search).filter(Boolean))];
-    const seen = new Map(keys.map((k) => [k, new Set()]));
+    const asked = [...new Set(rows.map((r) => r.search).filter(Boolean))];
+    if (asked.length === 0) return { fresh: [], duplicates: rows.length };
 
-    if (keys.length) {
-      const placeholders = keys.map(() => "?").join(", ");
-      const [leads, screened] = await Promise.all([
-        this.d1
-          .prepare(`SELECT search, url FROM leads WHERE user_id = ? AND search IN (${placeholders})`)
-          .bind(this.userId, ...keys)
-          .all(),
-        this.d1
-          .prepare(`SELECT search, url FROM screened WHERE user_id = ? AND search IN (${placeholders})`)
-          .bind(this.userId, ...keys)
-          .all(),
-      ]);
-      for (const row of [...leads.results, ...screened.results]) {
-        seen.get(row.search)?.add(canonicalUrl(row.url));
-      }
+    // A track's feed group: the track that runs the search, plus every tab it
+    // fills. `fed_by` is one level (a fed track is a tab, not a search), so
+    // the root is one hop and the group is everything sharing that root.
+    const tracks = await this.d1
+      .prepare("SELECT key, fed_by FROM tracks WHERE user_id = ?")
+      .bind(this.userId)
+      .all();
+    const rootOf = new Map(tracks.results.map((t) => [t.key, t.fed_by || t.key]));
+    const root = (k) => rootOf.get(k) || k;
+
+    const roots = new Set(asked.map(root));
+    const groupKeys = tracks.results.map((t) => t.key).filter((k) => roots.has(root(k)));
+    // A key the batch names that isn't a configured track has no group; keep it
+    // so it still dedups against itself rather than skipping the check.
+    for (const k of asked) if (!groupKeys.includes(k)) groupKeys.push(k);
+
+    const seen = new Map([...roots].map((r) => [r, new Set()]));
+    const placeholders = groupKeys.map(() => "?").join(", ");
+    const [leads, screened] = await Promise.all([
+      this.d1
+        .prepare(`SELECT search, url FROM leads WHERE user_id = ? AND search IN (${placeholders})`)
+        .bind(this.userId, ...groupKeys)
+        .all(),
+      this.d1
+        .prepare(`SELECT search, url FROM screened WHERE user_id = ? AND search IN (${placeholders})`)
+        .bind(this.userId, ...groupKeys)
+        .all(),
+    ]);
+    for (const row of [...leads.results, ...screened.results]) {
+      seen.get(root(row.search))?.add(canonicalUrl(row.url));
     }
 
     const fresh = [];
     let duplicates = 0;
     for (const row of rows) {
       const key = canonicalUrl(row.url);
-      const set = seen.get(row.search);
+      const set = seen.get(root(row.search));
       if (!key || set?.has(key)) {
         duplicates++;
         continue;
@@ -794,7 +820,10 @@ export class Db {
     // a search scheduled in the evening is already the next UTC day - the same
     // reasoning /api/runs' `on` has always had. Falling back to UTC keeps the
     // behaviour every existing caller already gets.
-    const t = /^\d{4}-\d{2}-\d{2}$/.test(String(on || "")) ? on : today();
+    // Already validated by the caller (api.js's isoDate), so this only has to
+    // choose between a date and none. Re-validating here would be a second
+    // copy of the rule, and the two would eventually disagree.
+    const t = on || today();
 
     const { fresh, duplicates } = await this.dropKnownUrls(leads);
     if (fresh.length === 0) return { added: 0, duplicates };
@@ -950,7 +979,10 @@ export class Db {
    * @returns {Promise<{added: number, duplicates: number}>}
    */
   async addScreened(items, on) {
-    const t = /^\d{4}-\d{2}-\d{2}$/.test(String(on || "")) ? on : today();
+    // Already validated by the caller (api.js's isoDate), so this only has to
+    // choose between a date and none. Re-validating here would be a second
+    // copy of the rule, and the two would eventually disagree.
+    const t = on || today();
 
     const { fresh, duplicates } = await this.dropKnownUrls(items);
     if (fresh.length === 0) return { added: 0, duplicates };

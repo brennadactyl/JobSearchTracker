@@ -76,6 +76,27 @@ function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
+// A caller-supplied local date, or "" if it isn't one. Every route that takes
+// an `on` validates it identically, and the shape was written out ten times
+// before this existed - which is nine chances for one of them to drift into
+// accepting something the others refuse, on a value that decides what date
+// rows are stamped with and, on /api/delist, whether a lead is deleted.
+//
+// Strict on purpose: no coercion, no "2026-9-1". The callers are LLM runs, and
+// a value that isn't a date isn't a report of anything.
+function isoDate(value) {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
+}
+
+// The exclusion predicate for this user, built from their settings. Every
+// write path that can introduce a company needs it (leads, screened, and the
+// coverage rotation both ways), and each one was fetching settings and
+// building the matcher itself.
+async function excluderFor(db) {
+  const { settings } = await db.getTracksAndSettings();
+  return excludedCompanyMatcher(settings.excluded_companies);
+}
+
 // Valid status values, duplicated from page.html's LEAD_STATUS/APP_STATUS
 // (same intentional-duplication pattern as EXTRA_FIELDS in db.js - no build
 // step ties client and server together). Used to validate the two
@@ -221,11 +242,28 @@ export async function handleGetCoverage(db, key, all = false) {
   if (!(await db.trackExists(key))) {
     return json({ error: `unknown track "${key}" - not in the configured tracks` }, 404);
   }
+  // Filtered on the way out as well as on the way in, because the two catch
+  // different things. recordSweeps refuses to *add* an excluded company; this
+  // refuses to hand back one that is already in the table - which is the
+  // ordinary case, not the exotic one. An exclusion usually gets added because
+  // the person saw a posting and decided never again, so the company is
+  // already in the rotation by the time it lands on the list. Guarding only
+  // the write would leave it being served as a company to cover, every cycle,
+  // for as long as the row exists.
+  //
+  // Filtered rather than deleted: the row is the rotation's memory of when
+  // that company was last looked at, the exclusion list is editable, and
+  // reading is the wrong moment to destroy data.
   const [companies, total] = await Promise.all([
-    db.getCoverage(key, all ? 0 : COVERAGE_BATCH),
+    db.getCoverage(key, 0),
     db.countCoverage(key),
   ]);
-  return json({ companies, total, batch: all ? total : COVERAGE_BATCH });
+  const isExcluded = await excluderFor(db);
+  const allowed = companies.filter((c) => !isExcluded(c.company));
+  // The cap is applied after filtering, so an excluded company can't eat a
+  // slot in the batch a run is told to cover.
+  const batch = all ? allowed.length : COVERAGE_BATCH;
+  return json({ companies: allowed.slice(0, batch), total: allowed.length, batch });
 }
 
 // Records what a run actually attempted. Attempted, not found: a company whose
@@ -254,11 +292,7 @@ export async function handleRecordSweeps(request, db) {
   // An explicit "" is not a malformed date, it's "register these companies,
   // I haven't swept them" - the seeding case, which must not stamp anything
   // (see db.recordSweeps).
-  const on = typeof body.on === "string" && body.on === ""
-    ? ""
-    : typeof body.on === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.on)
-      ? body.on
-      : new Date().toISOString().slice(0, 10);
+  const on = body.on === "" ? "" : isoDate(body.on) || today();
 
   // The rotation is the surface where an exclusion would become permanent.
   // This route creates a row for any company it is handed - that is how a
@@ -266,8 +300,7 @@ export async function handleRecordSweeps(request, db) {
   // company swept once would be stored, then handed back by
   // GET /api/coverage as a company to cover, every cycle, forever. Every other
   // exclusion leak is one row; this one is self-renewing.
-  const { settings } = await db.getTracksAndSettings();
-  const isExcluded = excludedCompanyMatcher(settings.excluded_companies);
+  const isExcluded = await excluderFor(db);
   const allowed = valid.filter((i) => !isExcluded(i.company));
   const excluded = valid.length - allowed.length;
   if (allowed.length === 0) return json({ recorded: 0, excluded, on });
@@ -387,9 +420,7 @@ export async function handleRecordRun(request, db) {
   // `on` is the caller's *local* date - the worker can't derive it (see the
   // note in migrations/0001_schema.sql). Falls back to the UTC date, which is right for
   // any run scheduled outside the hours where the two disagree.
-  const on = typeof body.on === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.on)
-    ? body.on
-    : at.slice(0, 10);
+  const on = isoDate(body.on) || at.slice(0, 10);
 
   const status = body.status === "error" ? "error" : "ok";
   const note = typeof body.note === "string" ? body.note.slice(0, 500) : "";
@@ -495,15 +526,14 @@ export async function handleAddLeads(request, db) {
   // The run's own local date, applied to every lead that didn't carry one.
   // Same reasoning as /api/runs' `on`: the worker only knows UTC, so it cannot
   // derive the day the search believes it is having.
-  const on = typeof body.on === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.on) ? body.on : "";
+  const on = isoDate(body.on);
 
   // Companies this person will not work for, enforced rather than asked for.
   // The list has been structured config for a while, but the only thing acting
   // on it was a sentence in the prompt, and it leaked: lead 238 in the live
   // data is xAI, which is on the list. A sentence is a request; this is the
   // answer. See ./exclude.js for the matching rules.
-  const { settings } = await db.getTracksAndSettings();
-  const isExcluded = excludedCompanyMatcher(settings.excluded_companies);
+  const isExcluded = await excluderFor(db);
   const allowed = valid.filter((lead) => !isExcluded(lead.company));
   const excluded = valid.length - allowed.length;
   if (allowed.length === 0) return json({ added: 0, duplicates: 0, excluded });
@@ -537,7 +567,7 @@ export async function handleAddScreened(request, db) {
   const valid = incoming.filter((item) => item.search && item.url);
   if (valid.length === 0) return json({ error: "no valid screened items in payload" }, 400);
 
-  const on = typeof body.on === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.on) ? body.on : "";
+  const on = isoDate(body.on);
 
   // A screened row belongs to the search that did the screening, not to the
   // tab the posting would have been filed under. Those differ for a branched
@@ -564,6 +594,21 @@ export async function handleAddScreened(request, db) {
   const allowed = valid.filter((item) => !isExcluded(item.company));
   const excluded = valid.length - allowed.length;
   if (allowed.length === 0) return json({ added: 0, duplicates: 0, excluded });
+
+  // DELISTED_REASON is the server's own marker, not a phrase a caller may
+  // write. countRunActivity splits a day's screened rows on it to tell "a
+  // posting we tracked came down" from "a candidate we looked at and
+  // rejected", and those are counted into different columns of the run record.
+  // A run screening a dead-on-arrival candidate would very reasonably describe
+  // it as the posting having been taken down, and that row would then be
+  // counted as a delisting of a lead that never existed. Reserving the string
+  // here is what keeps the classifier honest without a schema change: the
+  // reason is still recorded, just not in the words that mean something else.
+  for (const item of allowed) {
+    if (typeof item.reason === "string" && item.reason.trim().toLowerCase() === DELISTED_REASON) {
+      item.reason = "dead on arrival";
+    }
+  }
 
   // One hop, not a walk to a root: a fed track is a tab, and the track that
   // fills it runs its own search, so `fed_by` chains have no meaning in the
@@ -685,9 +730,7 @@ export async function handleMarkVerified(request, db) {
   const parsed = await parseUrlReport(request, db);
   if (parsed.error) return parsed.error;
 
-  const on = typeof parsed.body.on === "string" && /^\d{4}-\d{2}-\d{2}$/.test(parsed.body.on)
-    ? parsed.body.on
-    : today();
+  const on = isoDate(parsed.body.on) || today();
 
   const { matched, unmatched } = matchLeadsByUrl(await db.getLeadsForUrlMatch(), parsed.urls);
   const stamped = await db.markVerified(matched.map((l) => l.id), on);
@@ -728,10 +771,8 @@ export async function handleUpdate(request, db) {
     // isn't a date isn't a report of anything, so it's refused rather than
     // quietly read as "dead, date unknown".
     if (typeof body.delistedOn === "string" && body.delistedOn.trim()) {
-      const on = body.delistedOn.trim();
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(on)) {
-        return json({ error: "delistedOn must be YYYY-MM-DD" }, 400);
-      }
+      const on = isoDate(body.delistedOn.trim());
+      if (!on) return json({ error: "delistedOn must be YYYY-MM-DD" }, 400);
       return removeDelistedLead(db, body.id, on);
     }
 
@@ -853,7 +894,7 @@ export async function handleSetApplicationStatus(request, db, id) {
   if (!APP_STATUS.includes(body.status)) {
     return json({ error: "invalid status" }, 400);
   }
-  const explicitDate = typeof body.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.date) ? body.date : null;
+  const explicitDate = isoDate(body.date) || null;
 
   const application = await db.setApplicationStatus(
     id,
@@ -949,9 +990,11 @@ async function delistLead(db, lead, on) {
   return { kept: false, removed };
 }
 
-// The by-id entry point: POST /api/update with a `delistedOn` date. The client
-// uses it, and a nightly run may still be part-way through a night on the old
-// wording, so it keeps working and keeps its exact response shape.
+// The by-id entry point: POST /api/update with a `delistedOn` date. Kept
+// because a nightly run may still be part-way through a night on a prompt
+// fetched before /api/delist existed, so it keeps working and keeps its exact
+// response shape. Nothing in the client calls it - the tracker page has no
+// delisting control, it only ever reads the consequences.
 async function removeDelistedLead(db, id, on) {
   const lead = await db.getLead(id);
   if (!lead) return json({ error: "lead not found" }, 404);
@@ -985,8 +1028,8 @@ export async function handleDelistUrls(request, db) {
   const parsed = await parseUrlReport(request, db);
   if (parsed.error) return parsed.error;
 
-  const on = typeof parsed.body.on === "string" ? parsed.body.on.trim() : "";
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(on)) return json({ error: "on must be YYYY-MM-DD" }, 400);
+  const on = isoDate(typeof parsed.body.on === "string" ? parsed.body.on.trim() : "");
+  if (!on) return json({ error: "on must be YYYY-MM-DD" }, 400);
 
   const { matched, unmatched } = matchLeadsByUrl(await db.getLeadsForUrlMatch(), parsed.urls);
 

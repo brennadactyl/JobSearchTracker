@@ -109,17 +109,3 @@ export function canonicalUrl(url) {
     .join("&");
   return `${host}${path}${query ? `?${query}` : ""}`;
 }
-
-/**
- * Keys for a list of URLs, as a Set - what an insert path compares against.
- * @param {Array<string|{url: string}>} rows urls, or rows carrying one
- * @returns {Set<string>}
- */
-export function canonicalUrlSet(rows) {
-  const set = new Set();
-  for (const r of rows || []) {
-    const key = canonicalUrl(typeof r === "string" ? r : r && r.url);
-    if (key) set.add(key);
-  }
-  return set;
-}

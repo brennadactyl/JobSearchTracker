@@ -314,11 +314,14 @@ ${filingStep}8. REPORT WHAT THE RE-CHECK OF ALREADY-TRACKED LEADS FOUND. For the
    curl -s -X POST "$TRACKER_URL/api/leads" \\
      -H "Authorization: Bearer $TRACKER_API_TOKEN" \\
      -H "Content-Type: application/json" \\
-     -d '{"leads":[{"search":"${key}","company":"...","title":"...","location":"...","url":"...","found":"YYYY-MM-DD","verified":"YYYY-MM-DD","fit":"...","team":"...","setup":"...","comp":"..."}]}'
+     -d '{"on":"<today YYYY-MM-DD>","leads":[{"search":"${key}","company":"...","title":"...","location":"...","url":"...","fit":"...","team":"...","setup":"...","comp":"..."}]}'
    \`\`\`
 
-   Every object's \`"search"\` ${searchValueRule}${leadsNote}. \`found\` and \`verified\` are
-   today's date. \`team\`, \`setup\`, and \`comp\` are the step-${captureNum} fields - omit
+   Every object's \`"search"\` ${searchValueRule}${leadsNote}. \`on\` is today's
+   **local** date, sent once for the whole call - the server stamps \`found\` and
+   \`verified\` from it, so don't repeat a date on each posting. It is the same
+   date steps 9b and 9c send, and step 9c counts a day's new leads by it.
+   \`team\`, \`setup\`, and \`comp\` are the step-${captureNum} fields - omit
    the key entirely (don't send an empty string) for any of them the posting
    didn't state. \`TRACKER_URL\` and \`TRACKER_API_TOKEN\` are environment
    variables - just run the curl command above directly and let normal shell
@@ -337,10 +340,10 @@ ${filingStep}8. REPORT WHAT THE RE-CHECK OF ALREADY-TRACKED LEADS FOUND. For the
    curl -s -X POST "$TRACKER_URL/api/screened" \\
      -H "Authorization: Bearer $TRACKER_API_TOKEN" \\
      -H "Content-Type: application/json" \\
-     -d '{"screened":[{"search":"${key}","url":"...","company":"...","title":"...","location":"...","reason":"..."}]}'
+     -d '{"search":"${key}","on":"<today YYYY-MM-DD>","screened":[{"search":"${key}","url":"...","company":"...","title":"...","location":"...","reason":"..."}]}'
    \`\`\`
 
-   \`"search"\` must be \`"${key}"\`.${screenedNote} \`reason\` is a short, specific, human-readable explanation (e.g. ${screenedExamples}) - this is what makes the entry useful later, don't leave it vague. Same success/failure check as step 9 (an \`"added"\` count means it worked).
+   \`"search"\` must be \`"${key}"\`.${screenedNote} \`on\` is today's **local** date, the same one steps 9 and 9c send, and it is not optional: it is the date these rows are stamped with, and step 9c counts a day's screened rows by it. Leave it out and the server falls back to its own UTC date, which for an evening run is already tomorrow - the rows land fine and then the run records having screened nothing. \`reason\` is a short, specific, human-readable explanation (e.g. ${screenedExamples}) - this is what makes the entry useful later, don't leave it vague. Same success/failure check as step 9 (an \`"added"\` count means it worked).
 9c. RECORD THE RUN. **Do this every single run, without exception - including runs that found nothing, runs where every candidate was screened out, and runs where steps 8/9/9b were skipped or failed.** This is the one step with no "skip it if there's nothing to report" clause, and the reason is that a run finding nothing writes nothing anywhere else: no leads, no screened rows, no delistings. Without this call, a search that silently stopped running (expired token, disabled scheduled task, machine asleep) looks identical on the tracker webpage to a genuine zero-result day, and can go unnoticed for weeks.
 
    \`\`\`
