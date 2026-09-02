@@ -250,9 +250,33 @@ td textarea{font-size:13px;min-height:32px;min-width:130px}
 .dh-meta{font-size:12.5px;color:var(--ink3);margin-top:10px}
 .dh-meta a{color:var(--accent)}
 .dh-fit{font-size:13px;color:var(--ink2);margin-top:10px;line-height:1.5}
-.dh-app-head{display:flex;gap:14px;flex-wrap:wrap}
-.dh-app-head .mf{flex:1;min-width:180px}
-.dh-app-head .icon-btn{align-self:flex-end}
+
+/* The application header (see appDetailHtml) is the lead header's layout
+   built out of inputs, because an application is hand-maintainable in a way
+   a lead isn't. `.dh-in` strips a field back to the text it stands in for
+   and only draws its box on hover or focus, so the header reads as a heading
+   until you go to change it. The negative margin cancels the padding the box
+   needs, keeping the text on the same left edge as `.dh-track` above it.
+   Selectors are `input.dh-*` deliberately: the shared input rule up top is
+   an attribute selector, so a bare class would lose to it. */
+.dh-app-top{display:flex;gap:10px;align-items:flex-start}
+.dh-app-fields{flex:1;min-width:0}
+.dh-app-top .icon-btn{flex:0 0 auto;margin-top:2px}
+/* -8px, not -7px: the text inside sits past the 1px transparent border as
+   well as the 7px padding, and it's the text that has to line up with the
+   track line and the status row below. */
+input.dh-in{width:calc(100% + 8px);border:1px solid transparent;background:none;color:var(--ink);
+  border-radius:7px;padding:3px 7px;margin-left:-8px}
+input.dh-in:hover,input.dh-in:focus{border-color:var(--line);background:var(--surface)}
+input.dh-in::placeholder{color:var(--ink3)}
+input.dh-h1{font-family:"Bricolage Grotesque","IBM Plex Sans",sans-serif;
+  font-size:21px;font-weight:700;letter-spacing:-.02em;margin-top:4px}
+input.dh-sub-in{font-size:14.5px;color:var(--ink2);margin-top:3px}
+.dh-app-meta{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:7px}
+/* Width comes from the `size` attribute appDetailHtml sets from the value,
+   so the field hugs its text like the lead header's plain location does. */
+input.dh-loc-in{width:auto;max-width:calc(100% + 8px);font-size:12.5px;color:var(--ink3)}
+.dh-sep{color:var(--ink3)}
 .dh-status{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:20px}
 .dh-status select{width:auto;min-width:150px}
 .dh-status input[type=date]{width:auto}
@@ -553,7 +577,10 @@ var ui={tab:"dashboard",q:"",filter:"All",selected:{},expanded:{},view:"detail",
 // omitted from ROLE_FIELDS for leads - a lead already has its own url
 // (the header link points at it), so a second link input here would just
 // duplicate it; applications get it via APP_ROLE_FIELDS instead, since a
-// manually-added application has no posting URL to fall back on.
+// manually-added application has no posting URL to fall back on. The
+// application header links this field too (see appDetailHtml), but the input
+// has to stay: it's the only place the URL can be typed, and Grid view's
+// expanded row shows these cards with no header above them.
 //
 // There used to be a third field group here - lastContact/nextAction/
 // nextActionDate, a manually-typed reminder shown in its own "Follow-up"
@@ -711,10 +738,21 @@ function leadComparator(sortKey){
 var APP_SORTS=[
   ["applied-desc","Newest applied"],
   ["applied-asc","Oldest applied"],
+  ["location-asc","Location A-Z"],
   ["company-asc","Company A-Z"]
 ];
 function appComparator(sortKey){
   if(sortKey==="company-asc")return function(a,b){return String(a.company).localeCompare(String(b.company));};
+  if(sortKey==="location-asc")return function(a,b){
+    // Unlike a lead, an application can have no location at all - one added
+    // by hand starts blank. An empty string sorts first, which would put the
+    // rows saying nothing about where they are at the top of the sort that
+    // asks exactly that, so they sink instead (same shape as the "To Apply"
+    // float below).
+    var ea=a.location?0:1, eb=b.location?0:1;
+    if(ea!==eb)return ea-eb;
+    return String(a.location).localeCompare(String(b.location));
+  };
   var byDate=sortKey==="applied-asc"
     ?function(a,b){return String(a.dateApplied).localeCompare(String(b.dateApplied));}
     :function(a,b){return String(b.dateApplied).localeCompare(String(a.dateApplied));};
@@ -1321,15 +1359,23 @@ function appsTab(){
 
   var listHtml=A.map(function(a){
     var d=daysSince(a.dateApplied);
-    var cls="md-row"+(a.id===sel.id?" sel":"");
+    var g=geo(a.location);
+    var cls="md-row"+(a.id===sel.id?" sel":"")+(g?" "+g.p:"");
     return '<div class="'+cls+'" data-select="'+a.id+'" data-scope="applications">'+
       '<div class="md-row-top"><span class="co">'+esc(a.company||"Untitled")+'</span>'+
         '<span class="pill '+pillFor(a.status)+'">'+esc(a.status)+'</span></div>'+
-      '<div class="md-row-ttl">'+esc(a.title||"&mdash;")+'</div>'+
-      // A "To Apply" row has no applied date to count from (see APP_STATUS),
-      // so say that rather than render a bare "Applied" with nothing after it.
-      '<div class="md-row-loc">'+(a.status==="To Apply"?'Not applied yet'
-        :'Applied '+esc(a.dateApplied)+(d!==null?' &middot; '+d+'d':''))+'</div>'+
+      // The dash is markup, so it can't go through esc() with the title -
+      // that turned the fallback into a literal "&mdash;" on screen.
+      '<div class="md-row-ttl">'+(a.title?esc(a.title):"&mdash;")+'</div>'+
+      // The same three-part line a lead row has (place, geo tier, date
+      // stamp), so the two lists scan alike - and so the Location sort has
+      // something visible to have sorted by. A "To Apply" row has no applied
+      // date to count from (see APP_STATUS), so it says that rather than
+      // render a bare "Applied" with nothing after it.
+      '<div class="md-row-loc"><span class="md-row-place">'+esc(a.location)+'</span>'+
+        (g?'<span class="geo '+g.p+'">'+esc(g.label)+'</span>':'')+
+        '<span class="md-row-found">'+(a.status==="To Apply"?'Not applied yet'
+          :'Applied <span class="mono">'+esc(a.dateApplied)+'</span>'+(d!==null?' &middot; '+d+'d':''))+'</span></div>'+
     '</div>';
   }).join("");
 
@@ -1339,12 +1385,17 @@ function appsTab(){
 }
 
 function appsGridHtml(A){
-  var COLS=7; // company/role/status/applied/days/details/remove
+  var COLS=8; // company/role/location/status/applied/days/details/remove
   var h='<div class="card grid-wrap"><table><thead><tr>'+
-    '<th>Company</th><th>Role</th><th>Status</th><th>Applied</th><th>Days</th>'+
+    // Location sits between Role and Status, the slot it has in the leads
+    // grid - and it has to be here at all now that Location A-Z is one of
+    // this tab's sorts (see APP_SORTS), or Grid view reorders on a column it
+    // doesn't show.
+    '<th>Company</th><th>Role</th><th>Location</th><th>Status</th><th>Applied</th><th>Days</th>'+
     '<th></th><th></th>'+
   '</tr></thead><tbody>'+A.map(function(a){
     var d=daysSince(a.dateApplied);
+    var g=geo(a.location);
     var open=!!ui.expanded[a.id];
     // Row is the expand/select click target (see leadsGridHtml above for
     // why); most of an application row is form fields though, so the
@@ -1354,6 +1405,10 @@ function appsGridHtml(A){
     var row='<tr data-expand="'+a.id+'" data-scope="applications"'+cls+'>'+
       '<td><input type="text" data-id="'+a.id+'" data-field="company" data-app="1" value="'+esc(a.company)+'" placeholder="Company"></td>'+
       '<td><input type="text" data-id="'+a.id+'" data-field="title" data-app="1" value="'+esc(a.title)+'" placeholder="Role"></td>'+
+      // An input, not the leads grid's plain text: an application's location
+      // is the installer's own field, correctable like every other cell here.
+      '<td class="loc"><input type="text" data-id="'+a.id+'" data-field="location" data-app="1" value="'+esc(a.location)+'" placeholder="Location">'+
+        (g?'<span class="geo '+g.p+'">'+esc(g.label)+'</span>':'')+'</td>'+
       '<td>'+selectHtml(APP_STATUS,a.status,'data-id="'+a.id+'" data-field="status" data-app="1"')+'</td>'+
       '<td><input type="date" data-id="'+a.id+'" data-field="dateApplied" data-app="1" value="'+esc(a.dateApplied)+'"></td>'+
       '<td class="dt mono">'+(d===null?"&mdash;":d)+'</td>'+
@@ -1368,12 +1423,54 @@ function appsGridHtml(A){
   return h;
 }
 
+// Which search tab an application came from, for the track line the header
+// shares with leadDetailHtml. Read off the originating lead rather than
+// stored: a lead an application points at is the one kind the server never
+// deletes when its posting comes down (see setLeadStatus), so it's reliably
+// still in state.leads. Returns "" for a hand-added application, which has no
+// track to name - the line is then dropped rather than guessed at.
+function appTrackLabel(a){
+  if(!a.leadId)return "";
+  var lead=state.leads.filter(function(l){return String(l.id)===String(a.leadId);})[0];
+  return lead&&TRACKS[lead.search]?TRACKS[lead.search].label:"";
+}
+
+// The header mirrors leadDetailHtml's - track line, company, role, then a
+// meta line of location, geo tier and the posting link - so moving between a
+// search tab and this one doesn't mean re-reading a differently-shaped page
+// for the same facts.
+//
+// The difference is that these are inputs, not text. An application can be
+// added by hand and every part of it corrected later, which a lead (owned by
+// the search that found it) never needs. So rather than drop the editing to
+// match the look, the fields are styled as the headings they stand in for and
+// show their box on hover/focus - same data-id/data-field/data-app contract
+// as before, so commit() is unchanged.
 function appDetailHtml(a){
   var d=daysSince(a.dateApplied);
-  var h='<div class="dh-app-head">'+
-    '<div class="mf"><label>Company</label><input type="text" data-id="'+a.id+'" data-field="company" data-app="1" value="'+esc(a.company)+'" placeholder="Company"></div>'+
-    '<div class="mf"><label>Role</label><input type="text" data-id="'+a.id+'" data-field="title" data-app="1" value="'+esc(a.title)+'" placeholder="Role"></div>'+
-    '<button class="icon-btn danger" data-del="'+a.id+'" title="Remove application" aria-label="Remove application">'+TRASH_ICON+'</button>'+
+  var g=geo(a.location);
+  var track=appTrackLabel(a);
+  var href=safeUrl(a.link);
+  var fld=function(cls,field,val,ph){
+    return '<input class="dh-in '+cls+'" type="text" data-id="'+a.id+'" data-field="'+field+
+      '" data-app="1" value="'+esc(val||"")+'" placeholder="'+esc(ph)+'" aria-label="'+esc(ph)+'">';
+  };
+  var h='<div class="dh-app-top"><div class="dh-app-fields">'+
+    (track?'<div class="dh-track">'+esc(track)+'</div>':'')+
+    fld("dh-h1","company",a.company,"Company")+
+    fld("dh-sub-in","title",a.title,"Role")+
+    '<div class="dh-meta dh-app-meta">'+
+      // Sized to its own text so it hugs the value the way the lead header's
+      // plain location does, instead of a full-width box shoving the tier and
+      // the link off to the far edge.
+      '<input class="dh-in dh-loc-in" type="text" data-id="'+a.id+'" data-field="location" data-app="1"'+
+        ' size="'+Math.max(14,Math.min(38,String(a.location||"").length+1))+'"'+
+        ' value="'+esc(a.location)+'" placeholder="Location" aria-label="Location">'+
+      (g?'<span class="geo '+g.p+'">'+esc(g.label)+'</span>':'')+
+      (href?'<span class="dh-sep">&middot;</span><a href="'+esc(href)+'" target="_blank" rel="noopener">View posting &#8599;</a>':'')+
+    '</div>'+
+  '</div>'+
+  '<button class="icon-btn danger" data-del="'+a.id+'" title="Remove application" aria-label="Remove application">'+TRASH_ICON+'</button>'+
   '</div>';
   h+='<div class="dh-status">'+selectHtml(APP_STATUS,a.status,'data-id="'+a.id+'" data-field="status" data-app="1"')+
     '<span class="dh-dates">Applied <input type="date" data-id="'+a.id+'" data-field="dateApplied" data-app="1" value="'+esc(a.dateApplied)+'">'+
@@ -1468,7 +1565,7 @@ document.addEventListener("click",function(e){
   if(e.target.id==="addapp"){
     setSaved("Saving…",false);
     api("/api/update",{method:"POST",body:JSON.stringify({
-      type:"application",company:"",title:"",dateApplied:today(),status:"Applied",notes:"",
+      type:"application",company:"",title:"",location:"",dateApplied:today(),status:"Applied",notes:"",
       team:"",setup:"",source:"",link:"",resume:"",referral:"",comp:""
     })}).then(function(res){
       state.applications.unshift(res.application);
