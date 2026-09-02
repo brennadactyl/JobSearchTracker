@@ -43,23 +43,41 @@
  *                            self-signup; this is how people are provisioned.
  *   GET  /api/me             requires Bearer token -> { id, name }
  *   GET  /api/data           requires Bearer token -> { user, updated, leads[], applications[], screened[], tracks[], settings }
- *   POST /api/leads          requires Bearer token -> body: { leads: [...] }
- *                            appends leads not already present for the same
- *                            (user, search, url) triple (DB-enforced UNIQUE
- *                            constraint + INSERT OR IGNORE - atomic,
- *                            race-free); never touches existing status/notes
- *   POST /api/runs           requires Bearer token -> body: { search, status?, leadsAdded?,
- *                            screenedAdded?, delisted?, note?, at?, on? }
+ *   POST /api/leads          requires Bearer token -> body: { on?, leads: [...] }
+ *                            appends leads whose posting this user doesn't
+ *                            already have. Two layers: a canonical-URL filter
+ *                            (see ./url.js) over the DB-enforced UNIQUE
+ *                            constraint, so the same posting under a
+ *                            different URL is caught too. Scoped to the
+ *                            *search*, so one branched run cannot file a
+ *                            posting into two of its own tabs. Companies on
+ *                            excluded_companies are dropped. `on` is the
+ *                            caller's local date, used for found/verified.
+ *                            -> { added, duplicates, excluded }
+ *   POST /api/runs           requires Bearer token -> body: { search, status?,
+ *                            note?, at?, on? }
  *                            records that one track's scheduled search just
  *                            finished. Called at the end of EVERY run,
  *                            including ones that found nothing - that's the
  *                            case no other table can distinguish from the
- *                            search never having fired. 404s on a track key
- *                            that isn't configured for this user rather than
- *                            creating an orphan row.
- *   POST /api/screened       requires Bearer token -> body: { screened: [...] }
+ *                            search never having fired. The three counts are
+ *                            NOT taken from the caller: leadsAdded /
+ *                            screenedAdded / delisted are derived from the
+ *                            rows themselves (db.countRunActivity), and are
+ *                            accepted-and-ignored in the body so a run on an
+ *                            older prompt still records correctly. One POST
+ *                            also writes a record for every tab this run
+ *                            feeds. 404s on a track key that isn't configured
+ *                            for this user rather than creating an orphan
+ *                            row. -> { ok, run, also }
+ *   POST /api/screened       requires Bearer token -> body: { on?, screened: [...] }
  *                            appends postings the search decided NOT to add
- *                            as a lead - same dedup shape as /api/leads.
+ *                            as a lead - same dedup and exclusion handling as
+ *                            /api/leads. Filed under the search that did the
+ *                            screening, not the tab. `on` matters: it is the
+ *                            date these rows carry, and /api/runs counts a
+ *                            day's screened rows by it.
+ *                            -> { added, duplicates, excluded }
  *   POST /api/update         requires Bearer token -> body: { type: "lead"|"application", ... }
  *                            updates one lead's status/notes, or upserts one
  *                            application record. Generic field-whitelist
@@ -78,6 +96,41 @@
  *                            screened, unless an application points at it,
  *                            in which case it's kept - see api.js's
  *                            removeDelistedLead.
+ *   POST /api/verified       requires Bearer token -> body: { search, on?,
+ *                            urls: [...] } -> { stamped, unmatched,
+ *                            unmatchedUrls, on }. A run reporting which of the
+ *                            postings it tracks it re-confirmed live tonight;
+ *                            the server stamps `verified` on the matching
+ *                            leads. That column has meant "date last verified
+ *                            live" since the first migration and nothing ever
+ *                            wrote it - the only thing a run could report about
+ *                            a re-checked posting was that it was dead - so it
+ *                            sat at the found date and couldn't answer how long
+ *                            it had been since anyone looked. Since delisting
+ *                            deletes (migrations/0004), a lead still in a tab
+ *                            is presumed live, and this is the only signal of
+ *                            how stale that presumption is.
+ *   POST /api/delist         requires Bearer token -> body: { search, on,
+ *                            urls: [...] } -> { removed, kept, unmatched,
+ *                            unmatchedUrls, on }. The batch form of the
+ *                            `delistedOn` report above: every posting a run
+ *                            confirmed dead tonight, in one call, so it stops
+ *                            carrying lead ids around and tallying responses
+ *                            itself. Same policy, same code - see api.js's
+ *                            delistLead, which both entry points call - so a
+ *                            lead an application points at is still kept and
+ *                            any other is deleted and its URL screened. `on`
+ *                            must be a real YYYY-MM-DD or the call is a 400:
+ *                            what it triggers is a permanent delete.
+ *
+ *                            Both match leads by posting identity (api.js's
+ *                            matchLeadsByUrl over ./url.js), not raw string, so
+ *                            a `?gh_jid=` variant or a slug still finds the row
+ *                            it was filed under - and across every tab this
+ *                            person has, since one run can fill several. A URL
+ *                            matching nothing comes back in `unmatchedUrls`:
+ *                            the run and the tracker disagree about what is
+ *                            tracked, which is worth a line in the report.
  *   POST /api/leads/:id/status       requires Bearer token -> body: { status }
  *                            validates against LEAD_STATUS; if the new
  *                            status is "Applied", atomically (one D1
@@ -158,6 +211,8 @@ import {
   handleAddScreened,
   handleRecordRun,
   handleUpdate,
+  handleMarkVerified,
+  handleDelistUrls,
   handleSetLeadStatus,
   handleSetApplicationStatus,
   handleDeleteApplication,
@@ -222,6 +277,16 @@ export default {
 
     if (url.pathname === "/api/update" && request.method === "POST") {
       return handleUpdate(request, db);
+    }
+
+    // The two URL-set reports a nightly run makes about the postings it already
+    // tracks: which are still live, and which have come down.
+    if (url.pathname === "/api/verified" && request.method === "POST") {
+      return handleMarkVerified(request, db);
+    }
+
+    if (url.pathname === "/api/delist" && request.method === "POST") {
+      return handleDelistUrls(request, db);
     }
 
     // Path-param routes (the only ones in this file) - matched by regex

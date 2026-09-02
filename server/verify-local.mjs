@@ -96,6 +96,116 @@ const aDupe = await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
   { search: "SWE", company: "Acme", title: "Senior Backend", location: "Remote (U.S.)", url: sharedUrl }] } });
 check("the same user re-posting the same url is deduped", aDupe.json.added === 0);
 
+// The variant cases - a posting arriving under a URL that isn't byte-identical
+// to the one already stored. This is what actually happened in production: 8
+// leads filed in one night that were already tracked, each differing only by a
+// ?gh_jid= suffix or a slug. The UNIQUE constraint cannot see any of these.
+const aVariant = await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
+  { search: "SWE", company: "Acme", title: "Senior Backend", url: `${sharedUrl}?gh_src=search-snippet` }] } });
+check("a tracking parameter doesn't make it a new posting",
+  aVariant.json.added === 0 && aVariant.json.duplicates === 1, JSON.stringify(aVariant.json));
+
+// Two rows for one posting inside a single payload. INSERT OR IGNORE can't see
+// this either, since the two urls differ as strings.
+const reqUrl = `https://boards.example.com/jobs/${Date.now()}7104`;
+const aBatch = await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
+  { search: "SWE", company: "Acme", title: "Staff Backend", url: reqUrl },
+  { search: "SWE", company: "Acme", title: "Staff Backend", url: `${reqUrl}/senior-staff-backend-engineer` }] } });
+check("one posting twice in one payload is inserted once",
+  aBatch.json.added === 1 && aBatch.json.duplicates === 1, JSON.stringify(aBatch.json));
+
+// The distinguishing case that stops the rule being "strip the query string":
+// some boards give every posting an identical path and tell them apart only by
+// a query param, so those must stay separate rows.
+const sharedPath = `https://ats.example.com/careers/job/?jid=${Date.now()}`;
+const aTwoJobs = await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
+  { search: "SWE", company: "Acme", title: "One", url: `${sharedPath}1` },
+  { search: "SWE", company: "Acme", title: "Two", url: `${sharedPath}2` }] } });
+check("two postings sharing a path but not an id stay two leads",
+  aTwoJobs.json.added === 2, JSON.stringify(aTwoJobs.json));
+
+// The multi-user version of the variant case. Dedup widened from "same string"
+// to "same posting", and the whole point of doing that lookup in db.js is that
+// it can only ever see the calling user's rows - so B posting a variant of a
+// url A already tracks must still be a new lead for B.
+// A url only A holds - `sharedUrl` above is deliberately tracked by BOTH
+// users, so a variant of it is B's own duplicate and would pass this check
+// while proving nothing about scoping.
+const soloUrl = `https://example.com/a-only-${Date.now()}`;
+await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
+  { search: "SWE", company: "Acme", title: "Solo", url: soloUrl }] } });
+const aSoloDupe = await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
+  { search: "SWE", company: "Acme", title: "Solo", url: `${soloUrl}?gh_src=search-snippet` }] } });
+check("the variant is a duplicate for the user who holds the original",
+  aSoloDupe.json.added === 0, JSON.stringify(aSoloDupe.json));
+const bVariant = await req("POST", "/api/leads", { token: B_TOK, body: { leads: [
+  { search: "SWE", company: "Acme", title: "Solo", url: `${soloUrl}?gh_src=search-snippet` }] } });
+check("but is new for a user who does not - dedup never reaches across users",
+  bVariant.json.added === 1, JSON.stringify(bVariant.json));
+
+// Excluded companies. The list has been structured config for a while; until
+// now the only thing acting on it was a sentence in the prompt, and both
+// directions leaked in production - a lead got filed for an excluded company,
+// and two screened rows were written for one the prompt says to drop without
+// recording at all.
+await req("POST", "/api/config", { token: A_TOK, body: {
+  excluded_companies: ["Quillwork / Quill Industries", "Vela", "Q (formerly Quantex)"] } });
+const exLead = await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
+  { search: "SWE", company: "Vela", title: "MTS", url: `https://vela.example.com/careers/${Date.now()}` },
+  { search: "SWE", company: "Acme", title: "Fine", url: `https://example.com/ok-${Date.now()}` }] } });
+check("an excluded company is dropped and the rest of the batch still lands",
+  exLead.json.added === 1 && exLead.json.excluded === 1, JSON.stringify(exLead.json));
+// The alias case: the list entry carries two names, and the parenthetical one
+// is how the live data actually spells it.
+const exAlias = await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
+  { search: "SWE", company: "Quill Industries (Quillwork)", title: "Eng", url: `https://example.com/qw-${Date.now()}` }] } });
+check("an alias from the same list entry is excluded too",
+  exAlias.json.added === 0 && exAlias.json.excluded === 1, JSON.stringify(exAlias.json));
+// The short-alias rule. "Q (formerly Quantex)" yields the alias "q", and as a
+// bare substring that would take out a large slice of any real board. It must
+// only match a company named exactly "q". The second row is the token-boundary
+// rule: "Vela" is on the list, "Velabyte" is a different company.
+// Distinct req ids, not just distinct paths: canonicalUrl keys on the id when
+// there is one, so two urls carrying the same number are one posting however
+// their paths differ.
+const shortStamp = Date.now();
+const exShort = await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
+  { search: "SWE", company: "Torque Interactive", title: "Eng", url: `https://example.com/jobs/${shortStamp}01` },
+  { search: "SWE", company: "Velabyte", title: "Eng", url: `https://example.com/jobs/${shortStamp}02` }] } });
+check("a short alias does not swallow every company containing that letter",
+  exShort.json.added === 2 && exShort.json.excluded === 0, JSON.stringify(exShort.json));
+// Exclusions are dropped WITHOUT a screened row - the opposite of every other
+// rejected candidate. A screened row is a memo saying "considered and ruled
+// out", and an exclusion is never considered.
+const exScreened = await req("POST", "/api/screened", { token: A_TOK, body: { screened: [
+  { search: "SWE", company: "Vela", url: `https://vela.example.com/careers/s-${Date.now()}`, reason: "excluded" }] } });
+check("an excluded company leaves no screened row behind either",
+  exScreened.json.added === 0 && exScreened.json.excluded === 1, JSON.stringify(exScreened.json));
+// The self-renewing case: /api/coverage creates a row for any company handed
+// to it, so an excluded one swept once would be served back every cycle.
+const exSweep = await req("POST", "/api/coverage", { token: A_TOK, body: {
+  search: "SWE", on: "2026-09-02", swept: [{ company: "Vela" }, { company: "Acme" }] } });
+check("an excluded company cannot join the rotation",
+  exSweep.json.recorded === 1 && exSweep.json.excluded === 1, JSON.stringify(exSweep.json));
+check("and does not come back from the rotation afterwards",
+  !(await req("GET", "/api/coverage/SWE?all=1", { token: A_TOK })).json.companies
+    .some((c) => c.company === "Vela"));
+// The ordinary way an exclusion happens: the company is already in the
+// rotation, and gets excluded later because a posting from it turned up. A
+// guard on the write path alone would go on serving it forever.
+await req("POST", "/api/config", { token: A_TOK, body: { excluded_companies: [] } });
+await req("POST", "/api/coverage", { token: A_TOK, body: {
+  search: "SWE", on: "", swept: [{ company: "Latecomer Ltd" }] } });
+check("a company registered before it was excluded is in the rotation",
+  (await req("GET", "/api/coverage/SWE?all=1", { token: A_TOK })).json.companies
+    .some((c) => c.company === "Latecomer Ltd"));
+await req("POST", "/api/config", { token: A_TOK, body: { excluded_companies: ["Latecomer Ltd"] } });
+const afterEx = await req("GET", "/api/coverage/SWE?all=1", { token: A_TOK });
+check("excluding it afterwards stops it being handed to a run",
+  !afterEx.json.companies.some((c) => c.company === "Latecomer Ltd"),
+  JSON.stringify(afterEx.json.companies.map((c) => c.company).slice(0, 8)));
+await req("POST", "/api/config", { token: A_TOK, body: { excluded_companies: [] } });
+
 const screenedUrl = `https://example.com/screened-${Date.now()}`;
 await req("POST", "/api/screened", { token: A_TOK, body: { screened: [{ search: "SWE", url: screenedUrl, reason: "out of scope" }] } });
 const bScreened = await req("POST", "/api/screened", { token: B_TOK, body: { screened: [{ search: "SWE", url: screenedUrl, reason: "out of scope" }] } });
@@ -254,18 +364,143 @@ const branched = await req("POST", "/api/config", { token: A_TOK, body: { tracks
     role_search_line: "Backend roles", target_companies: ["Acme"],
     full_description: "a hands-on backend role" },
   { key: "LEAD", label: "Ada Lead", sort_order: 1, fed_by: "SWE",
-    full_description: "a role leading a team" }] } });
+    full_description: "a role leading a team" },
+  // An independent track, not part of the SWE feed group - the contrast that
+  // makes the dedup-scope checks below mean something.
+  { key: "DATA", label: "Ada Data", sort_order: 2,
+    role_search_line: "Data roles", target_companies: ["Globex"] }] } });
 check("a fed track posts fine alongside the track that feeds it", branched.status === 200, branched.text.slice(0, 120));
+
+// Dedup follows the *search*, not the tab. SWE and LEAD are one search filling
+// two tabs, so one posting cannot sit in both: a run that filed it under LEAD
+// yesterday and sorts it into SWE today would otherwise add it twice, which is
+// the duplicate this whole filter exists to stop arriving by another door.
+const groupUrl = `https://boards.example.com/jobs/${Date.now()}31`;
+const across = await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
+  { search: "SWE", company: "Acme", title: "Shared", url: groupUrl },
+  { search: "LEAD", company: "Acme", title: "Shared", url: groupUrl }] } });
+check("one posting cannot land in two tabs of the same branched search",
+  across.json.added === 1 && across.json.duplicates === 1, JSON.stringify(across.json));
+// ...while two genuinely separate searches tracking one posting stay two rows,
+// which is what UNIQUE(user_id, search, url) has always said.
+const indieUrl = `https://boards.example.com/jobs/${Date.now()}32`;
+const indie = await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
+  { search: "SWE", company: "Acme", title: "Shared", url: indieUrl },
+  { search: "DATA", company: "Acme", title: "Shared", url: indieUrl }] } });
+check("but two independent tracks may each hold it",
+  indie.json.added === 2, JSON.stringify(indie.json));
 const fedPrompt = await req("GET", "/api/prompt/LEAD", { token: A_TOK });
 check("a fed track has no prompt of its own, and the refusal names the one to run",
   fedPrompt.status === 409 && /"SWE"/.test(fedPrompt.json.error), fedPrompt.text.slice(0, 120));
 const feedPrompt = (await req("GET", "/api/prompt/SWE", { token: A_TOK })).text;
+// The third clause used to look for `"search":"LEAD"`, which only ever
+// appeared in the per-tab run-record instruction. The server fans that out
+// now, so the literal is gone by design; what still has to be true is that the
+// fed tab is a place step 9 can file a posting under.
 check("the feeding track's prompt covers both tabs",
   feedPrompt.includes("/api/dedup/LEAD") &&
   feedPrompt.includes("a role leading a team") &&
-  feedPrompt.includes('"search":"LEAD"'));
+  feedPrompt.includes('`"LEAD"`'));
+// The fan-out is one transaction, so a run record either exists for every tab
+// the run fills or for none. The failure it replaced was a half-written
+// fan-out leaving a tab that had just been searched reading as never-run - the
+// exact state search_runs exists to make visible. A batch that violates the
+// table's primary key fails as a whole, which is how this gets to observe
+// all-or-nothing from outside: nothing should have moved.
+const fanDay = "2026-12-01";
+await req("POST", "/api/runs", { token: A_TOK, body: { search: "SWE", status: "ok", on: fanDay, note: "before" } });
+const beforeFan = (await req("GET", "/api/config", { token: A_TOK })).json.tracks
+  .filter((t) => ["SWE", "LEAD"].includes(t.key)).map((t) => t.last_run.note);
+check("a fan-out writes a record for the posted track and every tab it feeds",
+  beforeFan.length === 2 && beforeFan.every((n) => n === "before"), JSON.stringify(beforeFan));
+check("and the fed tab's record is not the feeding track's row copied over",
+  (await req("GET", "/api/config", { token: A_TOK })).json.tracks
+    .find((t) => t.key === "LEAD").last_run.on === fanDay);
+
 check("a fed track still accepts a run record - that's what keeps its tab from reading stale",
   (await req("POST", "/api/runs", { token: A_TOK, body: { search: "LEAD", on: "2026-08-31", note: "filed by SWE" } })).status === 200);
+
+console.log("\n== dates and counts line up ==");
+// The bug this catches: /api/screened accepts a local `on`, and a run record
+// counts a day's screened rows by `date = on`. If the caller sends `on` to
+// /api/runs but not to /api/screened, the rows get the worker's UTC date and
+// the run truthfully records having screened nothing. It only diverges when
+// the two dates differ, which a same-day test cannot produce - so this sends a
+// date that is nobody's "today" and checks the counts still find each other.
+const farDay = "2026-11-14";
+// Distinct req ids, not a shared stem with different suffixes: canonicalUrl
+// keys on the number and ignores the rest of the path, so urls built by
+// appending to one stem are all the same posting.
+const dStamp = Date.now();
+// Deltas, not absolutes: this file is re-run against the same local database,
+// and a previous run's rows are still sitting on that date.
+const base = (await req("POST", "/api/runs", { token: A_TOK, body: {
+  search: "SWE", status: "ok", on: farDay, note: "baseline" } })).json.run;
+await req("POST", "/api/leads", { token: A_TOK, body: { on: farDay, leads: [
+  { search: "SWE", company: "Acme", title: "Dated", url: `https://dates.example.com/jobs/${dStamp}10` }] } });
+await req("POST", "/api/screened", { token: A_TOK, body: { search: "SWE", on: farDay, screened: [
+  { search: "SWE", url: `https://dates.example.com/jobs/${dStamp}11`, reason: "below target level" },
+  { search: "SWE", url: `https://dates.example.com/jobs/${dStamp}12`, reason: "outside scope: London, UK" }] } });
+const dated = await req("POST", "/api/runs", { token: A_TOK, body: {
+  search: "SWE", status: "ok", on: farDay, note: "dates" } });
+check("a lead posted with a top-level `on` is stamped and counted on that date",
+  dated.json.run.leads_added - base.leads_added === 1, JSON.stringify(dated.json.run));
+check("screened rows posted with the same `on` are counted on it too",
+  dated.json.run.screened_added - base.screened_added === 2, JSON.stringify(dated.json.run));
+// DELISTED_REASON is the server's marker for "a lead we tracked came down".
+// A run screening a dead-on-arrival candidate would describe it the same way
+// in English, and that row must not be counted as a delisting.
+await req("POST", "/api/screened", { token: A_TOK, body: { search: "SWE", on: farDay, screened: [
+  { search: "SWE", url: `https://dates.example.com/jobs/${dStamp}13`, reason: "posting taken down" }] } });
+const reasoned = await req("POST", "/api/runs", { token: A_TOK, body: { search: "SWE", status: "ok", on: farDay } });
+check("a screened row cannot claim the reason that means 'delisted'",
+  reasoned.json.run.delisted === base.delisted &&
+  reasoned.json.run.screened_added - base.screened_added === 3,
+  JSON.stringify(reasoned.json.run));
+
+console.log("\n== url-keyed routes ==");
+// These are the first routes that find a lead by url rather than by id, so
+// they do not inherit the protection every other cross-user check in this file
+// relies on - an id that simply doesn't resolve for the wrong user. A
+// `WHERE url IN (...)` missing its user_id would match the other person's row
+// perfectly, and one of these routes deletes. Hence the two checks below.
+const bothUrl = `https://careers.example.com/jobs/${Date.now()}4210`;
+for (const tok of [A_TOK, B_TOK]) {
+  await req("POST", "/api/leads", { token: tok, body: { leads: [
+    { search: "SWE", company: "Acme", title: "Shared", url: bothUrl, verified: "2026-01-01" }] } });
+}
+// Sent as a variant, to prove the canonical match is what resolves it.
+const bStamp = await req("POST", "/api/verified", { token: B_TOK, body: {
+  search: "SWE", on: "2026-09-02", urls: [`${bothUrl}?gh_src=search-snippet`] } });
+check("a url variant re-confirms the lead it names", bStamp.json.stamped === 1, JSON.stringify(bStamp.json));
+const aRow = (await req("GET", "/api/data", { token: A_TOK })).json.leads.find((l) => l.url === bothUrl);
+check("and stamping it did not touch the other user's copy",
+  aRow && aRow.verified === "2026-01-01", JSON.stringify(aRow && aRow.verified));
+
+const bDel = await req("POST", "/api/delist", { token: B_TOK, body: {
+  search: "SWE", on: "2026-09-02", urls: [bothUrl] } });
+check("delisting removes the caller's lead", bDel.json.removed === 1, JSON.stringify(bDel.json));
+const aData2 = await req("GET", "/api/data", { token: A_TOK });
+const bData2 = await req("GET", "/api/data", { token: B_TOK });
+check("and leaves the other user's lead for the same posting alone",
+  aData2.json.leads.some((l) => l.url === bothUrl) && !bData2.json.leads.some((l) => l.url === bothUrl));
+
+// A date that isn't a date is not a report of anything, and what this triggers
+// is a permanent delete - so it is refused for the whole batch, before
+// anything is removed.
+const liveUrl = `https://careers.example.com/jobs/${Date.now()}5511`;
+await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
+  { search: "SWE", company: "Acme", title: "Still live", url: liveUrl }] } });
+const badOn = await req("POST", "/api/delist", { token: A_TOK, body: { search: "SWE", on: "today", urls: [liveUrl] } });
+check("delist refuses a non-date and deletes nothing",
+  badOn.status === 400 &&
+  (await req("GET", "/api/data", { token: A_TOK })).json.leads.some((l) => l.url === liveUrl),
+  badOn.text.slice(0, 100));
+const noMatch = await req("POST", "/api/delist", { token: A_TOK, body: {
+  search: "SWE", on: "2026-09-02", urls: ["https://example.com/nothing-tracks-this"] } });
+check("a url nothing tracks is reported back as a raw url, not a count",
+  noMatch.json.unmatched === 1 && noMatch.json.unmatchedUrls[0] === "https://example.com/nothing-tracks-this",
+  JSON.stringify(noMatch.json));
 
 console.log("\n== moving a lead between tabs ==");
 const moved = await req("POST", "/api/update", { token: A_TOK, body: { type: "lead", id: aLeadId, search: "LEAD" } });
@@ -276,14 +511,19 @@ check("B cannot move A's lead into one of B's tabs",
   (await req("POST", "/api/update", { token: B_TOK, body: { type: "lead", id: aLeadId, search: "SWE" } })).status === 404);
 // Its own url rather than the shared fixture: a second row for that one would
 // quietly break the "A's leads survive their track being removed" count below.
+//
+// The destination is DATA, an independent track, not LEAD. Since dedup follows
+// the search rather than the tab, one posting can no longer be filed into two
+// tabs of the same branched search at all - so a genuine UNIQUE collision on
+// move can only be built out of two separate searches.
 const conflictUrl = `https://example.com/in-both-tabs-${Date.now()}`;
 await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
   { search: "SWE", company: "Acme", title: "Staff Backend", location: "Remote (U.S.)", url: conflictUrl },
-  { search: "LEAD", company: "Acme", title: "Staff Backend", location: "Remote (U.S.)", url: conflictUrl }] } });
+  { search: "DATA", company: "Acme", title: "Staff Backend", location: "Remote (U.S.)", url: conflictUrl }] } });
 const dupId = (await req("GET", "/api/data", { token: A_TOK })).json.leads
   .find((l) => l.url === conflictUrl && l.search === "SWE").id;
 check("moving onto a url the destination tab already holds is a 409, not a 500",
-  (await req("POST", "/api/update", { token: A_TOK, body: { type: "lead", id: dupId, search: "LEAD" } })).status === 409);
+  (await req("POST", "/api/update", { token: A_TOK, body: { type: "lead", id: dupId, search: "DATA" } })).status === 409);
 
 console.log("\n== sessions ==");
 const aSecond = await req("POST", "/api/login", { body: { name: "Ada", password: "ada-new-password-1", label: "browser" } });

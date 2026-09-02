@@ -32,7 +32,10 @@ import {
   upsertUser,
   verifyPassword,
 } from "./auth.js";
+import { DELISTED_REASON } from "./db.js";
+import { excludedCompanyMatcher } from "./exclude.js";
 import { buildSearchPrompt } from "./prompt.js";
+import { canonicalUrl } from "./url.js";
 
 export const CORS_HEADERS = {
   "access-control-allow-origin": "*",
@@ -71,6 +74,27 @@ function text(body, status = 200) {
 
 function today() {
   return new Date().toISOString().slice(0, 10);
+}
+
+// A caller-supplied local date, or "" if it isn't one. Every route that takes
+// an `on` validates it identically, and the shape was written out ten times
+// before this existed - which is nine chances for one of them to drift into
+// accepting something the others refuse, on a value that decides what date
+// rows are stamped with and, on /api/delist, whether a lead is deleted.
+//
+// Strict on purpose: no coercion, no "2026-9-1". The callers are LLM runs, and
+// a value that isn't a date isn't a report of anything.
+function isoDate(value) {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
+}
+
+// The exclusion predicate for this user, built from their settings. Every
+// write path that can introduce a company needs it (leads, screened, and the
+// coverage rotation both ways), and each one was fetching settings and
+// building the matcher itself.
+async function excluderFor(db) {
+  const { settings } = await db.getTracksAndSettings();
+  return excludedCompanyMatcher(settings.excluded_companies);
 }
 
 // Valid status values, duplicated from page.html's LEAD_STATUS/APP_STATUS
@@ -218,11 +242,28 @@ export async function handleGetCoverage(db, key, all = false) {
   if (!(await db.trackExists(key))) {
     return json({ error: `unknown track "${key}" - not in the configured tracks` }, 404);
   }
+  // Filtered on the way out as well as on the way in, because the two catch
+  // different things. recordSweeps refuses to *add* an excluded company; this
+  // refuses to hand back one that is already in the table - which is the
+  // ordinary case, not the exotic one. An exclusion usually gets added because
+  // the person saw a posting and decided never again, so the company is
+  // already in the rotation by the time it lands on the list. Guarding only
+  // the write would leave it being served as a company to cover, every cycle,
+  // for as long as the row exists.
+  //
+  // Filtered rather than deleted: the row is the rotation's memory of when
+  // that company was last looked at, the exclusion list is editable, and
+  // reading is the wrong moment to destroy data.
   const [companies, total] = await Promise.all([
-    db.getCoverage(key, all ? 0 : COVERAGE_BATCH),
+    db.getCoverage(key, 0),
     db.countCoverage(key),
   ]);
-  return json({ companies, total, batch: all ? total : COVERAGE_BATCH });
+  const isExcluded = await excluderFor(db);
+  const allowed = companies.filter((c) => !isExcluded(c.company));
+  // The cap is applied after filtering, so an excluded company can't eat a
+  // slot in the batch a run is told to cover.
+  const batch = all ? allowed.length : COVERAGE_BATCH;
+  return json({ companies: allowed.slice(0, batch), total: allowed.length, batch });
 }
 
 // Records what a run actually attempted. Attempted, not found: a company whose
@@ -251,14 +292,21 @@ export async function handleRecordSweeps(request, db) {
   // An explicit "" is not a malformed date, it's "register these companies,
   // I haven't swept them" - the seeding case, which must not stamp anything
   // (see db.recordSweeps).
-  const on = typeof body.on === "string" && body.on === ""
-    ? ""
-    : typeof body.on === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.on)
-      ? body.on
-      : new Date().toISOString().slice(0, 10);
+  const on = body.on === "" ? "" : isoDate(body.on) || today();
 
-  const recorded = await db.recordSweeps(key, valid, on);
-  return json({ recorded, on });
+  // The rotation is the surface where an exclusion would become permanent.
+  // This route creates a row for any company it is handed - that is how a
+  // company broader discovery turned up joins the rotation - so an excluded
+  // company swept once would be stored, then handed back by
+  // GET /api/coverage as a company to cover, every cycle, forever. Every other
+  // exclusion leak is one row; this one is self-renewing.
+  const isExcluded = await excluderFor(db);
+  const allowed = valid.filter((i) => !isExcluded(i.company));
+  const excluded = valid.length - allowed.length;
+  if (allowed.length === 0) return json({ recorded: 0, excluded, on });
+
+  const recorded = await db.recordSweeps(key, allowed, on);
+  return json({ recorded, excluded, on });
 }
 
 export async function handleGetPrompt(db, user, key) {
@@ -323,6 +371,30 @@ export async function handleGetPrompt(db, user, key) {
 // is worth surfacing loudly in the run's own output. Silently accepting it
 // would create an orphan row that no tab ever displays - the failure mode
 // this whole table exists to prevent.
+//
+// ---- What the caller is trusted for, and what it isn't. `search`, `status`,
+// `note` and `on` are things only the run knows. The three counts are not:
+// they are arithmetic over rows this database already holds, so they are done
+// here (db.countRunActivity) and the caller's own tally is ignored.
+//
+// The evidence, 2026-09-01: the `SWE` run claimed `leads_added: 97` against a
+// tab holding 89 leads, 97 being the combined figure across all four tabs it
+// fills - while the three tabs `fed_by` "SWE" had *empty* run records that
+// morning, which is the client's "never recorded" state, on a morning one of
+// them took 133 leads. The single-tab `CPM` run got all three numbers right.
+// Only the multi-tab case failed, because its rule was the longest and
+// fiddliest block of prose in the prompt.
+//
+// Hence the fan-out too: a run record is per track, and asking the run for
+// four correctly-split records is precisely what didn't work. One POST in, one
+// row per tab out, each counted from its own rows.
+//
+// The retired count fields are still accepted and ignored, so a run mid-flight
+// on a prompt fetched before this deployed still records correctly.
+//
+// One honest caveat: counting by date means a lead the *user* adds by hand
+// today lands in today's run count for that tab. Rare, and still truer than a
+// tally computed across four tabs and attributed to one.
 export async function handleRecordRun(request, db) {
   let body;
   try {
@@ -348,24 +420,37 @@ export async function handleRecordRun(request, db) {
   // `on` is the caller's *local* date - the worker can't derive it (see the
   // note in migrations/0001_schema.sql). Falls back to the UTC date, which is right for
   // any run scheduled outside the hours where the two disagree.
-  const on = typeof body.on === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.on)
-    ? body.on
-    : at.slice(0, 10);
+  const on = isoDate(body.on) || at.slice(0, 10);
 
-  const count = (v) => (Number.isFinite(Number(v)) && Number(v) >= 0 ? Math.floor(Number(v)) : 0);
   const status = body.status === "error" ? "error" : "ok";
+  const note = typeof body.note === "string" ? body.note.slice(0, 500) : "";
 
-  const run = await db.recordRun(key, {
-    at,
-    on,
-    status,
-    leadsAdded: count(body.leadsAdded),
-    screenedAdded: count(body.screenedAdded),
-    delisted: count(body.delisted),
-    note: typeof body.note === "string" ? body.note.slice(0, 500) : "",
-  });
+  // Every tab this one run fills: the posted track, then the tracks whose
+  // `fed_by` names it. Read through getTracksAndSettings rather than a
+  // purpose-built query because that is exactly how handleGetPrompt decides
+  // which tabs to write the prompt for - the run and its record should be
+  // agreeing about the same set from the same source, not from two lookups
+  // that could one day disagree about what feeds what.
+  const config = await db.getTracksAndSettings();
+  const keys = [key, ...config.tracks.filter((t) => t.fed_by === key).map((t) => t.key)];
 
-  return json({ ok: true, run });
+  // Count every tab first, then write them all in one transaction. Both
+  // halves matter. The counts are per key and never shared - that is the bug
+  // being fixed, so each tab gets its own count of its own rows - and the
+  // writes are all-or-nothing, because a fan-out that can half-succeed
+  // re-creates the very state this is here to prevent: a tab that was
+  // searched last night reading as never having run, with the run that could
+  // have retried already over.
+  const counted = await Promise.all(
+    keys.map(async (k) => ({ key: k, at, on, status, note, ...(await db.countRunActivity(k, on)) }))
+  );
+  const runs = await db.recordRuns(counted);
+
+  // `run` stays the posted track's record so existing callers read the same
+  // field they always have; `also` is the fed tabs' records, there so a run's
+  // own report can say what got written on its behalf rather than having to
+  // trust that something did.
+  return json({ ok: true, run: runs[0], also: runs.slice(1) });
 }
 
 export async function handleGetConfig(db) {
@@ -439,10 +524,29 @@ export async function handleAddLeads(request, db) {
   const valid = incoming.filter((lead) => lead.search && lead.url && lead.company && lead.title);
   if (valid.length === 0) return json({ error: "no valid leads in payload" }, 400);
 
-  const added = await db.addLeads(valid);
+  // The run's own local date, applied to every lead that didn't carry one.
+  // Same reasoning as /api/runs' `on`: the worker only knows UTC, so it cannot
+  // derive the day the search believes it is having.
+  const on = isoDate(body.on);
+
+  // Companies this person will not work for, enforced rather than asked for.
+  // The list has been structured config for a while, but the only thing acting
+  // on it was a sentence in the prompt, and it leaked: lead 238 in the live
+  // data is xAI, which is on the list. A sentence is a request; this is the
+  // answer. See ./exclude.js for the matching rules.
+  const isExcluded = await excluderFor(db);
+  const allowed = valid.filter((lead) => !isExcluded(lead.company));
+  const excluded = valid.length - allowed.length;
+  if (allowed.length === 0) return json({ added: 0, duplicates: 0, excluded });
+
+  const { added, duplicates } = await db.addLeads(allowed, on);
   if (added > 0) await db.touchUpdated();
 
-  return json({ added });
+  // `duplicates` is reported rather than swallowed so a run can say what it
+  // actually contributed. Silently returning a smaller `added` than the number
+  // of rows posted is how a run comes to believe it found more than it did -
+  // and the run summary on the page is built out of exactly these numbers.
+  return json({ added, duplicates, excluded });
 }
 
 // Records postings the search looked at and decided NOT to add as a lead
@@ -464,8 +568,183 @@ export async function handleAddScreened(request, db) {
   const valid = incoming.filter((item) => item.search && item.url);
   if (valid.length === 0) return json({ error: "no valid screened items in payload" }, 400);
 
-  const added = await db.addScreened(valid);
-  return json({ added });
+  const on = isoDate(body.on);
+
+  // A screened row belongs to the search that did the screening, not to the
+  // tab the posting would have been filed under. Those differ for a branched
+  // search: one run fills several tabs (`fed_by`, see
+  // migrations/0003_branched_tracks.sql), but nothing displays screened rows
+  // per-tab and step 1b reads them back as one combined set, so splitting them
+  // across the tabs would only add a way to get it wrong.
+  //
+  // The prompt used to say this in a sentence and rely on the model to do it.
+  // Doing it here means the rule holds whether or not that sentence was read,
+  // so the sentence is gone - see the note where `screenedNote` used to be
+  // built in prompt.js.
+  const { tracks, settings } = await db.getTracksAndSettings();
+
+  // An excluded company is dropped outright here, and deliberately does NOT
+  // become a screened row - which is the opposite of what happens to every
+  // other rejected candidate. A screened row is a memo to tomorrow's run
+  // saying "this one was considered and ruled out", and the whole point of an
+  // exclusion is that it is never considered: it costs a fetch to write, it
+  // grows a table that a run reads back every night, and it records a decision
+  // that was already permanent. The prompt says this too, and the prompt was
+  // not enough - rows 210 and 211 in the live data are Beast Industries,
+  // written by a run that verified them first.
+  const isExcluded = excludedCompanyMatcher(settings.excluded_companies);
+  const allowed = valid.filter((item) => !isExcluded(item.company));
+  const excluded = valid.length - allowed.length;
+  if (allowed.length === 0) return json({ added: 0, duplicates: 0, excluded });
+
+  // DELISTED_REASON is the server's own marker, not a phrase a caller may
+  // write. countRunActivity splits a day's screened rows on it to tell "a
+  // posting we tracked came down" from "a candidate we looked at and
+  // rejected", and those are counted into different columns of the run record.
+  // A run screening a dead-on-arrival candidate would very reasonably describe
+  // it as the posting having been taken down, and that row would then be
+  // counted as a delisting of a lead that never existed. Reserving the string
+  // here is what keeps the classifier honest without a schema change: the
+  // reason is still recorded, just not in the words that mean something else.
+  for (const item of allowed) {
+    if (typeof item.reason === "string" && item.reason.trim().toLowerCase() === DELISTED_REASON) {
+      item.reason = "dead on arrival";
+    }
+  }
+
+  // One hop, not a walk to a root: a fed track is a tab, and the track that
+  // fills it runs its own search, so `fed_by` chains have no meaning in the
+  // model (see migrations/0003_branched_tracks.sql) and none exist. Resolving
+  // repeatedly would only be guessing at what a chain ought to mean.
+  const fedBy = new Map(tracks.map((t) => [t.key, t.fed_by || ""]));
+  const filed = allowed.map((item) => ({ ...item, search: fedBy.get(item.search) || item.search }));
+
+  const { added, duplicates } = await db.addScreened(filed, on);
+  return json({ added, duplicates, excluded });
+}
+
+// The two routes below let a run report a *set of URLs* and have the server do
+// the lookup, which is the same trade the rest of this file keeps making: the
+// run reports what it saw, the server decides what that means. Both of them
+// match through here.
+//
+// Matching is by posting identity (canonicalUrl - see ./url.js), never by raw
+// string. That is the entire reason these take URLs at all: a run arrives at a
+// posting by whatever link its search handed it, and `?gh_jid=`, a slug, or a
+// tracking param make that a different string from the one the lead was filed
+// under. String-matched, a run's report of a dead posting would land on nothing
+// and the posting would sit on the board looking live.
+//
+// Several tracked leads can share one canonical key. That isn't hypothetical -
+// it is the state url.js was written to describe: one night's run added 8
+// duplicate leads before the rule existed, and those rows are still in the
+// database. They are the same posting, so a report about it is a report about
+// all of them, and every match is returned rather than just the first.
+//
+// The reported list is deduped by key for the opposite reason: two spellings of
+// one posting in one payload are one report, not two. The run record's counts
+// no longer come from here - the tracker derives them from the rows - but
+// `removed` and `stamped` are what the run states in its own summary to the
+// person reading it, and a posting counted twice there is just as wrong.
+//
+// ---- These are the first lookups in this codebase keyed by URL rather than by
+// row id, and that matters for who can touch what. Every other cross-user
+// protection here is a consequence of an id not resolving for the wrong person;
+// a URL has no such property, because two people tracking the same posting is a
+// supported, deliberate state - UNIQUE is on (user_id, search, url), and
+// db.addLeads says so in as many words. So the candidate set this searches is
+// db.getLeadsForUrlMatch's, which is `WHERE user_id = ?` like everything else
+// in db.js: a URL can only ever resolve to the caller's own rows, and the ids
+// that reach db.markVerified and db.deleteLeadAndScreen came from that set (and
+// are re-checked against `user_id` by those statements anyway). This function
+// never sees another person's leads, so it cannot match one.
+//
+// An unmatched URL is deliberately reported rather than ignored. It means the
+// run believes it is tracking something the tracker has no row for - a lead
+// someone deleted by hand, a tab that got reconfigured, or a run working from
+// stale dedup data - and that disagreement is worth a line in the run's report.
+// The raw URL comes back, not just a count, because a count can't be acted on.
+/**
+ * @param {Array<{id: number, url: string}>} leads every lead this user tracks
+ * @param {string[]} urls the URLs the run reported
+ * @returns {{matched: Array<Object>, unmatched: string[]}}
+ */
+function matchLeadsByUrl(leads, urls) {
+  const byKey = new Map();
+  for (const lead of leads) {
+    const key = canonicalUrl(lead.url);
+    if (!key) continue;
+    const bucket = byKey.get(key);
+    if (bucket) bucket.push(lead);
+    else byKey.set(key, [lead]);
+  }
+
+  const matched = [];
+  const unmatched = [];
+  const seen = new Set();
+  for (const raw of urls) {
+    const key = canonicalUrl(raw);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    const hit = byKey.get(key);
+    if (hit) matched.push(...hit);
+    else unmatched.push(raw);
+  }
+  return { matched, unmatched };
+}
+
+// Parses the { search, urls } half both URL-set routes share. Returns a
+// Response to hand straight back on any refusal, or the cleaned values.
+//
+// The unknown-track check is here for the same reason /api/runs has it: a key
+// with no configured track means the run's idea of this search and the
+// tracker's have drifted apart, and that is worth failing loudly over even
+// though neither route below reads the key for anything else (see
+// db.getLeadsForUrlMatch on why the match itself spans every tab).
+async function parseUrlReport(request, db) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return { error: json({ error: "invalid JSON body" }, 400) };
+  }
+  const key = typeof body.search === "string" ? body.search : "";
+  if (!key) return { error: json({ error: "missing search (track key)" }, 400) };
+  if (!(await db.trackExists(key))) {
+    return { error: json({ error: `unknown track "${key}" - not in the configured tracks` }, 404) };
+  }
+  const urls = (Array.isArray(body.urls) ? body.urls : [])
+    .filter((u) => typeof u === "string" && u.trim())
+    .map((u) => u.trim());
+  if (urls.length === 0) return { error: json({ error: "no urls provided" }, 400) };
+  return { body, key, urls };
+}
+
+// Records that a run re-checked the postings it tracks and found these ones
+// still live. `verified` has meant "date last verified live" in the schema
+// since day one and has never once been written after a lead was created - see
+// db.markVerified for the count. This is the call that makes the column true.
+//
+// `on` falls back to the worker's UTC date if it isn't a YYYY-MM-DD, rather
+// than refusing the whole report the way /api/delist does. The asymmetry is
+// deliberate and follows the consequences: a wrong date here means a posting
+// gets re-checked a day early or late, while a wrong date there permanently
+// deletes a real opening. A freshness stamp is not worth failing a run over.
+export async function handleMarkVerified(request, db) {
+  const parsed = await parseUrlReport(request, db);
+  if (parsed.error) return parsed.error;
+
+  const on = isoDate(parsed.body.on) || today();
+
+  const { matched, unmatched } = matchLeadsByUrl(await db.getLeadsForUrlMatch(), parsed.urls);
+  const stamped = await db.markVerified(matched.map((l) => l.id), on);
+  // The tracker page prints this column as "Confirmed live <date>" on every
+  // lead, so a stamp is a change a viewer sees and the "last updated" banner
+  // should say so. Only when something actually moved: a report that matched
+  // nothing changed nothing.
+  if (stamped > 0) await db.touchUpdated();
+
+  return json({ stamped, unmatched: unmatched.length, unmatchedUrls: unmatched, on });
 }
 
 export async function handleUpdate(request, db) {
@@ -496,10 +775,8 @@ export async function handleUpdate(request, db) {
     // isn't a date isn't a report of anything, so it's refused rather than
     // quietly read as "dead, date unknown".
     if (typeof body.delistedOn === "string" && body.delistedOn.trim()) {
-      const on = body.delistedOn.trim();
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(on)) {
-        return json({ error: "delistedOn must be YYYY-MM-DD" }, 400);
-      }
+      const on = isoDate(body.delistedOn.trim());
+      if (!on) return json({ error: "delistedOn must be YYYY-MM-DD" }, 400);
       return removeDelistedLead(db, body.id, on);
     }
 
@@ -621,7 +898,7 @@ export async function handleSetApplicationStatus(request, db, id) {
   if (!APP_STATUS.includes(body.status)) {
     return json({ error: "invalid status" }, 400);
   }
-  const explicitDate = typeof body.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.date) ? body.date : null;
+  const explicitDate = isoDate(body.date) || null;
 
   const application = await db.setApplicationStatus(
     id,
@@ -681,16 +958,26 @@ export async function handleDeleteApplication(request, db) {
  * The run's job is to report what it saw; this is where what that means gets
  * decided, and it changes for every existing search the moment it's deployed.
  *
+ * ---- Why this takes a lead rather than an id, and returns a verdict rather
+ * than a Response. There are two ways in now: one lead by id (the client's
+ * /api/update `delistedOn` field, and any in-flight run still using it) and a
+ * whole set of URLs at once (/api/delist). Both have to apply the same rule,
+ * and the way that goes wrong is not that someone rewrites the rule wholesale -
+ * it's that one entry point gets a fix the other doesn't and the two quietly
+ * disagree about, say, whether a lead carrying an application is safe. So the
+ * rule lives here, once, and the entry points below are reduced to fetching
+ * leads and shaping JSON. Duplicating it is the exact failure this whole line
+ * of work exists to prevent.
+ *
  * @param {Db} db
- * @param {number|string} id
+ * @param {Object} lead - the already-fetched lead row, so this doesn't re-read it
  * @param {string} on - the date the run confirmed it dead (its own local date, already validated as YYYY-MM-DD by the caller)
+ * @returns {Promise<{kept: boolean, removed: boolean}>} `kept` is the applied-to
+ *   exception; `removed` is what the DELETE actually matched
  */
-async function removeDelistedLead(db, id, on) {
-  const lead = await db.getLead(id);
-  if (!lead) return json({ error: "lead not found" }, 404);
-
+async function delistLead(db, lead, on) {
   if (lead.status === "Applied" || (await db.getApplicationByLeadId(lead.id))) {
-    return json({ ok: true, lead, removed: false, reason: "applied to - kept" });
+    return { kept: true, removed: false };
   }
 
   // `on` is the run's own local date, not the worker's UTC one - same
@@ -698,12 +985,72 @@ async function removeDelistedLead(db, id, on) {
   // when the posting died, since the lead row itself is about to be gone.
   //
   // `removed` is what the DELETE actually matched, not what was intended: two
-  // runs reporting the same lead at once both get past getLead, and the second
-  // one deletes nothing. Saying so keeps the run's `delisted` count, which is
-  // tallied from these responses, from counting that lead twice.
-  const removed = await db.deleteLeadAndScreen(lead, "posting taken down", on);
+  // runs reporting the same lead at once both get past the read above, and the
+  // second one deletes nothing. Saying so keeps a caller's own summary honest.
+  // It no longer feeds the tracker's `delisted` count - countRunActivity
+  // derives that from the screened rows a delisting leaves behind, precisely so
+  // it doesn't depend on a caller adding these up correctly.
+  const removed = await db.deleteLeadAndScreen(lead, DELISTED_REASON, on);
+  return { kept: false, removed };
+}
+
+// The by-id entry point: POST /api/update with a `delistedOn` date. Kept
+// because a nightly run may still be part-way through a night on a prompt
+// fetched before /api/delist existed, so it keeps working and keeps its exact
+// response shape. Nothing in the client calls it - the tracker page has no
+// delisting control, it only ever reads the consequences.
+async function removeDelistedLead(db, id, on) {
+  const lead = await db.getLead(id);
+  if (!lead) return json({ error: "lead not found" }, 404);
+
+  const { kept, removed } = await delistLead(db, lead, on);
+  if (kept) return json({ ok: true, lead, removed: false, reason: "applied to - kept" });
+
   await db.touchUpdated();
   return json({ ok: true, removed, id: lead.id, screened: lead.url });
+}
+
+// The by-URL entry point: one call reporting every posting a run confirmed dead
+// tonight. It replaces a run carrying lead ids from step 1b all the way to step
+// 8, issuing one curl per dead lead, and tallying `removed:true` against
+// `removed:false` itself - bookkeeping the server can do exactly and a model
+// can only do approximately.
+//
+// `on` must be a real YYYY-MM-DD or the whole call is refused, same as the
+// by-id path and for the same reason: what this triggers is a permanent delete,
+// the caller is an LLM, and "unknown" or "today" is not a report of anything.
+// Refused for the batch as a whole rather than per URL, because a date that
+// isn't a date says the run doesn't know what day it is, which is not a thing
+// to act on partially.
+//
+// The leads are delisted one at a time rather than in parallel: each one is
+// already a two-statement transaction (db.deleteLeadAndScreen), and a night
+// where a hundred postings came down should not turn into a hundred concurrent
+// transactions against the same table to save a few hundred milliseconds on a
+// scheduled job nobody is waiting on.
+export async function handleDelistUrls(request, db) {
+  const parsed = await parseUrlReport(request, db);
+  if (parsed.error) return parsed.error;
+
+  const on = isoDate(typeof parsed.body.on === "string" ? parsed.body.on.trim() : "");
+  if (!on) return json({ error: "on must be YYYY-MM-DD" }, 400);
+
+  const { matched, unmatched } = matchLeadsByUrl(await db.getLeadsForUrlMatch(), parsed.urls);
+
+  let removed = 0;
+  let kept = 0;
+  for (const lead of matched) {
+    const verdict = await delistLead(db, lead, on);
+    if (verdict.kept) kept++;
+    else if (verdict.removed) removed++;
+    // Neither, when the DELETE matched nothing - the concurrent-report race
+    // delistLead describes. Counted as neither on purpose: the lead is gone,
+    // but this call is not what removed it, and `removed` is what the run
+    // reports as its `delisted` count.
+  }
+  if (removed > 0) await db.touchUpdated();
+
+  return json({ removed, kept, unmatched: unmatched.length, unmatchedUrls: unmatched, on });
 }
 
 export async function handleGetData(db, user) {

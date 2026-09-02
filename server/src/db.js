@@ -161,6 +161,8 @@
  * @property {string} pronouns
  */
 
+import { canonicalUrl } from "./url.js";
+
 // Same field lists api.js validates/whitelists against - re-exported from
 // here so there is exactly one definition, not two that can drift apart.
 export const EXTRA_FIELDS = [
@@ -171,6 +173,18 @@ export const APP_STAGE_DATE_FIELDS = [
   "dateRecruiterScreen", "dateTechScreen", "dateOnsite",
   "dateOffer", "dateRejected", "dateWithdrawn",
 ];
+
+// The `reason` written on the screened row a delisted lead leaves behind.
+// Since 0004_drop_lead_delisted_on.sql deletes the lead outright, that row is
+// the only surviving evidence a posting came down, and countRunActivity splits
+// the day's screened rows on this exact text to tell a delisting from an
+// ordinary rejection. A string a run's `delisted` count depends on gets one
+// definition, for the same reason EXTRA_FIELDS above does.
+//
+// 0004 hardcodes the same text in SQL and cannot import it. Changing this
+// would also silently reclassify every historical row, which is a good reason
+// not to.
+export const DELISTED_REASON = "posting taken down";
 
 // Everything on a track row that isn't its identity (key) or its ordering.
 // Split in two because the two halves have different audiences: the first is
@@ -223,6 +237,16 @@ export const DEFAULT_SETTINGS = {
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
+
+// How many lead ids one statement may name in an `IN (...)` list. D1 caps a
+// query at 100 bound parameters, and a nightly run re-confirming the postings
+// it tracks routinely reports more leads than that in one call - the whole
+// reason /api/verified takes a list instead of one URL per request. Over the
+// cap D1 rejects the statement outright, so this splits the ids across several
+// statements sent as one batch rather than letting a busy night be the thing
+// that discovers the limit. 90, not 100: the same statement also binds the
+// date and the user id.
+const ID_CHUNK = 90;
 
 export class Db {
   /**
@@ -598,48 +622,257 @@ export class Db {
   // ------------------------------------------------------------- runs --
 
   /**
+   * What one track actually gained on one date, counted from the rows
+   * themselves. This is what a run record's three numbers are derived from
+   * instead of being taken from the caller - see api.js's handleRecordRun for
+   * why the caller's own tally isn't trusted.
+   *
+   * Three counts, three different places they can be read from, and only one
+   * of them is obvious:
+   *
+   *   - `leadsAdded` is leads filed under this key with `found` = this date.
+   *     `found` rather than an insert timestamp because that is the column the
+   *     table actually has, and it is the date the run itself supplies.
+   *   - `delisted` is counted out of `screened`, not out of `leads`, and that
+   *     is not a stylistic choice: 0004_drop_lead_delisted_on.sql removed
+   *     leads.delistedOn, and removeDelistedLead now DELETEs the lead and
+   *     writes a screened row in its place. By the time anything could count
+   *     the delisting, the lead row is gone - the screened row carrying
+   *     DELISTED_REASON is the only trace left.
+   *   - `screenedAdded` is therefore everything else screened that day. The
+   *     two live in the same table on the same date under the same key, so
+   *     without splitting them on the reason string every delisting would be
+   *     counted twice, once in each column.
+   *
+   * A multi-tab run calls this once per tab; each key counts only its own
+   * rows, which is the whole point of deriving them here.
+   *
+   * @param {string} key - track key
+   * @param {string} on - YYYY-MM-DD, the run's own local date
+   * @returns {Promise<{leadsAdded: number, screenedAdded: number, delisted: number}>}
+   */
+  async countRunActivity(key, on) {
+    const [leads, screened] = await Promise.all([
+      this.d1
+        .prepare("SELECT COUNT(*) AS n FROM leads WHERE user_id = ? AND search = ? AND found = ?")
+        .bind(this.userId, key, on)
+        .first(),
+      // One pass over the day's screened rows rather than two queries that
+      // would have to agree with each other about what "not delisted" means.
+      this.d1
+        .prepare(
+          `SELECT SUM(CASE WHEN reason = ? THEN 1 ELSE 0 END) AS delisted,
+                  SUM(CASE WHEN reason <> ? THEN 1 ELSE 0 END) AS screened
+             FROM screened WHERE user_id = ? AND search = ? AND date = ?`
+        )
+        .bind(DELISTED_REASON, DELISTED_REASON, this.userId, key, on)
+        .first(),
+    ]);
+    // SUM over zero rows is NULL in SQLite, not 0, and a quiet day is the
+    // normal case here - so both sums are floored rather than passed through.
+    return {
+      leadsAdded: (leads && leads.n) || 0,
+      screenedAdded: (screened && screened.screened) || 0,
+      delisted: (screened && screened.delisted) || 0,
+    };
+  }
+
+  /**
    * @param {string} key
    * @param {{at: string, on: string, status: string, leadsAdded: number, screenedAdded: number, delisted: number, note: string}} run
    * @returns {Promise<SearchRun>}
    */
   async recordRun(key, run) {
-    await this.d1
-      .prepare(
-        `INSERT INTO search_runs
-           (user_id, track_key, last_run_at, last_run_on, status, leads_added, screened_added, delisted, note)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(user_id, track_key) DO UPDATE SET
-           last_run_at = excluded.last_run_at, last_run_on = excluded.last_run_on,
-           status = excluded.status, leads_added = excluded.leads_added,
-           screened_added = excluded.screened_added, delisted = excluded.delisted,
-           note = excluded.note`
+    const [row] = await this.recordRuns([{ key, ...run }]);
+    return row;
+  }
+
+  /**
+   * Writes a run record for every tab one run filled, as a single transaction.
+   *
+   * All of them or none of them, which is the entire point. A branched run
+   * fills several tabs and each needs its own record, and the failure this
+   * whole change exists to fix is a tab that was searched last night reading
+   * as never having run. Writing them one at a time re-creates exactly that:
+   * a worker that dies, times out, or hits a D1 error partway through leaves
+   * the tabs it hadn't reached yet looking stale, and the run that could have
+   * retried has already ended. d1.batch is a real transaction, so a partial
+   * fan-out is not a state this can end up in.
+   *
+   * The counts are computed by the caller, per key, before any of this runs -
+   * they are reads, and they must not be inside the write transaction.
+   *
+   * @param {Array<{key: string, at: string, on: string, status: string, leadsAdded: number, screenedAdded: number, delisted: number, note: string}>} runs
+   * @returns {Promise<SearchRun[]>} the written rows, in the order asked for
+   */
+  async recordRuns(runs) {
+    if (!runs.length) return [];
+    const stmt = this.d1.prepare(
+      `INSERT INTO search_runs
+         (user_id, track_key, last_run_at, last_run_on, status, leads_added, screened_added, delisted, note)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(user_id, track_key) DO UPDATE SET
+         last_run_at = excluded.last_run_at, last_run_on = excluded.last_run_on,
+         status = excluded.status, leads_added = excluded.leads_added,
+         screened_added = excluded.screened_added, delisted = excluded.delisted,
+         note = excluded.note`
+    );
+    await this.d1.batch(
+      runs.map((r) =>
+        stmt.bind(
+          this.userId, r.key, r.at, r.on, r.status,
+          r.leadsAdded, r.screenedAdded, r.delisted, r.note
+        )
       )
-      .bind(this.userId, key, run.at, run.on, run.status, run.leadsAdded, run.screenedAdded, run.delisted, run.note)
-      .run();
-    return this.d1
-      .prepare("SELECT * FROM search_runs WHERE user_id = ? AND track_key = ?")
-      .bind(this.userId, key)
-      .first();
+    );
+
+    const keys = runs.map((r) => r.key);
+    const res = await this.d1
+      .prepare(
+        `SELECT * FROM search_runs
+          WHERE user_id = ? AND track_key IN (${keys.map(() => "?").join(", ")})`
+      )
+      .bind(this.userId, ...keys)
+      .all();
+    // Read back in the caller's order, not the database's: the first entry is
+    // the track the run posted about, and the response distinguishes it from
+    // the tabs written on its behalf.
+    const byKey = new Map(res.results.map((r) => [r.track_key, r]));
+    return keys.map((k) => byKey.get(k)).filter(Boolean);
   }
 
   // ------------------------------------------------------------ leads --
 
   /**
-   * Inserts leads not already present for the same (user, search, url) triple
-   * - DB-enforced UNIQUE constraint + INSERT OR IGNORE, atomic and race-free.
+   * Splits a batch into the rows whose posting this user doesn't already have,
+   * and a count of the rest. Both insert paths dedup identically, so they
+   * share this - see addLeads for what the two layers are and why.
+   *
+   * A row is already-known if its canonical URL (see ./url.js) matches a lead
+   * OR a screened row already held by the same *search*: both mean "this run
+   * has met this posting before".
+   *
+   * The search, not the track. Those differ for a branched search, where one
+   * run fills several tabs (`fed_by`, see migrations/0003_branched_tracks.sql)
+   * and step 7b decides which tab each finding belongs in. Scoped to the track
+   * alone, a posting filed under one tab yesterday and sorted into a sibling
+   * tab today reads as new, and the run adds it a second time - the same
+   * duplicate this whole filter exists to stop, arriving by a different door.
+   * The prompt already tells such a run to fetch dedup data per key and treat
+   * it as one combined set; this is the server agreeing with it.
+   *
+   * Two *independent* tracks tracking one posting are still two rows on
+   * purpose, which is what the UNIQUE constraint has always said. A feed group
+   * is not two searches, it is one search with several outputs, so widening to
+   * the group changes nothing for anyone who isn't running a branched search.
+   *
+   * Rows already accepted from this same batch join the set as it goes, which
+   * is what catches one payload naming the same posting twice.
+   *
+   * @param {Array<{search: string, url: string}>} rows
+   * @returns {Promise<{fresh: Array<Object>, duplicates: number}>}
+   */
+  async dropKnownUrls(rows) {
+    const asked = [...new Set(rows.map((r) => r.search).filter(Boolean))];
+    if (asked.length === 0) return { fresh: [], duplicates: rows.length };
+
+    // A track's feed group: the track that runs the search, plus every tab it
+    // fills. `fed_by` is one level (a fed track is a tab, not a search), so
+    // the root is one hop and the group is everything sharing that root.
+    const tracks = await this.d1
+      .prepare("SELECT key, fed_by FROM tracks WHERE user_id = ?")
+      .bind(this.userId)
+      .all();
+    const rootOf = new Map(tracks.results.map((t) => [t.key, t.fed_by || t.key]));
+    const root = (k) => rootOf.get(k) || k;
+
+    const roots = new Set(asked.map(root));
+    const groupKeys = tracks.results.map((t) => t.key).filter((k) => roots.has(root(k)));
+    // A key the batch names that isn't a configured track has no group; keep it
+    // so it still dedups against itself rather than skipping the check.
+    for (const k of asked) if (!groupKeys.includes(k)) groupKeys.push(k);
+
+    const seen = new Map([...roots].map((r) => [r, new Set()]));
+    const placeholders = groupKeys.map(() => "?").join(", ");
+    const [leads, screened] = await Promise.all([
+      this.d1
+        .prepare(`SELECT search, url FROM leads WHERE user_id = ? AND search IN (${placeholders})`)
+        .bind(this.userId, ...groupKeys)
+        .all(),
+      this.d1
+        .prepare(`SELECT search, url FROM screened WHERE user_id = ? AND search IN (${placeholders})`)
+        .bind(this.userId, ...groupKeys)
+        .all(),
+    ]);
+    for (const row of [...leads.results, ...screened.results]) {
+      seen.get(root(row.search))?.add(canonicalUrl(row.url));
+    }
+
+    const fresh = [];
+    let duplicates = 0;
+    for (const row of rows) {
+      const key = canonicalUrl(row.url);
+      const set = seen.get(root(row.search));
+      if (!key || set?.has(key)) {
+        duplicates++;
+        continue;
+      }
+      set?.add(key);
+      fresh.push(row);
+    }
+    return { fresh, duplicates };
+  }
+
+  /**
+   * Inserts leads not already present for the same (user, search, posting).
+   *
+   * Two layers, and they catch different things. `INSERT OR IGNORE` against
+   * `UNIQUE(user_id, search, url)` is the atomic, race-free backstop for a URL
+   * repeated byte-for-byte. The canonical-key filter above it is what catches
+   * the same posting arriving under a *different* URL - a `?gh_jid=` suffix, a
+   * slug, a tracking param - which is how 8 duplicate leads landed in one
+   * night's run on 2026-09-01. See ./url.js for the rule and the evidence.
+   *
+   * The filter is a read-then-write, so unlike the constraint it is not
+   * race-free. That is an accepted trade rather than an oversight: a track's
+   * leads are written by exactly one caller, its own nightly run, so two
+   * concurrent inserts for one track do not happen in practice - and the
+   * alternative was a table rebuild to move the UNIQUE constraint onto a
+   * stored key, plus a generated backfill for every existing row. The
+   * constraint still holds the line for the case that actually races.
+   *
+   * Within-batch duplicates are dropped too: one payload carrying the same
+   * posting twice under two URLs is the same mistake as carrying it across two
+   * runs, and INSERT OR IGNORE cannot see it either.
+   *
    * Never touches an existing row's status/notes. Two users tracking the same
    * posting are two separate rows, by design.
+   *
    * @param {Array<Partial<Lead>>} leads
-   * @returns {Promise<number>} how many were actually inserted
+   * @param {string} [on] the run's local date, used for `found`/`verified`
+   *   when a lead doesn't carry its own - see the note on today() below
+   * @returns {Promise<{added: number, duplicates: number}>} inserted, and how
+   *   many were dropped as already-known
    */
-  async addLeads(leads) {
-    const t = today();
+  async addLeads(leads, on) {
+    // The caller's local date when it sent one. The worker only knows UTC, and
+    // a search scheduled in the evening is already the next UTC day - the same
+    // reasoning /api/runs' `on` has always had. Falling back to UTC keeps the
+    // behaviour every existing caller already gets.
+    // Already validated by the caller (api.js's isoDate), so this only has to
+    // choose between a date and none. Re-validating here would be a second
+    // copy of the rule, and the two would eventually disagree.
+    const t = on || today();
+
+    const { fresh, duplicates } = await this.dropKnownUrls(leads);
+    if (fresh.length === 0) return { added: 0, duplicates };
+
     const stmt = this.d1.prepare(
       `INSERT OR IGNORE INTO leads
          (user_id, search, found, company, title, location, url, verified, fit, status, notes, ${EXTRA_FIELDS.join(", ")})
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'New', '', ${EXTRA_FIELDS.map(() => "?").join(", ")})`
     );
-    const batch = leads.map((lead) =>
+    const batch = fresh.map((lead) =>
       stmt.bind(
         this.userId,
         lead.search,
@@ -654,7 +887,7 @@ export class Db {
       )
     );
     const results = await this.d1.batch(batch);
-    return results.reduce((n, r) => n + (r.meta.changes || 0), 0);
+    return { added: results.reduce((n, r) => n + (r.meta.changes || 0), 0), duplicates };
   }
 
   /** @param {number|string} id @returns {Promise<Lead|null>} */
@@ -691,20 +924,113 @@ export class Db {
     return this.getLead(id);
   }
 
+  /**
+   * Every lead this user tracks, in the few columns URL matching and the
+   * delisting policy actually need: `id` and `url` to match on, `status` for
+   * the applied-to check, and the company/title/location that
+   * deleteLeadAndScreen copies onto the screened row it leaves behind.
+   *
+   * Whole table rather than a `WHERE url IN (...)` narrowing, because the match
+   * these callers make is canonicalUrl's (see ./url.js) and that is JS, not
+   * SQL. A SQL `IN` list would be the raw string comparison url.js exists
+   * because of: it would miss the `?gh_jid=` variant of a URL the run reports
+   * and hand back "nothing tracked matches this", which for /api/delist means a
+   * dead posting quietly stays on the board.
+   *
+   * Deliberately not scoped to one track, even though both callers are handed a
+   * track key. A run that fills several tabs fetches dedup data per key and
+   * treats it as one combined already-seen set - the prompt says so in as many
+   * words - so the postings it re-checks are not all in the tab it reports
+   * under. Scoping here would drop those from the match and report them back as
+   * unmatched, which is the signal reserved for the run and the tracker
+   * genuinely disagreeing about what is tracked. A posting is live or dead on
+   * its own terms; which of this person's tabs holds it isn't part of that.
+   * @returns {Promise<Array<{id: number, search: string, url: string, status: string, company: string, title: string, location: string}>>}
+   */
+  async getLeadsForUrlMatch() {
+    const res = await this.d1
+      .prepare(
+        `SELECT id, search, url, status, company, title, location
+           FROM leads WHERE user_id = ? ORDER BY id`
+      )
+      .bind(this.userId)
+      .all();
+    return res.results;
+  }
+
+  /**
+   * Stamps `verified` on the given leads - the date someone last confirmed
+   * these postings were still live.
+   *
+   * Nothing wrote this column between a lead being created and this method
+   * existing: 267 of 279 older leads on the live deployment still read
+   * `verified === found`, because the only thing a run ever reported back about
+   * a posting it re-checked was that it was DEAD. Since delisting started
+   * deleting the row (migrations/0004_drop_lead_delisted_on.sql), a lead still
+   * sitting in a tab is implicitly presumed live, and this column is the only
+   * remaining answer to "how long since anyone actually looked?".
+   *
+   * The stamp is unconditional rather than `MAX(verified, on)`. A date that
+   * moves backwards - a run with a wrong clock, a report replayed late - costs
+   * one extra re-check and nothing else, whereas refusing to move it backwards
+   * would silently swallow a correction and leave the column claiming a posting
+   * was confirmed on a day nobody confirmed it. The value is already validated
+   * as YYYY-MM-DD by the caller; this only decides what to do with a real date.
+   * @param {Array<number|string>} ids
+   * @param {string} on - YYYY-MM-DD, the run's own local date
+   * @returns {Promise<number>} how many rows were actually stamped
+   */
+  async markVerified(ids, on) {
+    if (!ids.length) return 0;
+    const chunks = [];
+    for (let i = 0; i < ids.length; i += ID_CHUNK) chunks.push(ids.slice(i, i + ID_CHUNK));
+    const results = await this.d1.batch(
+      chunks.map((chunk) =>
+        this.d1
+          .prepare(
+            `UPDATE leads SET verified = ?
+              WHERE user_id = ? AND id IN (${chunk.map(() => "?").join(", ")})`
+          )
+          .bind(on, this.userId, ...chunk)
+      )
+    );
+    return results.reduce((n, r) => n + (r.meta.changes || 0), 0);
+  }
+
   // -------------------------------------------------------- screened --
 
   /**
-   * Same INSERT-OR-IGNORE-on-(user, search, url) dedup shape as addLeads.
+   * Same two-layer dedup as addLeads - canonical-key filter over an
+   * INSERT-OR-IGNORE backstop - and for the same reason.
+   *
+   * A URL already tracked as a *lead* is dropped here too, not just one
+   * already screened. A run posting both about one posting is contradicting
+   * itself: step 7 sorts a candidate into tracked-or-screened, a finding, or a
+   * disqualified new one, and those are exclusive. Four such pairs exist in
+   * the live data, and the lead is the row worth keeping.
+   *
+   * deleteLeadAndScreen does not come through here, so a posting being taken
+   * off the board still gets its screened row while its lead is deleted in the
+   * same transaction.
+   *
    * @param {Array<Partial<ScreenedItem>>} items
-   * @returns {Promise<number>} how many were actually inserted
+   * @param {string} [on] the run's local date, for items without their own
+   * @returns {Promise<{added: number, duplicates: number}>}
    */
-  async addScreened(items) {
-    const t = today();
+  async addScreened(items, on) {
+    // Already validated by the caller (api.js's isoDate), so this only has to
+    // choose between a date and none. Re-validating here would be a second
+    // copy of the rule, and the two would eventually disagree.
+    const t = on || today();
+
+    const { fresh, duplicates } = await this.dropKnownUrls(items);
+    if (fresh.length === 0) return { added: 0, duplicates };
+
     const stmt = this.d1.prepare(
       `INSERT OR IGNORE INTO screened (user_id, search, url, company, title, location, reason, date)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     );
-    const batch = items.map((item) =>
+    const batch = fresh.map((item) =>
       stmt.bind(
         this.userId,
         item.search,
@@ -717,7 +1043,7 @@ export class Db {
       )
     );
     const results = await this.d1.batch(batch);
-    return results.reduce((n, r) => n + (r.meta.changes || 0), 0);
+    return { added: results.reduce((n, r) => n + (r.meta.changes || 0), 0), duplicates };
   }
 
   // ----------------------------------------------------- applications --

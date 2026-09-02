@@ -137,7 +137,7 @@ export function buildSearchPrompt({ user, track, settings, feeds, coverage }) {
     ? settings.excluded_companies.filter((c) => typeof c === "string" && c.trim())
     : [];
   const exclusionNote = excluded.length
-    ? ` Never search ${joinAnd(excluded)} - permanently excluded from this search, including via broader discovery: drop any hit there without verifying it and without a \`/api/screened\` row.`
+    ? ` Don't spend the run's time on ${joinAnd(excluded)} - permanently excluded from this search, including via broader discovery. Skip a hit there rather than verifying it, and don't post one to \`/api/screened\`: an exclusion isn't a candidate that was considered and ruled out, so it earns no row. The tracker drops them on the way in regardless - this is here to save you the fetch, not to be the thing enforcing it.`
     : "";
 
   const resumeLine = track.resume_line || "Read the resume.";
@@ -196,9 +196,23 @@ export function buildSearchPrompt({ user, track, settings, feeds, coverage }) {
         .map((k) => `\`"${k}"\``)
         .join(" or ")}. One POST can carry rows for different tabs, so send them all in a single call`
     : `must be \`"${key}"\``;
-  const screenedNote = multi
-    ? ` Every screened row goes under \`"${key}"\` regardless of which tab the posting would have been filed under - step 1b reads them back as one combined set and nothing displays them per-tab, so splitting them would only add a way to get it wrong.`
+  // Step 8's two reports take one "search" each, and for a multi-tab run that
+  // raises the obvious question of which tab a dead posting from a fed tab
+  // gets reported under. The answer is "this run's own key, always": the
+  // tracker matches a reported url against every lead this person has, whatever
+  // tab holds it (see db.getLeadsForUrlMatch). Worth saying out loud, because
+  // the alternative a run would otherwise invent - one call per tab, splitting
+  // the urls by which dedup response they came from - is exactly the id-and-tab
+  // bookkeeping taking urls was meant to stop.
+  const delistTabNote = multi
+    ? ` \`"search"\` is this run's own key, \`"${key}"\`, in both calls - including for a posting tracked in one of the other tabs this run fills. The tracker matches across every tab, so one call each covers all ${allKeys.length}.`
     : "";
+  // There used to be a sentence here telling a multi-tab run to file every
+  // screened row under the feeding track regardless of which tab the posting
+  // would have gone in. The server does that itself now - handleAddScreened
+  // rewrites `search` to the track that owns the search - so the sentence was
+  // asking the model to reproduce a rule it cannot get wrong any more, which
+  // is the kind of prose this whole change is about deleting.
   // Steps 1c and 9d appear only once a track has company_sweeps rows. Gating
   // on the data rather than on a config flag keeps this off for every track
   // that hasn't been seeded, and turns it on for one that has, with nothing to
@@ -230,17 +244,28 @@ export function buildSearchPrompt({ user, track, settings, feeds, coverage }) {
 `
     : "";
 
-  const runKeysRule = multi
-    ? `Post one of these **per tab** - \`"search":"${key}"\`, then ${fed
-        .map((t) => `\`"search":"${t.key}"\``)
-        .join(", ")} - not one for the run as a whole. A run record is per track, so the tab that gets none is the one that reads as stale tomorrow morning despite having been searched today. Give each tab its own \`leadsAdded\` (the rows step 9 filed under *that* key) and \`delisted\` (the step-8 leads that were in that tab); put the run's whole \`screenedAdded\` on \`"${key}"\` and send 0 for the others, since step 9b files every screened row there.`
-    : `\`"search"\` must be \`"${key}"\`.`;
-  // The default sentence reads the counts straight off step 9's response,
-  // which is one total for a multi-tab run and so can't be what each tab's
-  // record carries.
-  const countsRule = multi
-    ? "The per-tab `leadsAdded` numbers should add up to the `\"added\"` count step 9's POST returned (all 0 if it was skipped), and `screenedAdded` is the"
-    : "`leadsAdded` / `screenedAdded` are the";
+  // Step 9c used to carry the largest and most error-prone block of text in
+  // this whole prompt: a per-branch explanation of how to split the run's own
+  // counts across the tabs it fills, and a rule that a multi-tab run must post
+  // one record per tab. It was not followed. On 2026-09-01 the live `SWE` run
+  // reported a combined 97 leads against a tab that holds 89 in total, and the
+  // three tabs it feeds recorded nothing at all on a morning one of them took
+  // 133 leads - reading, on the page, as searches that had never run.
+  //
+  // Both jobs now belong to the server: POST /api/runs derives all three
+  // counts from the rows that actually landed and writes a record for each fed
+  // tab itself (see api.js's handleRecordRun). What's left in 9c is only what
+  // the run alone knows - which track it is, whether it worked, its local
+  // date, and a sentence for the page. The route still accepts
+  // leadsAdded/screenedAdded/delisted and ignores them, so a run that fetched
+  // this prompt before the change and is still going records correctly too.
+  const runFanoutNote = multi
+    ? `\n   This one call covers every tab this run fills: the tracker writes a run
+   record for each of the others (${fed
+     .map((t) => `\`${t.key}\``)
+     .join(", ")}) as well, counted from
+   the rows that actually landed in that tab. Don't post a second call per tab.\n`
+    : "";
 
   return `# Scheduled task: ${track.label} - ${track.full_description}
 # Schedule: ${track.schedule_time || "unscheduled"} local (headless, via Windows Task Scheduler + scripts\\run-search.ps1)
@@ -250,7 +275,7 @@ export function buildSearchPrompt({ user, track, settings, feeds, coverage }) {
 ${intro}Do the following:
 
 1. Read \`${doc}\` - ${docSummary}. Follow its numbered process. The doc doesn't keep a found-postings table or a screened/dead-link list of its own - dedup data comes from step 1b instead.
-1b. Fetch what this track has already seen: \`curl -s "$TRACKER_URL/api/dedup/${key}" -H "Authorization: Bearer $TRACKER_API_TOKEN"\`. Scoped to this track and deliberately minimal. It returns \`leads[]\` as \`{id, url, status}\` - postings already tracked; keep each \`url\` and \`status\` on hand for step 8 (that's how you tell a stale lead nobody's touched from one ${name} has already applied to) and the \`id\` because delisting posts back against it - and \`screened[]\` as a plain list of urls already looked at and rejected, which is what stops you re-verifying the same dead or out-of-scope candidate every run. Don't fetch \`/api/data\` for this: it returns every field of every row across every track, which is far larger and grows every day.${dedupNote}
+1b. Fetch what this track has already seen: \`curl -s "$TRACKER_URL/api/dedup/${key}" -H "Authorization: Bearer $TRACKER_API_TOKEN"\`. Scoped to this track and deliberately minimal. It returns \`leads[]\` as \`{id, url, status}\` - postings already tracked; keep each \`url\` on hand for step 8, which reports back by url, and each \`status\` for context in your report (that's how you tell a stale lead nobody's touched from one ${name} has already applied to). You don't need to carry the \`id\` anywhere: nothing you post back is keyed by it. Then \`screened[]\` as a plain list of urls already looked at and rejected, which is what stops you re-verifying the same dead or out-of-scope candidate every run. Don't fetch \`/api/data\` for this: it returns every field of every row across every track, which is far larger and grows every day.${dedupNote}
 ${coverageStep}2. ${resumeLine}
 3. Search ${rotates ? "the step-1c companies" : "target companies"}' careers sites (web search as backup) for current ${roleLine}. ${rotates ? "Step 1c is the list for today, drawn from" : "Companies"}: ${companies}.${searchNote} Also run the doc's broader-discovery step.${exclusionNote}
 4. MANDATORY VERIFICATION: fetch every candidate URL directly and confirm it renders an actual job description (real title, responsibilities/qualifications - not a landing page, 404, "job not found," a loading placeholder, or a listing/index page that merely contains the title text). A search-snippet URL is a lead, not a finding, until opened and confirmed. If a site won't reveal real content, skip that company today rather than report something unverified.
@@ -258,15 +283,33 @@ ${coverageStep}2. ${resumeLine}
 6. ${locationGuidance}
 ${fitFilterStep}${captureNum}. While the posting is open, also capture - only when it's stated plainly, never inferred or guessed - the team/org named for the role (\`team\`), the stated work arrangement (\`setup\`, e.g. "Remote", "Hybrid - 3 days/week onsite", "Onsite"), and any posted compensation range (\`comp\`, e.g. "$180,000-$230,000/yr"; many US states disclose this by law). Leave any of these as an empty string when the posting doesn't say. These land in the tracker's per-lead "Details" panel alongside referral/resume/next-action fields that are ${name}'s alone to fill in by hand - this search never touches those.
 7. Compare candidate URLs against \`leads[]\` and \`screened[]\` from step 1b (not a doc table). Sort each candidate into: (a) already tracked or already screened - skip it; (b) ${findingIs} - a finding, goes to step 9; (c) genuinely new but disqualified (${disqualified}) - goes to step 9b instead of being dropped silently.
-${filingStep}8. For a previously-tracked lead (from step 1b's \`leads[]\`) confirmed dead on this check, **never delete or move anything yourself** - report it and let the tracker decide what to do with it. Use the step-1b tracker data (match by \`url\`) to call \`POST /api/update\` marking it delisted:
-   \`\`\`
-   curl -s -X POST "$TRACKER_URL/api/update" \\
-     -H "Authorization: Bearer $TRACKER_API_TOKEN" -H "Content-Type: application/json" \\
-     -d '{"type":"lead","id":<its id>,"delistedOn":"<today YYYY-MM-DD>"}'
-   \`\`\`
-   One call per dead lead, and don't post it to \`/api/screened\` as well - this one call is the whole report. Send it the same way whatever \`status\` the lead is in; the tracker knows which ones to leave alone (${name}'s applied-to leads are kept - what matters there is the application, not whether the listing survived). A success response saying \`"removed":true\` means it took the posting off ${pn.poss} board, and \`"removed":false\` means it kept it - both are the tracker working as intended, not something to retry or work around. \`delistedOn\` must be a real \`YYYY-MM-DD\` - anything else is refused with a 400, since a value that isn't a date isn't a report of anything. **There is no undoing this report.** A removed lead's row is gone and its URL is in \`screened[]\` from then on, so step 7 skips that URL for good: if the posting turns out to be live after all, no future run puts it back. If the tracker's unreachable, skip the API call and note it in your report - don't guess an id.
+${filingStep}8. REPORT WHAT THE RE-CHECK OF ALREADY-TRACKED LEADS FOUND. For the postings from step 1b's \`leads[]\` that you re-checked tonight, **never delete or move anything yourself** - report what you saw and let the tracker decide what to do with it. Both reports below are by \`url\`: send whichever URL you actually opened, and don't try to match it against step 1b's spelling first - the tracker matches on posting identity, so a \`?gh_jid=\` suffix, a tracking param, or a missing slug still finds the right lead. No ids anywhere.${delistTabNote}
 
-   **Only send this for a posting you have actually confirmed dead** - a page that loads and says the role is closed or filled, or a genuine 404. Not being able to check is not the same as dead: a fetch timeout, a blocked domain, a 403/429, truncated content, or a JS shell that renders nothing all mean *unknown*, and an unknown leaves the lead exactly as it is while you note the tooling problem in your report. Reporting a live posting as dead is not a mistake that shows up later as a wrong date on a row - it takes a real opening off ${pn.poss} board. When in doubt, leave it and say so.
+   **The ones you opened and confirmed still live** - one call listing all of them:
+
+   \`\`\`
+   curl -s -X POST "$TRACKER_URL/api/verified" \\
+     -H "Authorization: Bearer $TRACKER_API_TOKEN" -H "Content-Type: application/json" \\
+     -d '{"search":"${key}","on":"<today YYYY-MM-DD>","urls":["...","..."]}'
+   \`\`\`
+
+   This is the only thing in the whole system that writes a lead's "Confirmed live" date. Without it that date stays frozen at the day the posting was found, and there is no way to tell a lead re-checked last night from one nobody has looked at in two months - which matters precisely because a dead posting is now deleted rather than flagged, so a lead still sitting in a tab is presumed live and this is the only measure of how old that presumption is. It never deletes or changes anything else, so there is nothing to be careful about here beyond being honest about which ones you actually opened. Skip the call only if you re-checked nothing at all. The response is \`{"stamped":N,"unmatched":N,"unmatchedUrls":[...]}\`.
+
+   **The ones you confirmed dead** - again one call listing all of them, not one call per posting:
+
+   \`\`\`
+   curl -s -X POST "$TRACKER_URL/api/delist" \\
+     -H "Authorization: Bearer $TRACKER_API_TOKEN" -H "Content-Type: application/json" \\
+     -d '{"search":"${key}","on":"<today YYYY-MM-DD>","urls":["...","..."]}'
+   \`\`\`
+
+   Don't post these to \`/api/screened\` as well - this one call is the whole report. List a dead posting the same way whatever \`status\` its lead is in; the tracker knows which ones to leave alone (${name}'s applied-to leads are kept - what matters there is the application, not whether the listing survived). The response is \`{"removed":N,"kept":N,"unmatched":N,"unmatchedUrls":[...]}\`: \`removed\` is how many came off ${pn.poss} board, \`kept\` is how many were applied-to leads the tracker held on to - both are the tracker working as intended, not something to retry or work around. Neither is a number you need to carry anywhere: step 9c asks for no counts. \`on\` is today's local date in both calls, and \`/api/delist\` refuses anything that isn't a real \`YYYY-MM-DD\` with a 400, since a value that isn't a date isn't a report of anything.
+
+   **There is no undoing the delist report.** A removed lead's row is gone and its URL is in \`screened[]\` from then on, so step 7 skips that URL for good: if the posting turns out to be live after all, no future run puts it back.
+
+   **Only put a posting in the \`/api/delist\` list if you have actually confirmed it dead** - a page that loads and says the role is closed or filled, or a genuine 404. Not being able to check is not the same as dead: a fetch timeout, a blocked domain, a 403/429, truncated content, or a JS shell that renders nothing all mean *unknown*, and an unknown belongs in **neither** list - it leaves the lead exactly as it is while you note the tooling problem in your report. Reporting a live posting as dead is not a mistake that shows up later as a wrong date on a row - it takes a real opening off ${pn.poss} board. When in doubt, leave it out of both lists and say so.
+
+   A url coming back in \`unmatchedUrls\` from either call means you believe you're tracking something the tracker has no lead for - report that plainly rather than retrying it. If the tracker's unreachable, skip both calls and note that in your report.
 8b. ${docUpdateLine}
 9. SYNC NEW POSTINGS TO THE LIVE TRACKER WEBPAGE. If there are zero new verified postings from step 7, skip this step entirely - do not call the API. Otherwise, build a JSON array of only today's new postings and POST it with curl:
 
@@ -274,11 +317,14 @@ ${filingStep}8. For a previously-tracked lead (from step 1b's \`leads[]\`) confi
    curl -s -X POST "$TRACKER_URL/api/leads" \\
      -H "Authorization: Bearer $TRACKER_API_TOKEN" \\
      -H "Content-Type: application/json" \\
-     -d '{"leads":[{"search":"${key}","company":"...","title":"...","location":"...","url":"...","found":"YYYY-MM-DD","verified":"YYYY-MM-DD","fit":"...","team":"...","setup":"...","comp":"..."}]}'
+     -d '{"on":"<today YYYY-MM-DD>","leads":[{"search":"${key}","company":"...","title":"...","location":"...","url":"...","fit":"...","team":"...","setup":"...","comp":"..."}]}'
    \`\`\`
 
-   Every object's \`"search"\` ${searchValueRule}${leadsNote}. \`found\` and \`verified\` are
-   today's date. \`team\`, \`setup\`, and \`comp\` are the step-${captureNum} fields - omit
+   Every object's \`"search"\` ${searchValueRule}${leadsNote}. \`on\` is today's
+   **local** date, sent once for the whole call - the server stamps \`found\` and
+   \`verified\` from it, so don't repeat a date on each posting. It is the same
+   date steps 9b and 9c send, and step 9c counts a day's new leads by it.
+   \`team\`, \`setup\`, and \`comp\` are the step-${captureNum} fields - omit
    the key entirely (don't send an empty string) for any of them the posting
    didn't state. \`TRACKER_URL\` and \`TRACKER_API_TOKEN\` are environment
    variables - just run the curl command above directly and let normal shell
@@ -297,24 +343,27 @@ ${filingStep}8. For a previously-tracked lead (from step 1b's \`leads[]\`) confi
    curl -s -X POST "$TRACKER_URL/api/screened" \\
      -H "Authorization: Bearer $TRACKER_API_TOKEN" \\
      -H "Content-Type: application/json" \\
-     -d '{"screened":[{"search":"${key}","url":"...","company":"...","title":"...","location":"...","reason":"..."}]}'
+     -d '{"search":"${key}","on":"<today YYYY-MM-DD>","screened":[{"search":"${key}","url":"...","company":"...","title":"...","location":"...","reason":"..."}]}'
    \`\`\`
 
-   \`"search"\` must be \`"${key}"\`.${screenedNote} \`reason\` is a short, specific, human-readable explanation (e.g. ${screenedExamples}) - this is what makes the entry useful later, don't leave it vague. Same success/failure check as step 9 (an \`"added"\` count means it worked).
+   \`"search"\` must be \`"${key}"\`. \`on\` is today's **local** date, the same one steps 9 and 9c send, and it is not optional: it is the date these rows are stamped with, and step 9c counts a day's screened rows by it. Leave it out and the server falls back to its own UTC date, which for an evening run is already tomorrow - the rows land fine and then the run records having screened nothing. \`reason\` is a short, specific, human-readable explanation (e.g. ${screenedExamples}) - this is what makes the entry useful later, don't leave it vague. Same success/failure check as step 9 (an \`"added"\` count means it worked).
 9c. RECORD THE RUN. **Do this every single run, without exception - including runs that found nothing, runs where every candidate was screened out, and runs where steps 8/9/9b were skipped or failed.** This is the one step with no "skip it if there's nothing to report" clause, and the reason is that a run finding nothing writes nothing anywhere else: no leads, no screened rows, no delistings. Without this call, a search that silently stopped running (expired token, disabled scheduled task, machine asleep) looks identical on the tracker webpage to a genuine zero-result day, and can go unnoticed for weeks.
 
    \`\`\`
    curl -s -X POST "$TRACKER_URL/api/runs" \\
      -H "Authorization: Bearer $TRACKER_API_TOKEN" -H "Content-Type: application/json" \\
-     -d '{"search":"${key}","status":"ok","leadsAdded":0,"screenedAdded":0,"delisted":0,"on":"<today YYYY-MM-DD>","note":"..."}'
+     -d '{"search":"${key}","status":"ok","on":"<today YYYY-MM-DD>","note":"..."}'
    \`\`\`
 
-   ${runKeysRule} ${countsRule}
-   \`"added"\` count${multi ? " step 9b returned" : "s the step-9 and step-9b calls actually returned"} (0 if that
-   step was skipped); \`delisted\` is how many leads step 8 reported dead. \`on\` is
+   Those four fields are the whole call. \`"search"\` is \`"${key}"\`. \`on\` is
    today's **local** date - the server can't derive it, and without it a
    morning run records tomorrow's date. \`note\` is one short line summarising
    the run for the webpage (e.g. "no new postings; 34 screened out").
+${runFanoutNote}
+   Don't send counts, and don't tally any. The tracker derives \`leadsAdded\`,
+   \`screenedAdded\` and \`delisted\` itself from what steps 8, 9 and 9b actually
+   wrote${multi ? ", per tab and from that tab's own rows" : ""}, so there is nothing here to add up and nothing that can be
+   added up wrong. Counts sent anyway are ignored rather than refused.
 
    Send \`"status":"error"\` instead of \`"ok"\` if the run couldn't do its job
    properly - the tracker was unreachable, search/fetch tooling failed broadly
