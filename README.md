@@ -55,6 +55,8 @@ docs/
 scripts/
   run-search.ps1              runs one track for one person (fetches its prompt from the API)
   setup-scheduler.ps1          registers every person's tracks as daily Windows Scheduled Tasks
+  seed-demo-user.ps1           creates the demo account and fills it with invented postings
+  demo-user.json               that invented data - the only fabricated content in this repo
   backup-tracker.ps1           exports the whole database to a dated .sql file + an off-machine mirror
   archive-backups.ps1          copies those exports into an archive this account can't modify (runs as SYSTEM)
   protect-backups.ps1          one-time elevated setup that creates that archive and its task
@@ -228,6 +230,56 @@ run takes several minutes and they share one CLI.
 Note what this does and doesn't protect: the API keeps each person's data
 strictly separate, but whoever administers the Cloudflare account can read
 any of it directly in D1. This is for people who are fine with that.
+
+## The demo account
+
+A tracker with real data in it is a bad thing to show anyone. A job search is
+a document about where someone works, where they'd rather work, what they've
+been rejected from and what they expect to be paid, and none of that stops
+being true because the screen share is short. So there is a third kind of
+account here, alongside the real ones: a demo, whose every row is invented.
+
+```powershell
+.\scripts\seed-demo-user.ps1 -AdminToken <the ADMIN_TOKEN>
+```
+
+That creates an account called `Demo`, fills it from
+[`scripts/demo-user.json`](scripts/demo-user.json), and prints the password to
+sign in with (pass `-Password` to choose a memorable one instead). It writes
+everything through the ordinary HTTP API, so the demo can only ever be in a
+state a real search could have produced - and running it is a live end-to-end
+check that those routes still work.
+
+**The data is invented, not anonymised.** Northwind Systems and Kestrel
+Analytics are not companies, and every posting URL is under `example.com`,
+which IANA reserves for documentation and which can never resolve to a real
+job posting. Nothing in it can be mistaken for a record of a real company's
+hiring, and no link in it leads anywhere. It's the one place in this repo with
+fabricated content, which is why it's a single readable file rather than rows
+scattered through a script.
+
+It covers most of what there is to show: three tracks including a `fed_by`
+pair (one search filling two tabs), leads across every status and every
+location tier, twenty screened postings, and nine applications walked through
+the pipeline from "To Apply" to an offer. The dates are stored as day offsets
+rather than calendar dates, so it always reads as a search that's been running
+for the last three weeks - re-run with `-Force` to move it forward to today.
+
+**It has no scheduled search, and can't acquire one.** It gets no
+`private\<user id>\` folder, and `setup-scheduler.ps1` finds people by scanning
+for `<data dir>\*\tracker.json` - so an account with no folder is invisible to
+it. Its tracks carry no `schedule_time` for the same reason, and its
+`stale_run_hours` is set to a year, because the staleness warning reports a
+search that has stopped firing and this account never had one to stop. You can
+still fetch `GET /api/prompt/engineering` for it to show what a composed daily
+prompt looks like; it just refers to resume and notes files that only a real
+account would have on disk.
+
+`-Force` is needed to re-seed an account that already holds data, since
+application rows are the one thing nothing dedups. Before it deletes any of
+them it checks that every lead on the account is an `example.com` URL and
+refuses outright if one isn't - so pointing it at a real person's account by
+mistake costs nothing.
 
 ## Backups
 
