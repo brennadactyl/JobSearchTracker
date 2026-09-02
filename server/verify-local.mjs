@@ -425,6 +425,67 @@ check("and the fed tab's record is not the feeding track's row copied over",
 check("a fed track still accepts a run record - that's what keeps its tab from reading stale",
   (await req("POST", "/api/runs", { token: A_TOK, body: { search: "LEAD", on: "2026-08-31", note: "filed by SWE" } })).status === 200);
 
+console.log("\n== leads and screened must name a configured track ==");
+// The orphan-row failure, from the write side. /api/runs has 404'd an
+// unconfigured key for a while; /api/leads and /api/screened took any string,
+// and 145 leads plus 185 screened rows spent months under a retired "TPM" key
+// - stored, invisible, and un-erroring. Ada's tracks here are SWE, LEAD (fed
+// by SWE) and DATA.
+const ghostLead = await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
+  { search: "GHOST", company: "Acme", title: "Nowhere", url: `https://boards.example.com/jobs/${Date.now()}41` }] } });
+check("a lead naming an unconfigured track is refused, and the error names the key",
+  ghostLead.status === 404 && /GHOST/.test(ghostLead.json.error), ghostLead.text.slice(0, 140));
+const ghostScreened = await req("POST", "/api/screened", { token: A_TOK, body: { screened: [
+  { search: "GHOST", url: `https://boards.example.com/jobs/${Date.now()}42`, reason: "out of scope" }] } });
+check("and so is a screened row naming one",
+  ghostScreened.status === 404 && /GHOST/.test(ghostScreened.json.error), ghostScreened.text.slice(0, 140));
+
+// The half-applied payload is the case worth holding onto: the run reads
+// `added`, reports it, and stops looking for those postings. So a payload that
+// is one-third wrong must file none of it - checked from outside by asking
+// whether the good row's url is anywhere in the data afterwards.
+const mixedUrl = `https://boards.example.com/jobs/${Date.now()}43`;
+const mixed = await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
+  { search: "SWE", company: "Acme", title: "Valid one", url: mixedUrl },
+  { search: "GHOST", company: "Acme", title: "Drifted one", url: `${mixedUrl}-b` }] } });
+check("a payload mixing a valid key with an unknown one is rejected whole",
+  mixed.status === 404, mixed.text.slice(0, 140));
+const afterMixed = await req("GET", "/api/data", { token: A_TOK });
+check("and the valid row in that payload was not inserted",
+  !afterMixed.json.leads.some((l) => l.url === mixedUrl));
+const mixedScreenUrl = `https://boards.example.com/jobs/${Date.now()}44`;
+check("same for screened - one bad key, nothing filed",
+  (await req("POST", "/api/screened", { token: A_TOK, body: { screened: [
+    { search: "SWE", url: mixedScreenUrl, reason: "wrong level" },
+    { search: "GHOST", url: `${mixedScreenUrl}-b`, reason: "wrong level" }] } })).status === 404 &&
+  !(await req("GET", "/api/data", { token: A_TOK })).json.screened.some((s) => s.url === mixedScreenUrl));
+
+// A fed key must keep working. It is a track row like any other, and a
+// branched run files into the tab it feeds by name - a check that only allowed
+// "tracks that run their own search" would break every branched run on the
+// first night.
+const fedLead = await req("POST", "/api/leads", { token: A_TOK, body: { leads: [
+  { search: "LEAD", company: "Acme", title: "Fed tab", url: `https://boards.example.com/jobs/${Date.now()}45` }] } });
+check("a fed (fed_by) key is still accepted by /api/leads", fedLead.status === 200 && fedLead.json.added === 1,
+  fedLead.text.slice(0, 140));
+const fedScreenUrl = `https://boards.example.com/jobs/${Date.now()}46`;
+const fedScreened = await req("POST", "/api/screened", { token: A_TOK, body: { screened: [
+  { search: "LEAD", url: fedScreenUrl, reason: "wrong level" }] } });
+check("and by /api/screened, which then rewrites it to the feed root",
+  fedScreened.status === 200 && fedScreened.json.added === 1, fedScreened.text.slice(0, 140));
+check("the rewrite still happened - the row is filed under SWE, not LEAD",
+  (await req("GET", "/api/data", { token: A_TOK })).json.screened
+    .find((s) => s.url === fedScreenUrl)?.search === "SWE");
+
+// Another user's track key is an unconfigured key here, which is the property
+// this shares with the rest of the cross-user matrix. "DATA" is one of Ada's
+// tabs and none of Bo's, and the refusal Bo gets is the ordinary unknown-track
+// 404 - the same answer a typo gets, saying nothing about whether anyone else
+// has such a track.
+check("one user cannot file a lead into another user's track key",
+  (await req("POST", "/api/leads", { token: B_TOK, body: { leads: [
+    { search: "DATA", company: "Acme", title: "Not yours", url: `https://boards.example.com/jobs/${Date.now()}47` }] } })).status === 404);
+
 console.log("\n== dates and counts line up ==");
 // The bug this catches: /api/screened accepts a local `on`, and a run record
 // counts a day's screened rows by `date = on`. If the caller sends `on` to
