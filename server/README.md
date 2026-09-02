@@ -347,6 +347,16 @@ application id or track key simply doesn't resolve, and comes back as a 404.
 - `POST /api/leads/:id/status` - body `{ status }` - validates against `LEAD_STATUS`; if the new status is "Applied", atomically also creates the matching application row unless one already exists.
 - `POST /api/applications/:id/status` - body `{ status }` - validates against `APP_STATUS`; stamps the matching Stage history date if that column is still empty.
 - `POST /api/delete-application` - body `{ "id": ... }` - removes one application row.
+- `POST /api/delete-leads` - body `{ "ids": [...], "reason": "..." }` ->
+  `{ removed, kept, unmatched, reason }`. Postings the person has decided
+  against. Each lead is deleted and its URL written to `screened` with the
+  reason given, which is what stops tomorrow's run rediscovering the URL and
+  adding it straight back. `reason` is required: the screened row is the only
+  lasting record of why the posting went, and `/api/delist`'s fixed "posting
+  taken down" would file a screening nobody performed. A lead an application
+  points at is kept and named in `kept`, the same rule delisting applies.
+  Batched, because narrowing a search's locations can leave a few hundred leads
+  that no longer qualify.
 
 ### Config and prompts
 

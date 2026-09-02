@@ -555,6 +555,75 @@ check("A's old track is gone for A", (await req("GET", "/api/config", { token: a
 check("A's leads survive their track being removed",
   mine((await req("GET", "/api/data", { token: aSecond.json.token })).json.leads, sharedUrl) === 1);
 
+console.log("\n== removing postings by hand ==");
+// The third way a lead leaves the board, after delisting and purging. What
+// these check is the part that makes it different from both: the reason is
+// the caller's, it reaches the screened row, and that row is what stops the
+// removal undoing itself on the next run.
+const rmTok = aSecond.json.token; // A_TOK is revoked by the sessions section above
+// The varying part has to be the 5+ digit run itself. url.js treats such a
+// run as the posting's identity and ignores everything around it, so
+// `remove-me-1-<ts>` and `remove-me-2-<ts>` are the SAME posting to it - a
+// fixture written that way silently gets one lead instead of three.
+const rmStamp = Date.now();
+const rmUrl = (n) => `https://example.com/remove-me-${rmStamp + n}`;
+const rmUrls = [rmUrl(1), rmUrl(2), rmUrl(3)];
+// Whatever track A has right now, not a hard-coded "SWE": the replaceTracks
+// section just above swaps A's track list out, so assuming a key here made
+// this section depend on the order the file happens to run in.
+const rmTrack = (await req("GET", "/api/config", { token: rmTok })).json.tracks[0].key;
+const rmAdd = await req("POST", "/api/leads", { token: rmTok, body: { leads: rmUrls.map((u, i) => (
+  { search: rmTrack, company: `Removable ${i}`, title: "Engineer", location: "Austin, TX", url: u })) } });
+const rmData = await req("GET", "/api/data", { token: rmTok });
+const rmLeads = rmUrls.map((u) => rmData.json.leads.find((l) => l.url === u));
+check("fixtures for removal exist", rmLeads.every(Boolean), `track=${rmTrack} add=${rmAdd.text.slice(0,120)} data=${rmData.status}/${(rmData.json.leads||[]).length}`);
+
+check("removing without a reason is refused",
+  (await req("POST", "/api/delete-leads", { token: rmTok, body: { ids: [rmLeads[0].id] } })).status === 400);
+check("a blank reason is refused too",
+  (await req("POST", "/api/delete-leads", { token: rmTok, body: { ids: [rmLeads[0].id], reason: "   " } })).status === 400);
+check("an over-long reason is refused",
+  (await req("POST", "/api/delete-leads", { token: rmTok, body: { ids: [rmLeads[0].id], reason: "x".repeat(201) } })).status === 400);
+check("no ids is refused",
+  (await req("POST", "/api/delete-leads", { token: rmTok, body: { ids: [], reason: "outside target locations" } })).status === 400);
+
+const rmOne = await req("POST", "/api/delete-leads",
+  { token: rmTok, body: { ids: [rmLeads[0].id, rmLeads[1].id], reason: "outside target locations" } });
+check("removing two leads reports both", rmOne.status === 200 && rmOne.json.removed === 2, rmOne.text.slice(0, 140));
+const afterRm = await req("GET", "/api/data", { token: rmTok });
+check("the removed leads are gone from the board",
+  !afterRm.json.leads.some((l) => l.id === rmLeads[0].id || l.id === rmLeads[1].id));
+check("each removal left a screened row carrying the caller's reason",
+  rmUrls.slice(0, 2).every((u) => afterRm.json.screened.some(
+    (sc) => sc.url === u && sc.reason === "outside target locations")),
+  JSON.stringify(afterRm.json.screened.filter((sc) => rmUrls.includes(sc.url))));
+check("the screened row is what stops tomorrow's run re-adding it",
+  (await req("GET", `/api/dedup/${rmTrack}`, { token: rmTok })).json.screened.includes(rmUrls[0]));
+check("removing an id twice is unmatched, not an error",
+  (await req("POST", "/api/delete-leads", { token: rmTok, body: { ids: [rmLeads[0].id], reason: "again" } }))
+    .json.unmatched.length === 1);
+
+// The applied-to guard, tested through the application row rather than the
+// status, because that is what the handler checks.
+await req("POST", `/api/leads/${rmLeads[2].id}/status`, { token: rmTok, body: { status: "Applied" } });
+const rmApplied = await req("POST", "/api/delete-leads",
+  { token: rmTok, body: { ids: [rmLeads[2].id], reason: "outside target locations" } });
+check("a lead an application points at is kept, not removed",
+  rmApplied.json.removed === 0 && rmApplied.json.kept.includes(rmLeads[2].id), rmApplied.text.slice(0, 140));
+check("that lead is still on the board",
+  (await req("GET", "/api/data", { token: rmTok })).json.leads.some((l) => l.id === rmLeads[2].id));
+
+// Isolation: the whole reason this file exists.
+const bTargets = (await req("GET", "/api/data", { token: B_TOK })).json.leads[0];
+const crossRm = await req("POST", "/api/delete-leads",
+  { token: rmTok, body: { ids: [bTargets.id], reason: "should not work" } });
+check("one user cannot remove another's lead",
+  crossRm.json.removed === 0 && crossRm.json.unmatched.length === 1, crossRm.text.slice(0, 140));
+check("B's lead is still there afterwards",
+  (await req("GET", "/api/data", { token: B_TOK })).json.leads.some((l) => l.id === bTargets.id));
+check("and no screened row was invented in B's data",
+  !(await req("GET", "/api/data", { token: B_TOK })).json.screened.some((sc) => sc.reason === "should not work"));
+
 console.log("\n== purging a retired search ==");
 // A's track list is now just DATA (above), so SWE is retired for A and its
 // rows are eligible. B still has a live SWE, which is what makes the

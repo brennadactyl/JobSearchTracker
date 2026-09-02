@@ -164,6 +164,20 @@
  *   POST /api/delete-application  requires Bearer token -> body: { id } ->
  *                            removes one application row (used by the
  *                            client's "remove" control)
+ *   POST /api/delete-leads   requires Bearer token -> body: { ids: [...],
+ *                            reason } -> { removed, kept, unmatched, reason }.
+ *                            Postings the person has decided against: each
+ *                            lead is deleted and its URL screened with the
+ *                            reason they gave, so tomorrow's run doesn't
+ *                            rediscover it and add it back. `reason` is
+ *                            required - the screened row is the only lasting
+ *                            record of why it went, and /api/delist's fixed
+ *                            "posting taken down" would be a screening nobody
+ *                            performed. A lead an application points at is
+ *                            kept and reported in `kept`, same rule as
+ *                            delisting. Batched: narrowing a search's
+ *                            locations can leave a few hundred leads that no
+ *                            longer qualify. See api.js's handleDeleteLeads.
  *   GET  /api/config         requires Bearer token -> { tracks[], settings }
  *                            - this user's config (track tabs, tab labels,
  *                            display title, priority-location rules,
@@ -232,6 +246,7 @@ import {
   handleSetLeadStatus,
   handleSetApplicationStatus,
   handleDeleteApplication,
+  handleDeleteLeads,
   handleGetConfig,
   handleSetConfig,
   handleGetData,
@@ -344,6 +359,10 @@ export default {
 
     if (url.pathname === "/api/delete-application" && request.method === "POST") {
       return handleDeleteApplication(request, db);
+    }
+
+    if (url.pathname === "/api/delete-leads" && request.method === "POST") {
+      return handleDeleteLeads(request, db);
     }
 
     return new Response("Not found", { status: 404, headers: CORS_HEADERS });

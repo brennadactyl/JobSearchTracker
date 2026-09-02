@@ -1007,6 +1007,88 @@ export async function handleDeleteApplication(request, db) {
   return json({ ok: true });
 }
 
+/** Longest `reason` accepted. It's a note on a screened row, not a document. */
+const MAX_REASON = 200;
+
+/**
+ * Removing postings a person has decided against, by id, with the reason they
+ * decided it.
+ *
+ * This is the third way a lead can leave the board, and it exists because the
+ * other two can't say what this one says:
+ *
+ *   - /api/delist is a nightly run reporting a posting taken down. It writes
+ *     the fixed reason "posting taken down". Reusing it here would file a
+ *     screening nobody performed, in the table tomorrow's run reads back as
+ *     already-seen - the same objection that kept purgeSearch from reusing it.
+ *   - /api/purge takes a whole retired track and needs the ADMIN_TOKEN. It
+ *     refuses any key still configured, so it cannot touch a live tab.
+ *
+ * So `reason` is required rather than defaulted. The screened row it leaves is
+ * the only lasting record of why the posting went, and a default would make
+ * every removal claim a motive the person never gave. It is also what stops
+ * the removal undoing itself: without a screened row tomorrow's run rediscovers
+ * the URL, finds nothing tracking it, and adds it straight back.
+ *
+ * A lead an application points at is kept, exactly as delistLead keeps it, and
+ * for the same reason - the application is the least recoverable row in this
+ * database and deleting the lead would strand it. Tested by the application
+ * row, not by status "Applied", because a lead can carry an application while
+ * sitting in another status. Unlike purgeSearch, this does not clear leadId to
+ * remove it anyway: purging is retiring a whole search on purpose, while this
+ * is one posting at a time, and silently severing an application from a
+ * one-click removal is not a trade worth making. The caller is told, in
+ * `kept`, so nothing looks like it worked when it didn't.
+ *
+ * Batched because the realistic use is a triage pass - narrowing a search's
+ * locations leaves a few hundred leads that no longer qualify - and 300
+ * sequential round trips is a worse answer than one call. Ids not belonging to
+ * this user simply don't resolve, since `db` is already scoped to them, and
+ * come back in `unmatched` rather than as an error: from outside, another
+ * person's lead id and a deleted one are indistinguishable, which is the point.
+ *
+ * @param {Request} request
+ * @param {Db} db
+ */
+export async function handleDeleteLeads(request, db) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "invalid JSON body" }, 400);
+  }
+
+  const reason = typeof body.reason === "string" ? body.reason.trim() : "";
+  if (!reason) {
+    return json({ error: "missing reason - say why these are being removed; it is stored on the screened row" }, 400);
+  }
+  if (reason.length > MAX_REASON) {
+    return json({ error: `reason must be ${MAX_REASON} characters or fewer` }, 400);
+  }
+
+  const ids = Array.isArray(body.ids) ? body.ids : body.id != null ? [body.id] : [];
+  if (!ids.length) return json({ error: "missing ids" }, 400);
+
+  let removed = 0;
+  const kept = [];
+  const unmatched = [];
+  for (const rawId of ids) {
+    const lead = await db.getLead(rawId);
+    if (!lead) {
+      unmatched.push(rawId);
+      continue;
+    }
+    if (await db.getApplicationByLeadId(lead.id)) {
+      kept.push(lead.id);
+      continue;
+    }
+    if (await db.deleteLeadAndScreen(lead, reason)) removed++;
+  }
+
+  if (removed) await db.touchUpdated();
+  return json({ removed, kept, unmatched, reason });
+}
+
 /**
  * What the tracker does when a search reports that a posting it tracks has
  * been taken down. The rule, in one place, in code:
