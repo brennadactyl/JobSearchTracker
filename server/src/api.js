@@ -1058,13 +1058,26 @@ export async function handleDeleteLeads(request, db) {
     return json({ error: "invalid JSON body" }, 400);
   }
 
-  const reason = typeof body.reason === "string" ? body.reason.trim() : "";
+  let reason = typeof body.reason === "string" ? body.reason.trim() : "";
   if (!reason) {
     return json({ error: "missing reason - say why these are being removed; it is stored on the screened row" }, 400);
   }
   if (reason.length > MAX_REASON) {
     return json({ error: `reason must be ${MAX_REASON} characters or fewer` }, 400);
   }
+
+  // Same reservation handleAddScreened makes, for the same reason and now for a
+  // second caller-reason path. countRunActivity splits a day's screened rows on
+  // DELISTED_REASON to separate "a posting we tracked came down" from "a
+  // candidate we rejected", and those land in different columns of the run
+  // record. "Posting taken down" is an entirely natural thing to type into a
+  // required "why are you removing this?" box - the page says those words
+  // elsewhere - and that row would then be counted as a delisting, inflating
+  // that day's `delisted` and deflating `screenedAdded` for the track. The
+  // reason is still recorded, just not in the words that already mean something
+  // else. deleteLeadAndScreen itself can't refuse the string: delistLead is a
+  // legitimate caller that passes exactly that sentinel.
+  if (reason.toLowerCase() === DELISTED_REASON) reason = "removed by hand";
 
   const ids = Array.isArray(body.ids) ? body.ids : body.id != null ? [body.id] : [];
   if (!ids.length) return json({ error: "missing ids" }, 400);

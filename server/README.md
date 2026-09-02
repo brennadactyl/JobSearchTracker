@@ -358,6 +358,32 @@ application id or track key simply doesn't resolve, and comes back as a 404.
   Batched, because narrowing a search's locations can leave a few hundred leads
   that no longer qualify.
 
+### The three ways a lead can be deleted
+
+They differ in who is allowed to ask and how much they can take, and the
+differences are deliberate:
+
+| route | auth | scope | applications |
+|---|---|---|---|
+| `POST /api/delist` (and `delistedOn`) | session | one posting a run reports dead | kept, untouched |
+| `POST /api/delete-leads` | session | ids the person names | kept, reported in `kept` |
+| `POST /api/purge` | **ADMIN_TOKEN** | every row under one retired track | kept, `leadId` cleared |
+
+Only `purge` needs the admin secret, and that is the point: it empties tables,
+so it must not be reachable with the session token a nightly run keeps on disk.
+The two session-authenticated routes are both id- or URL-scoped and both refuse
+to strand an application, which is what makes it safe for a run - or a person -
+to reach them.
+
+One shared trap: `DELISTED_REASON` ("posting taken down") is the server's own
+marker. `countRunActivity` splits a day's `screened` rows on that exact string
+to tell a delisting from an ordinary rejection, so **every route that lets a
+caller supply a reason must reserve it** - `handleAddScreened` rewrites it to
+"dead on arrival", `handleDeleteLeads` to "removed by hand". The primitive
+underneath (`deleteLeadAndScreen`) can't refuse the string itself, because
+`delistLead` passes it legitimately. A new caller-reason path needs the same
+guard.
+
 ### Config and prompts
 
 - `GET /api/config` -> `{ tracks: [{key, label, full_description, sort_order, last_run, ...search config}], settings }` - this person's config: the track tabs, labels, display title, priority-location rules and staleness threshold the client renders from, plus the per-track search config and prose settings the prompt is composed from. Each track's `last_run` is its `search_runs` row (`{at, on, status, leads_added, screened_added, delisted, note}`; all-empty means never recorded).

@@ -613,6 +613,18 @@ check("a lead an application points at is kept, not removed",
 check("that lead is still on the board",
   (await req("GET", "/api/data", { token: rmTok })).json.leads.some((l) => l.id === rmLeads[2].id));
 
+// The delisting marker is reserved: countRunActivity splits a day's screened
+// rows on that exact string, so a person typing it into the reason box would
+// be counted as a delisting rather than a rejection.
+const rmSentUrl = `https://example.com/remove-me-${rmStamp + 90}`;
+await req("POST", "/api/leads", { token: rmTok, body: { leads: [
+  { search: rmTrack, company: "Sentinel Co", title: "Engineer", location: "Austin, TX", url: rmSentUrl }] } });
+const rmSent = (await req("GET", "/api/data", { token: rmTok })).json.leads.find((l) => l.url === rmSentUrl);
+await req("POST", "/api/delete-leads", { token: rmTok, body: { ids: [rmSent.id], reason: "Posting Taken Down" } });
+const rmSentRow = (await req("GET", "/api/data", { token: rmTok })).json.screened.find((sc) => sc.url === rmSentUrl);
+check("a reason equal to the delisting marker is rewritten, not stored as typed",
+  rmSentRow && rmSentRow.reason === "removed by hand", JSON.stringify(rmSentRow));
+
 // Isolation: the whole reason this file exists.
 const bTargets = (await req("GET", "/api/data", { token: B_TOK })).json.leads[0];
 const crossRm = await req("POST", "/api/delete-leads",
