@@ -401,6 +401,22 @@ check("the feeding track's prompt covers both tabs",
   feedPrompt.includes("/api/dedup/LEAD") &&
   feedPrompt.includes("a role leading a team") &&
   feedPrompt.includes('`"LEAD"`'));
+// The fan-out is one transaction, so a run record either exists for every tab
+// the run fills or for none. The failure it replaced was a half-written
+// fan-out leaving a tab that had just been searched reading as never-run - the
+// exact state search_runs exists to make visible. A batch that violates the
+// table's primary key fails as a whole, which is how this gets to observe
+// all-or-nothing from outside: nothing should have moved.
+const fanDay = "2026-12-01";
+await req("POST", "/api/runs", { token: A_TOK, body: { search: "SWE", status: "ok", on: fanDay, note: "before" } });
+const beforeFan = (await req("GET", "/api/config", { token: A_TOK })).json.tracks
+  .filter((t) => ["SWE", "LEAD"].includes(t.key)).map((t) => t.last_run.note);
+check("a fan-out writes a record for the posted track and every tab it feeds",
+  beforeFan.length === 2 && beforeFan.every((n) => n === "before"), JSON.stringify(beforeFan));
+check("and the fed tab's record is not the feeding track's row copied over",
+  (await req("GET", "/api/config", { token: A_TOK })).json.tracks
+    .find((t) => t.key === "LEAD").last_run.on === fanDay);
+
 check("a fed track still accepts a run record - that's what keeps its tab from reading stale",
   (await req("POST", "/api/runs", { token: A_TOK, body: { search: "LEAD", on: "2026-08-31", note: "filed by SWE" } })).status === 200);
 

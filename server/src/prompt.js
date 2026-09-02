@@ -207,9 +207,12 @@ export function buildSearchPrompt({ user, track, settings, feeds, coverage }) {
   const delistTabNote = multi
     ? ` \`"search"\` is this run's own key, \`"${key}"\`, in both calls - including for a posting tracked in one of the other tabs this run fills. The tracker matches across every tab, so one call each covers all ${allKeys.length}.`
     : "";
-  const screenedNote = multi
-    ? ` Every screened row goes under \`"${key}"\` regardless of which tab the posting would have been filed under - step 1b reads them back as one combined set and nothing displays them per-tab, so splitting them would only add a way to get it wrong.`
-    : "";
+  // There used to be a sentence here telling a multi-tab run to file every
+  // screened row under the feeding track regardless of which tab the posting
+  // would have gone in. The server does that itself now - handleAddScreened
+  // rewrites `search` to the track that owns the search - so the sentence was
+  // asking the model to reproduce a rule it cannot get wrong any more, which
+  // is the kind of prose this whole change is about deleting.
   // Steps 1c and 9d appear only once a track has company_sweeps rows. Gating
   // on the data rather than on a config flag keeps this off for every track
   // that hasn't been seeded, and turns it on for one that has, with nothing to
@@ -343,7 +346,7 @@ ${filingStep}8. REPORT WHAT THE RE-CHECK OF ALREADY-TRACKED LEADS FOUND. For the
      -d '{"search":"${key}","on":"<today YYYY-MM-DD>","screened":[{"search":"${key}","url":"...","company":"...","title":"...","location":"...","reason":"..."}]}'
    \`\`\`
 
-   \`"search"\` must be \`"${key}"\`.${screenedNote} \`on\` is today's **local** date, the same one steps 9 and 9c send, and it is not optional: it is the date these rows are stamped with, and step 9c counts a day's screened rows by it. Leave it out and the server falls back to its own UTC date, which for an evening run is already tomorrow - the rows land fine and then the run records having screened nothing. \`reason\` is a short, specific, human-readable explanation (e.g. ${screenedExamples}) - this is what makes the entry useful later, don't leave it vague. Same success/failure check as step 9 (an \`"added"\` count means it worked).
+   \`"search"\` must be \`"${key}"\`. \`on\` is today's **local** date, the same one steps 9 and 9c send, and it is not optional: it is the date these rows are stamped with, and step 9c counts a day's screened rows by it. Leave it out and the server falls back to its own UTC date, which for an evening run is already tomorrow - the rows land fine and then the run records having screened nothing. \`reason\` is a short, specific, human-readable explanation (e.g. ${screenedExamples}) - this is what makes the entry useful later, don't leave it vague. Same success/failure check as step 9 (an \`"added"\` count means it worked).
 9c. RECORD THE RUN. **Do this every single run, without exception - including runs that found nothing, runs where every candidate was screened out, and runs where steps 8/9/9b were skipped or failed.** This is the one step with no "skip it if there's nothing to report" clause, and the reason is that a run finding nothing writes nothing anywhere else: no leads, no screened rows, no delistings. Without this call, a search that silently stopped running (expired token, disabled scheduled task, machine asleep) looks identical on the tracker webpage to a genuine zero-result day, and can go unnoticed for weeks.
 
    \`\`\`

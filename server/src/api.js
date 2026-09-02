@@ -434,16 +434,17 @@ export async function handleRecordRun(request, db) {
   const config = await db.getTracksAndSettings();
   const keys = [key, ...config.tracks.filter((t) => t.fed_by === key).map((t) => t.key)];
 
-  // Sequential rather than concurrent, and the posted key first: these are
-  // separate writes, not one transaction, so if the worker dies partway the
-  // row that survives should be the one whose absence the caller could
-  // actually notice and retry. The counts are per key, never shared - that is
-  // the bug being fixed, so each tab gets its own count of its own rows.
-  const runs = [];
-  for (const k of keys) {
-    const counts = await db.countRunActivity(k, on);
-    runs.push(await db.recordRun(k, { at, on, status, ...counts, note }));
-  }
+  // Count every tab first, then write them all in one transaction. Both
+  // halves matter. The counts are per key and never shared - that is the bug
+  // being fixed, so each tab gets its own count of its own rows - and the
+  // writes are all-or-nothing, because a fan-out that can half-succeed
+  // re-creates the very state this is here to prevent: a tab that was
+  // searched last night reading as never having run, with the run that could
+  // have retried already over.
+  const counted = await Promise.all(
+    keys.map(async (k) => ({ key: k, at, on, status, note, ...(await db.countRunActivity(k, on)) }))
+  );
+  const runs = await db.recordRuns(counted);
 
   // `run` stays the posted track's record so existing callers read the same
   // field they always have; `also` is the fed tabs' records, there so a run's
@@ -578,7 +579,8 @@ export async function handleAddScreened(request, db) {
   //
   // The prompt used to say this in a sentence and rely on the model to do it.
   // Doing it here means the rule holds whether or not that sentence was read,
-  // and the sentence comes out of the prompt.
+  // so the sentence is gone - see the note where `screenedNote` used to be
+  // built in prompt.js.
   const { tracks, settings } = await db.getTracksAndSettings();
 
   // An excluded company is dropped outright here, and deliberately does NOT
@@ -640,8 +642,10 @@ export async function handleAddScreened(request, db) {
 // all of them, and every match is returned rather than just the first.
 //
 // The reported list is deduped by key for the opposite reason: two spellings of
-// one posting in one payload are one report, not two, and counting them twice
-// would inflate the `delisted` number a run writes to its own record.
+// one posting in one payload are one report, not two. The run record's counts
+// no longer come from here - the tracker derives them from the rows - but
+// `removed` and `stamped` are what the run states in its own summary to the
+// person reading it, and a posting counted twice there is just as wrong.
 //
 // ---- These are the first lookups in this codebase keyed by URL rather than by
 // row id, and that matters for who can touch what. Every other cross-user

@@ -683,23 +683,62 @@ export class Db {
    * @returns {Promise<SearchRun>}
    */
   async recordRun(key, run) {
-    await this.d1
-      .prepare(
-        `INSERT INTO search_runs
-           (user_id, track_key, last_run_at, last_run_on, status, leads_added, screened_added, delisted, note)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(user_id, track_key) DO UPDATE SET
-           last_run_at = excluded.last_run_at, last_run_on = excluded.last_run_on,
-           status = excluded.status, leads_added = excluded.leads_added,
-           screened_added = excluded.screened_added, delisted = excluded.delisted,
-           note = excluded.note`
+    const [row] = await this.recordRuns([{ key, ...run }]);
+    return row;
+  }
+
+  /**
+   * Writes a run record for every tab one run filled, as a single transaction.
+   *
+   * All of them or none of them, which is the entire point. A branched run
+   * fills several tabs and each needs its own record, and the failure this
+   * whole change exists to fix is a tab that was searched last night reading
+   * as never having run. Writing them one at a time re-creates exactly that:
+   * a worker that dies, times out, or hits a D1 error partway through leaves
+   * the tabs it hadn't reached yet looking stale, and the run that could have
+   * retried has already ended. d1.batch is a real transaction, so a partial
+   * fan-out is not a state this can end up in.
+   *
+   * The counts are computed by the caller, per key, before any of this runs -
+   * they are reads, and they must not be inside the write transaction.
+   *
+   * @param {Array<{key: string, at: string, on: string, status: string, leadsAdded: number, screenedAdded: number, delisted: number, note: string}>} runs
+   * @returns {Promise<SearchRun[]>} the written rows, in the order asked for
+   */
+  async recordRuns(runs) {
+    if (!runs.length) return [];
+    const stmt = this.d1.prepare(
+      `INSERT INTO search_runs
+         (user_id, track_key, last_run_at, last_run_on, status, leads_added, screened_added, delisted, note)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(user_id, track_key) DO UPDATE SET
+         last_run_at = excluded.last_run_at, last_run_on = excluded.last_run_on,
+         status = excluded.status, leads_added = excluded.leads_added,
+         screened_added = excluded.screened_added, delisted = excluded.delisted,
+         note = excluded.note`
+    );
+    await this.d1.batch(
+      runs.map((r) =>
+        stmt.bind(
+          this.userId, r.key, r.at, r.on, r.status,
+          r.leadsAdded, r.screenedAdded, r.delisted, r.note
+        )
       )
-      .bind(this.userId, key, run.at, run.on, run.status, run.leadsAdded, run.screenedAdded, run.delisted, run.note)
-      .run();
-    return this.d1
-      .prepare("SELECT * FROM search_runs WHERE user_id = ? AND track_key = ?")
-      .bind(this.userId, key)
-      .first();
+    );
+
+    const keys = runs.map((r) => r.key);
+    const res = await this.d1
+      .prepare(
+        `SELECT * FROM search_runs
+          WHERE user_id = ? AND track_key IN (${keys.map(() => "?").join(", ")})`
+      )
+      .bind(this.userId, ...keys)
+      .all();
+    // Read back in the caller's order, not the database's: the first entry is
+    // the track the run posted about, and the response distinguishes it from
+    // the tabs written on its behalf.
+    const byKey = new Map(res.results.map((r) => [r.track_key, r]));
+    return keys.map((k) => byKey.get(k)).filter(Boolean);
   }
 
   // ------------------------------------------------------------ leads --
