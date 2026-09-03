@@ -27,13 +27,22 @@ Once a domain-wide block has shown up on 2+ separate run-dates (track it in the 
 A company list long enough to be worth having is usually longer than one run
 can verify properly, and covering all of it every night is what makes a run
 shallow. If this search has been seeded with a coverage list, the daily prompt
-carries two extra steps for it - 1c picks which companies this run covers
-(cheap JSON boards every run, then the least-recently-swept, capped), and 9d
-records what was attempted. Follow them.
+carries extra steps for it - 1c picks which companies this run covers, 9d
+records what was attempted, and 9e replaces the ones that turned out
+unreadable. Follow them.
+
+The rotation is a fixed list with a cursor, not a sort by date: a run gets the
+next batch from where the last one stopped, and the cursor wraps, so every
+company is reached once per cycle before any is reached twice. Recording a
+sweep is what moves it. That means reading the list again mid-run hands you
+companies further along rather than the ones you just did - which is what makes
+step 9e work - and that a run which dies before recording re-reads its slice
+rather than skipping it.
 
 **That state lives in the tracker, not this doc** - same reason posting data
 does. `GET /api/coverage/{{TRACK_KEY}}` is the list with each company's
-last-attempted date; `POST /api/coverage` stamps it. Don't keep a parallel
+position, last-attempted date and the cursor; `POST /api/coverage` stamps it
+and advances the cursor. Don't keep a parallel
 table here: what belongs in this doc is which companies are worth searching
 (Target Companies below) and what is known about fetching each one (Fetch
 efficiency above). A confirmed board endpoint belongs in both - here as the

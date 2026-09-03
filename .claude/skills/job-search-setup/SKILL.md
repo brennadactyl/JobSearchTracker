@@ -322,10 +322,16 @@ curl -s -X POST "$TRACKER_URL/api/coverage" \
 ```
 
 `on: ""` means "register these, nobody has swept them" - it creates the rows
-without stamping a date, which is what makes them sort first so the early runs
-work through the whole list before re-covering anything. Never seed with
-today's date: that claims a sweep that didn't happen and starts the rotation
-with no idea what it has actually seen. `board` is the JSON-board kind where
+and leaves the cursor where it is, so the first run starts at the beginning of
+the list. Never seed with today's date: that claims a sweep that didn't happen
+and, because recording a sweep is what advances the cursor, it would step the
+rotation past companies nothing has looked at.
+
+The order companies are covered in is not the order you seed them in. Positions
+are assigned once and shuffled, so no company is permanently first or
+permanently last - seeding alphabetically, which is the natural thing to do,
+would otherwise mean the back half of the alphabet is always reached last and
+first to be dropped when a run runs short. `board` is the JSON-board kind where
 one is already known (`greenhouse`, `ashby`, `lever`, `workday cxs`); one fetch
 there covers discovery *and* verification, so it makes a company cheap to
 cover - it doesn't buy it a place in every run, the rotation is the rotation.

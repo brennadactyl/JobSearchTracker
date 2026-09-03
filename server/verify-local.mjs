@@ -390,6 +390,17 @@ await req("POST", "/api/config", { token: C_TOK, body: { tracks: [{ key: ROT, la
 await req("POST", "/api/coverage", { token: C_TOK, body: { search: ROT, on: "",
   swept: Array.from({ length: rotN }, (_, i) => ({ company: `Rot ${rotStamp}-${String(i).padStart(2, "0")}` })) } });
 
+// Seeding order must not become cycle order. A seeded list is written by a
+// person and is nearly always alphabetical, so assigning positions in arrival
+// order would rebuild exactly the bias migration 0008 removed.
+const seedOrder = (await req("GET", `/api/coverage/${ROT}?all=1`, { token: C_TOK })).json.companies;
+check("a seeded list is shuffled, not stored in the order it was posted",
+  seedOrder.map((c) => c.company).join() !==
+  Array.from({ length: rotN }, (_, i) => `Rot ${rotStamp}-${String(i).padStart(2, "0")}`).join(),
+  JSON.stringify(seedOrder.map((c) => c.company.split("-").pop()).join(",")));
+check("but every seeded company is present exactly once",
+  seedOrder.length === rotN && new Set(seedOrder.map((c) => c.position)).size === rotN);
+
 const c0 = (await req("GET", `/api/coverage/${ROT}`, { token: C_TOK })).json;
 check("seeding registers companies without moving the cursor",
   c0.cursor === 0 && c0.total === rotN, JSON.stringify({ cursor: c0.cursor, total: c0.total }));

@@ -142,10 +142,29 @@ export async function handleRecordSweeps({ request, db }) {
   // the same position, at which point the cursor starts stepping over one of
   // them.
   let nextPos = log.length ? Math.max(...log.map((c) => c.position)) + 1 : 0;
+
+  // New companies take their places in a shuffled order, not the order they
+  // arrived in. Seeding a rotation means posting a list somebody wrote down,
+  // and a written list is almost always alphabetical or grouped by theme -
+  // which would make position, and therefore who is covered first every cycle
+  // and who is dropped when a run runs short, a function of the initial
+  // letter. That is the bias migration 0008 removed from the existing
+  // rotation; assigning in arrival order would rebuild it for the next person
+  // to set one up.
+  //
+  // Shuffled among themselves only - companies already in the log keep their
+  // place, so this never reorders a rotation that is partway through a cycle.
+  const fresh = allowed.filter((i) => !known.has(i.company));
+  for (let i = fresh.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [fresh[i], fresh[j]] = [fresh[j], fresh[i]];
+  }
+  const placement = new Map(fresh.map((i) => [i.company, nextPos++]));
+
   const positioned = allowed.map((i) =>
     known.has(i.company)
       ? { ...i, position: known.get(i.company).position }
-      : { ...i, position: nextPos++ }
+      : { ...i, position: placement.get(i.company) }
   );
   const recorded = await db.recordSweeps(key, positioned, on);
 
