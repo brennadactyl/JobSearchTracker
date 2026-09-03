@@ -1,6 +1,7 @@
 /**
  * The one place that knows this is D1 (SQLite). Every `env.DB.prepare(...)`
- * call for a user's own data lives here - api.js and index.js never touch D1
+ * call for a user's own data lives here - the route modules and index.js never
+ * touch D1
  * directly for it, only Db's methods below. That's the point: if this ever
  * needs to run on a different database, only this file changes. The rest of
  * the codebase (request parsing, validation, deciding *when* something
@@ -49,7 +50,7 @@
  * @property {string} url
  * @property {string} verified - YYYY-MM-DD, date last verified live
  * @property {string} fit
- * @property {string} status - one of LEAD_STATUS in api.js
+ * @property {string} status - one of LEAD_STATUS in routes/leads.js
  * @property {string} notes
  * @property {string} team
  * @property {string} setup
@@ -72,7 +73,7 @@
  * @property {string} title
  * @property {string} location - copied from the lead at creation, then editable
  * @property {string} dateApplied - YYYY-MM-DD
- * @property {string} status - one of APP_STATUS in api.js
+ * @property {string} status - one of APP_STATUS in routes/applications.js
  * @property {string} notes
  * @property {string} team
  * @property {string} setup
@@ -164,8 +165,8 @@
 
 import { canonicalUrl } from "./url.js";
 
-// Same field lists api.js validates/whitelists against - re-exported from
-// here so there is exactly one definition, not two that can drift apart.
+// Same field lists the route modules validate/whitelist against - re-exported
+// from here so there is exactly one definition, not two that can drift apart.
 export const EXTRA_FIELDS = [
   "team", "setup", "source", "link", "lastContact",
   "nextAction", "nextActionDate", "resume", "referral", "comp",
@@ -325,7 +326,7 @@ export class Db {
    *
    * `status` is here because the run needs it to tell a stale lead nobody has
    * touched from one already applied to; `id` because a posting confirmed
-   * dead posts back against it (see api.js's removeDelistedLead).
+   * dead posts back against it (see routes/delisting.js's removeDelistedLead).
    * @param {string} trackKey
    * @returns {Promise<{leads: Array<{id: number, url: string, status: string}>, screened: string[]}>}
    */
@@ -700,7 +701,7 @@ export class Db {
   /**
    * What one track actually gained on one date, counted from the rows
    * themselves. This is what a run record's three numbers are derived from
-   * instead of being taken from the caller - see api.js's handleRecordRun for
+   * instead of being taken from the caller - see routes/runs.js's handleRecordRun for
    * why the caller's own tally isn't trusted.
    *
    * Three counts, three different places they can be read from, and only one
@@ -941,7 +942,7 @@ export class Db {
     // a search scheduled in the evening is already the next UTC day - the same
     // reasoning /api/runs' `on` has always had. Falling back to UTC keeps the
     // behaviour every existing caller already gets.
-    // Already validated by the caller (api.js's isoDate), so this only has to
+    // Already validated by the caller (validate.js's isoDate), so this only has to
     // choose between a date and none. Re-validating here would be a second
     // copy of the rule, and the two would eventually disagree.
     const t = on || today();
@@ -1100,7 +1101,7 @@ export class Db {
    * @returns {Promise<{added: number, duplicates: number}>}
    */
   async addScreened(items, on) {
-    // Already validated by the caller (api.js's isoDate), so this only has to
+    // Already validated by the caller (validate.js's isoDate), so this only has to
     // choose between a date and none. Re-validating here would be a second
     // copy of the rule, and the two would eventually disagree.
     const t = on || today();
@@ -1208,7 +1209,7 @@ export class Db {
    * @returns {Promise<Application|null>}
    */
   async setApplicationStatus(id, status, stageDateColumn, clearColumn = null, explicitDate = null) {
-    // Column names here come from api.js's own constants, never from the
+    // Column names here come from routes/applications.js's own constants, never from the
     // request body, so they're safe to interpolate; the values still bind.
     const sets = ["status = ?"];
     const values = [status];
@@ -1272,7 +1273,7 @@ export class Db {
 
   /**
    * Atomically (one D1 batch/transaction) deletes a lead and records its URL
-   * in `screened` - the mechanism behind api.js's removeDelistedLead, which
+   * in `screened` - the mechanism behind routes/delisting.js's removeDelistedLead, which
    * owns the decision about when this should happen at all.
    *
    * Both halves have to land together, and they fail in opposite directions:

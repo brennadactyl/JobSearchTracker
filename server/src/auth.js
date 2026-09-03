@@ -1,6 +1,6 @@
 /**
  * Who is calling, and are they allowed to. Everything that touches a password
- * or a session token lives here; api.js and index.js only ever call the four
+ * or a session token lives here; the route modules and index.js only ever call the four
  * functions at the bottom.
  *
  * The model: a person has a name and a password (users), and holds zero or

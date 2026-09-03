@@ -208,7 +208,7 @@ Say "Data file: $DataFile"
 Say ""
 
 # Sign in before provisioning, not after. POST /api/users is create-*or-reset*
-# (it is how a forgotten password gets fixed - see server/src/api.js), so
+# (it is how a forgotten password gets fixed - see server/src/routes/accounts.js), so
 # calling it unconditionally would reset the password of whatever account
 # happens to bear this name, including one that turns out not to be the demo
 # and that the safeguards below would then refuse to touch. By then the reset
