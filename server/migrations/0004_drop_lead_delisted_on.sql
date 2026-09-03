@@ -10,11 +10,11 @@
 -- The searches still report a taken-down posting exactly as they always have,
 -- with POST /api/update and a delistedOn date - that contract is unchanged.
 -- What changed is that the server now acts on the report instead of storing
--- it: api.js's removeDelistedLead deletes the lead and writes its URL into
--- `screened` in one transaction (see db.js's deleteLeadAndScreen). The
--- screened row is what keeps dedup honest - without it tomorrow's run
--- rediscovers the same URL, sees nothing tracking it, and adds it straight
--- back as a new lead.
+-- it: routes/delisting.js's removeDelistedLead deletes the lead and writes
+-- its URL into `screened` in one transaction (see db.js's
+-- deleteLeadAndScreen). The screened row is what keeps dedup honest - without
+-- it tomorrow's run rediscovers the same URL, sees nothing tracking it, and
+-- adds it straight back as a new lead.
 --
 -- A lead already marked "Applied" is kept instead. Its id is pointed at by an
 -- application row, and once you've applied what's being tracked is the

@@ -20,7 +20,7 @@
 -- already hold this exact set of columns with these types and constraints;
 -- they just carry them in the physical order the old ALTERs appended them,
 -- which SQLite cannot change without recreating the table. Nothing depends
--- on column order - every INSERT in src/api.js names its columns, and every
+-- on column order - every INSERT in src/db.js names its columns, and every
 -- SELECT * is consumed as a keyed object - so the two are equivalent in
 -- every way that affects behaviour. This file is the authority on what
 -- columns exist; it is not a byte-for-byte transcript of the live table.
@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS leads (
   url TEXT NOT NULL,
   verified TEXT NOT NULL,             -- date last verified live, YYYY-MM-DD
   fit TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'New', -- LEAD_STATUS in src/api.js
+  status TEXT NOT NULL DEFAULT 'New', -- LEAD_STATUS in src/routes/leads.js
   notes TEXT NOT NULL DEFAULT '',
   -- Whether the original posting has been confirmed taken down. Deliberately
   -- separate from `status`, which is the installer's own application
@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS leads (
   -- YYYY-MM-DD = the day a search confirmed it gone. Cleared back to '' if a
   -- later check finds it live again.
   delistedOn TEXT NOT NULL DEFAULT '',
-  -- Freeform fields shared with `applications` (EXTRA_FIELDS in src/api.js),
+  -- Freeform fields shared with `applications` (EXTRA_FIELDS in src/db.js),
   -- so a referral or comp note jotted on a posting survives it becoming an
   -- application. The search only ever fills team/setup/comp - the ones a
   -- posting can actually state; the rest are the installer's own.
@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS applications (
   company TEXT NOT NULL DEFAULT '',
   title TEXT NOT NULL DEFAULT '',
   dateApplied TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'Applied',  -- APP_STATUS in src/api.js
+  status TEXT NOT NULL DEFAULT 'Applied',  -- APP_STATUS in src/routes/applications.js
   notes TEXT NOT NULL DEFAULT '',
   -- Same freeform block as leads above.
   team TEXT NOT NULL DEFAULT '',
@@ -161,7 +161,7 @@ CREATE TABLE IF NOT EXISTS search_runs (
 -- display config read by getTracksAndSettings - display_title,
 -- overview_label, applications_label, stale_run_hours, and
 -- priority_locations (a JSON array of ordered location-matching rules).
--- All optional: src/api.js's DEFAULT_SETTINGS covers anything absent, which
+-- All optional: src/db.js's DEFAULT_SETTINGS covers anything absent, which
 -- is what lets a freshly created database serve a usable page before setup
 -- has posted any config.
 CREATE TABLE IF NOT EXISTS meta (

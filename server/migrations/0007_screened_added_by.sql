@@ -17,7 +17,7 @@
 -- nothing recomputes them. Recompute one and it moves by 94.
 --
 -- ---- Why a column and not the `reason` string.
--- The obvious cheaper answer is to encode this in `reason`, and src/api.js
+-- The obvious cheaper answer is to encode this in `reason`, and the server
 -- already demonstrates why that fails: DELISTED_REASON ("posting taken down")
 -- had to be *reserved* from callers, because a run screening a dead-on-arrival
 -- candidate would very reasonably describe it in exactly those words and be
