@@ -1,0 +1,46 @@
+-- Stop the rotation spending slots on companies it cannot read.
+--
+-- A run covers a bounded slice of the company list each night (COVERAGE_BATCH,
+-- see src/routes/coverage.js). The slice is what a run can verify properly, so
+-- every company in it is a slot, and a company that cannot be fetched at all
+-- consumes one and returns nothing.
+--
+-- That is not hypothetical. On 2026-09-03 a twelve-company slice spent four
+-- slots on companies it could not read: two on domains that have refused
+-- automated fetches every single day since 2026-08-25, and two on boards whose
+-- job ids all 404'd or whose filtering turned out to be client-side. Eight
+-- companies were actually searched, and the day produced one lead.
+--
+-- Recording the failure in `note` already worked - the runs write good notes -
+-- but a note is prose, and nothing reads it. The rotation kept handing those
+-- companies back on schedule because `last_swept` says only *when* a company
+-- was attempted, never whether the attempt got anywhere.
+--
+-- ---- Two columns, because one cannot express "try again later, but not soon".
+--
+-- `blocked_until` is the date the company becomes eligible again. The rotation
+-- skips a company while this is in the future and takes the next eligible one
+-- instead, so a run still gets a full slice of companies it has some hope of
+-- reading. Empty means not blocked, which is every existing row.
+--
+-- `fetch_fail_streak` counts consecutive failures, and exists so the backoff
+-- can lengthen. A flat retry would still burn a slot every cycle, forever, on
+-- a domain that has refused nine days running - which is most of the cost this
+-- is meant to remove. Cleared the moment a sweep succeeds, so a company that
+-- was briefly unreachable returns to the normal rotation at full speed rather
+-- than serving out a sentence.
+--
+-- The run reports only what it observed - "I could not read this one". How
+-- long that is worth waiting is a policy decision and lives in the server
+-- (see backoffDays in src/routes/coverage.js), for the same reason the
+-- delisting policy does: a cadence written into a prompt is one that drifts,
+-- cannot be tested, and is re-tuned by re-wording English.
+ALTER TABLE company_sweeps ADD COLUMN blocked_until TEXT NOT NULL DEFAULT '';
+ALTER TABLE company_sweeps ADD COLUMN fetch_fail_streak INTEGER NOT NULL DEFAULT 0;
+
+-- No backfill. Every existing row predates the distinction and is eligible by
+-- default, which is the correct reading: a company nobody has recorded a
+-- failure against is not blocked. The companies that *are* unreadable will
+-- earn a block the next time the rotation reaches them, which for a 55-company
+-- list is within one cycle - cheaper and more truthful than guessing now from
+-- the free-text notes this column exists to replace.

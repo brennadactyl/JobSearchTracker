@@ -355,6 +355,56 @@ check("what a run covers goes to the back of the queue, not round again",
   next.every((c) => c.last_swept !== today),
   JSON.stringify(next.map((c) => `${c.company}:${c.last_swept}`).slice(0, 4)));
 
+console.log("\n== unreadable companies don't burn rotation slots ==");
+// The cost this removes, measured on the live rotation: a twelve-company slice
+// spent four slots on companies it could not read - two domains that had
+// refused every fetch for nine days, two boards whose ids all 404'd - and the
+// day produced one lead from the eight that were actually searched.
+const covDay = "2026-09-05";
+const cSeed = Array.from({ length: 20 }, (_, i) => ({ company: `CovCo ${String(i).padStart(2, "0")}` }));
+await req("POST", "/api/coverage", { token: A_TOK, body: { search: "SWE", on: "", swept: cSeed } });
+const slice1 = (await req("GET", "/api/coverage/SWE", { token: A_TOK })).json;
+const doomed = slice1.companies.slice(0, 3).map((c) => c.company);
+await req("POST", "/api/coverage", { token: A_TOK, body: { search: "SWE", on: covDay,
+  swept: slice1.companies.map((c) => ({ company: c.company, unreadable: doomed.includes(c.company),
+    note: doomed.includes(c.company) ? "403 on every fetch" : "" })) } });
+
+const slice2 = (await req("GET", "/api/coverage/SWE", { token: A_TOK })).json;
+check("a company reported unreadable is held out of the next slice",
+  doomed.every((c) => !slice2.companies.some((x) => x.company === c)),
+  JSON.stringify(slice2.companies.map((c) => c.company).slice(0, 6)));
+check("and the slice is topped up rather than left short",
+  slice2.companies.length === slice1.companies.length,
+  JSON.stringify({ before: slice1.companies.length, after: slice2.companies.length }));
+check("the response says how many were held back, so a run can explain the gap",
+  slice2.blocked >= 3, JSON.stringify({ blocked: slice2.blocked }));
+check("?all=1 still shows blocked companies - it is the only view of the whole table",
+  (await req("GET", "/api/coverage/SWE?all=1", { token: A_TOK })).json.companies
+    .filter((c) => doomed.includes(c.company)).length === 3);
+
+// Repeated failure lengthens the block; a success ends it outright.
+const blockedRow = () => req("GET", "/api/coverage/SWE?all=1", { token: A_TOK })
+  .then((r) => r.json.companies.find((c) => c.company === doomed[0]));
+const first = await blockedRow();
+check("a first failure blocks for the shortest backoff, not forever",
+  first.fetch_fail_streak === 1 && first.blocked_until === "2026-09-08",
+  JSON.stringify({ streak: first.fetch_fail_streak, until: first.blocked_until }));
+await req("POST", "/api/coverage", { token: A_TOK, body: { search: "SWE", on: "2026-09-08",
+  swept: [{ company: doomed[0], unreadable: true }] } });
+const second = await blockedRow();
+check("a second consecutive failure backs off further",
+  second.fetch_fail_streak === 2 && second.blocked_until === "2026-09-15",
+  JSON.stringify({ streak: second.fetch_fail_streak, until: second.blocked_until }));
+await req("POST", "/api/coverage", { token: A_TOK, body: { search: "SWE", on: "2026-09-15",
+  swept: [{ company: doomed[0], board: "greenhouse" }] } });
+const healed = await blockedRow();
+check("one successful sweep clears the block and the streak",
+  healed.fetch_fail_streak === 0 && healed.blocked_until === "",
+  JSON.stringify({ streak: healed.fetch_fail_streak, until: healed.blocked_until }));
+check("a company that came back is eligible again immediately",
+  (await req("GET", "/api/coverage/SWE?all=1", { token: A_TOK })).json.companies
+    .some((c) => c.company === doomed[0] && !c.blocked_until));
+
 console.log("\n== branched tracks ==");
 check("fed_by naming a track that isn't in the list is refused",
   (await req("POST", "/api/config", { token: A_TOK, body: { tracks: [

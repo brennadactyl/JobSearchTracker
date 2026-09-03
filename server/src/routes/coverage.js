@@ -57,10 +57,57 @@ export async function handleGetCoverage({ db, params, url }) {
   ]);
   const isExcluded = await excluderFor(db);
   const allowed = companies.filter((c) => !isExcluded(c.company));
-  // The cap is applied after filtering, so an excluded company can't eat a
-  // slot in the batch a run is told to cover.
-  const batch = all ? allowed.length : COVERAGE_BATCH;
-  return json({ companies: allowed.slice(0, batch), total: allowed.length, batch });
+
+  // Companies the rotation already knows it cannot read are skipped until
+  // their block expires, and the batch is filled from the next eligible ones
+  // instead. Every company in a slice is a slot a run spends, and a slot spent
+  // on a domain that has refused automated fetches for nine days running buys
+  // nothing - on 2026-09-03 four of twelve went that way and the day yielded
+  // one lead. Skipping them is only half the value; topping up is the other
+  // half, or the run just covers eight companies instead of twelve.
+  //
+  // `?all=1` deliberately still shows them. That view is for seeding and for
+  // looking at the table, and a blocked company hidden from the only view that
+  // shows the whole rotation is one nobody can find to unblock.
+  const now = today();
+  const eligible = all ? allowed : allowed.filter((c) => !(c.blocked_until > now));
+  const blocked = allowed.length - eligible.length;
+
+  // The cap is applied after both filters, so neither an excluded nor a
+  // blocked company can eat a slot in the batch a run is told to cover.
+  const batch = all ? eligible.length : COVERAGE_BATCH;
+  return json({
+    companies: eligible.slice(0, batch),
+    total: eligible.length,
+    batch,
+    // Reported so a run can say "twelve covered, three others are on
+    // cooldown" rather than the rotation quietly shrinking with no explanation
+    // of where the rest went.
+    blocked,
+  });
+}
+
+// How long a company stays out of the rotation after a run could not read it,
+// by consecutive failure. Escalating rather than flat: a fixed retry still
+// spends a slot every cycle forever on a domain that has refused every attempt
+// for over a week, which is most of the cost this exists to remove. Capped, so
+// a company is never blocked for good - boards get unblocked, ATS migrations
+// finish, and the rotation should find out.
+//
+// Here rather than in the prompt, for the same reason the delisting policy is:
+// a cadence a run decides for itself is one that drifts and cannot be tested.
+// The run reports only whether it could read the company.
+const BACKOFF_DAYS = [3, 7, 14, 28];
+
+function backoffDays(streak) {
+  return BACKOFF_DAYS[Math.min(Math.max(streak, 1), BACKOFF_DAYS.length) - 1];
+}
+
+/** @param {string} from YYYY-MM-DD @param {number} days @returns {string} YYYY-MM-DD */
+function addDays(from, days) {
+  const t = Date.parse(from + "T00:00:00Z");
+  if (isNaN(t)) return "";
+  return new Date(t + days * 86400000).toISOString().slice(0, 10);
 }
 
 /**
@@ -105,6 +152,34 @@ export async function handleRecordSweeps({ request, db }) {
   const excluded = valid.length - allowed.length;
   if (allowed.length === 0) return json({ recorded: 0, excluded, on });
 
-  const recorded = await db.recordSweeps(key, allowed, on);
-  return json({ recorded, excluded, on });
+  // `unreadable` is the run reporting a fact about tonight: it tried and got
+  // nothing usable back - a blocked domain, ids that all 404, a board whose
+  // filtering turned out to be client-side. It is NOT "searched fine, nothing
+  // matched", which is an ordinary covered sweep and by far the common case.
+  //
+  // What that fact is worth is decided here. A company that failed gets a
+  // lengthening block; one that worked has its block and streak cleared
+  // outright, so a brief outage costs three days rather than a sentence.
+  const existing = new Map(
+    (await db.getCoverage(key, 0)).map((c) => [c.company, c])
+  );
+  const stamped = allowed.map((i) => {
+    const unreadable = i.unreadable === true;
+    if (!unreadable) return { ...i, blockedUntil: "", failStreak: 0 };
+    const prior = existing.get(i.company);
+    const streak = (prior && Number(prior.fetch_fail_streak)) || 0;
+    const next = streak + 1;
+    return {
+      ...i,
+      failStreak: next,
+      // Dated from the sweep date, not from the worker's clock - `on` is the
+      // run's own local date and is what `last_swept` gets, so a block that
+      // counted from anything else could expire before the day it started.
+      blockedUntil: addDays(on || today(), backoffDays(next)),
+    };
+  });
+
+  const recorded = await db.recordSweeps(key, stamped, on);
+  const blocked = stamped.filter((i) => i.blockedUntil).length;
+  return json({ recorded, excluded, blocked, on });
 }

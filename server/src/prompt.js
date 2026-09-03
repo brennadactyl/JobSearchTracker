@@ -219,7 +219,7 @@ export function buildSearchPrompt({ user, track, settings, feeds, coverage }) {
   // remember to set - see migrations/0005_company_sweeps.sql.
   const rotates = Number(coverage) > 0;
   const coverageStep = rotates
-    ? `1c. Get this run's companies: \`curl -s "$TRACKER_URL/api/coverage/${key}" -H "Authorization: Bearer $TRACKER_API_TOKEN"\`. The server picks them - the least-recently-swept of the list, capped at what one run can actually verify - and returns \`{companies: [{company, last_swept, board, note}], total, batch}\`. **Cover exactly these, all of them**, and don't reach past them into the rest of the list in step 3: that list is longer than one run can do properly, and the failure mode isn't a company going uncovered for a day, it's every company being skimmed. They come back round - what you cover today sorts last tomorrow. \`board\` is a JSON endpoint already confirmed for that company (\`greenhouse\`, \`ashby\`, \`workday cxs\`, ...); it makes a company cheap to cover, not privileged - use it where it's there. Anything broader discovery turns up is covered as well, whether or not it is in this list.
+    ? `1c. Get this run's companies: \`curl -s "$TRACKER_URL/api/coverage/${key}" -H "Authorization: Bearer $TRACKER_API_TOKEN"\`. The server picks them - the least-recently-swept of the list, capped at what one run can actually verify - and returns \`{companies: [{company, last_swept, board, note, blocked_until}], total, batch, blocked}\`. Companies the rotation already knows it can't read are left out and the batch is topped up from the next ones, so this list is ${"`batch`"} companies you have some hope of reading rather than ${"`batch`"} slots with holes in it - \`blocked\` says how many were held back, if you want to mention it in your report. **Cover exactly these, all of them**, and don't reach past them into the rest of the list in step 3: that list is longer than one run can do properly, and the failure mode isn't a company going uncovered for a day, it's every company being skimmed. They come back round - what you cover today sorts last tomorrow. \`board\` is a JSON endpoint already confirmed for that company (\`greenhouse\`, \`ashby\`, \`workday cxs\`, ...); it makes a company cheap to cover, not privileged - use it where it's there. Anything broader discovery turns up is covered as well, whether or not it is in this list.
 `
     : "";
   const sweepStep = rotates
@@ -228,15 +228,31 @@ export function buildSearchPrompt({ user, track, settings, feeds, coverage }) {
    \`\`\`
    curl -s -X POST "$TRACKER_URL/api/coverage" \
      -H "Authorization: Bearer $TRACKER_API_TOKEN" -H "Content-Type: application/json" \
-     -d '{"search":"${key}","on":"<today YYYY-MM-DD>","swept":[{"company":"...","board":"greenhouse","note":""}]}'
+     -d '{"search":"${key}","on":"<today YYYY-MM-DD>","swept":[{"company":"...","board":"greenhouse","note":"","unreadable":false}]}'
    \`\`\`
 
    This is the rotation's only memory. A run that covers companies without
    recording them leaves tomorrow's run covering the same ones, and the tail of
    the list never gets searched at all. Record a company you attempted and
-   *couldn't* fetch too, with the reason in \`note\` - the date tracks when a
-   company was last attempted, not when it last worked, or a blocked domain
-   comes back to the front of the queue every single run. Send \`board\` whenever
+   *couldn't* fetch too - the date tracks when a company was last attempted,
+   not when it last worked, or a blocked domain comes back to the front of the
+   queue every single run.
+
+   \`unreadable\` is the one field here that changes what happens next, so be
+   accurate about it. It means **you tried and got nothing usable back**: the
+   domain refused the fetch, every job id 404'd, the board only filters
+   client-side, the page rendered as an empty JS shell. It does **not** mean
+   "read it fine, nothing matched" - that is an ordinary covered sweep and the
+   common case, so send \`false\` or leave it out. Getting this wrong in either
+   direction costs real coverage: a false \`true\` takes a company that works out
+   of the rotation for days, and a false \`false\` keeps handing you back a
+   company you cannot read. Put the specifics in \`note\` either way - that is
+   what tells a human next week whether the wall is worth working around.
+
+   You don't decide how long anything sits out; the tracker does that, and
+   lengthens it for a company that keeps failing. A sweep that works clears the
+   block outright, so a company that was briefly down comes straight back.
+   Send \`board\` whenever
    you confirm one (\`greenhouse\`, \`ashby\`, \`lever\`, \`workday cxs\`, ...): that is
    what moves a company into the every-run tier. A company not already in the
    list is created by this call, so one that broader discovery turned up joins

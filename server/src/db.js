@@ -392,8 +392,9 @@ export class Db {
   async getCoverage(search, limit = 0) {
     const rows = await this.d1
       .prepare(
-        `SELECT company, last_swept, board, note FROM company_sweeps
-         WHERE user_id = ? AND search = ? ORDER BY last_swept, company` +
+        `SELECT company, last_swept, board, note, blocked_until, fetch_fail_streak
+           FROM company_sweeps
+          WHERE user_id = ? AND search = ? ORDER BY last_swept, company` +
           (limit > 0 ? " LIMIT ?" : "")
       )
       .bind(...(limit > 0 ? [this.userId, search, limit] : [this.userId, search]))
@@ -426,19 +427,37 @@ export class Db {
    * @param {{company: string, board?: string, note?: string}[]} items
    * @param {string} on - YYYY-MM-DD
    */
+  /**
+   * @param {string} search
+   * @param {Array<{company: string, board?: string, note?: string, blockedUntil?: string, failStreak?: number}>} items
+   *   `blockedUntil` and `failStreak` are computed by the caller from what the
+   *   run reported (see backoffDays in routes/coverage.js) - the run says
+   *   whether it could read the company, the server decides for how long that
+   *   is worth remembering.
+   * @param {string} on
+   */
   async recordSweeps(search, items, on) {
     const stmt = this.d1.prepare(
-      `INSERT INTO company_sweeps (user_id, search, company, last_swept, board, note)
-       VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO company_sweeps
+         (user_id, search, company, last_swept, board, note, blocked_until, fetch_fail_streak)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(user_id, search, company) DO UPDATE SET
          last_swept = CASE WHEN excluded.last_swept <> '' THEN excluded.last_swept ELSE company_sweeps.last_swept END,
          board = CASE WHEN excluded.board <> '' THEN excluded.board ELSE company_sweeps.board END,
-         note = CASE WHEN excluded.note <> '' THEN excluded.note ELSE company_sweeps.note END`
+         note = CASE WHEN excluded.note <> '' THEN excluded.note ELSE company_sweeps.note END,
+         -- Unlike the fields above, these are written even when empty or zero.
+         -- '' and 0 are the *success* values here, and a sweep that finally
+         -- works has to be able to clear a block - "only overwrite when
+         -- non-empty" would make a block permanent the first time one was set.
+         blocked_until = excluded.blocked_until,
+         fetch_fail_streak = excluded.fetch_fail_streak`
     );
     await this.d1.batch(
       items.map((i) =>
         stmt.bind(this.userId, search, i.company, on, typeof i.board === "string" ? i.board : "",
-          typeof i.note === "string" ? i.note : "")
+          typeof i.note === "string" ? i.note : "",
+          typeof i.blockedUntil === "string" ? i.blockedUntil : "",
+          Number.isFinite(i.failStreak) ? Math.max(0, Math.floor(i.failStreak)) : 0)
       )
     );
     return items.length;
