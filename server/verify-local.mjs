@@ -384,6 +384,41 @@ const reread = (await req("GET", "/api/coverage/SWE", { token: A_TOK })).json.co
 check("fetching is repeatable - reading the list never marks anything covered",
   JSON.stringify(reread.map((c) => c.company)) === JSON.stringify(second.map((c) => c.company)));
 
+// The case that makes `?on` necessary rather than cosmetic. While more
+// companies remain unswept than a slice holds, the plain re-fetch is already
+// all-fresh - so this only shows up at the end of a cycle, which is exactly
+// where a run would silently re-cover work it had just done.
+// Its own user: posting a track list replaces it, and borrowing Ada's or Bo's
+// would pull their tracks out from under the checks further down.
+await req("POST", "/api/users", { admin: true, body: { name: "Tailer", password: "tailer-long-password" } });
+const T_TOK = (await req("POST", "/api/login", { body: { name: "Tailer", password: "tailer-long-password" } })).json.token;
+await req("POST", "/api/config", { token: T_TOK, body: { tracks: [{ key: "TAIL", label: "Tail" }] } });
+const tailDay = "2026-09-09";
+// Fresh company names each run. These rows persist, so a second run against the
+// same database would otherwise find every company already swept on tailDay and
+// have nothing left to hand back.
+const tailStamp = Date.now();
+await req("POST", "/api/coverage", { token: T_TOK, body: { search: "TAIL", on: "",
+  swept: Array.from({ length: 14 }, (_, i) => ({ company: `Tail ${tailStamp}-${String(i).padStart(2, "0")}` })) } });
+const tail1 = (await req("GET", "/api/coverage/TAIL", { token: T_TOK })).json.companies;
+await req("POST", "/api/coverage", { token: T_TOK, body: { search: "TAIL", on: tailDay,
+  swept: tail1.map((c) => ({ company: c.company })) } });
+const plain = (await req("GET", "/api/coverage/TAIL", { token: T_TOK })).json.companies;
+check("without ?on, a short rotation hands back companies just covered",
+  plain.some((c) => c.last_swept === tailDay),
+  JSON.stringify({ returned: plain.length, alreadyToday: plain.filter((c) => c.last_swept === tailDay).length }));
+const scoped = (await req("GET", `/api/coverage/TAIL?on=${tailDay}`, { token: T_TOK })).json;
+// Asserted as properties rather than an exact count: leftovers carry across
+// re-runs, so how many remain is a fact about this database, not about ?on.
+check("with ?on, only genuinely uncovered companies come back",
+  scoped.companies.length > 0 && scoped.companies.every((c) => c.last_swept !== tailDay),
+  JSON.stringify(scoped.companies.map((c) => `${c.company}:${c.last_swept}`).slice(0, 4)));
+check("and it actually filtered - fewer than the unscoped call returned",
+  scoped.companies.length < plain.length && scoped.total < plain.length,
+  JSON.stringify({ plain: plain.length, scoped: scoped.companies.length, total: scoped.total }));
+check("a malformed ?on is ignored rather than filtering everything out",
+  (await req("GET", "/api/coverage/TAIL?on=today", { token: T_TOK })).json.companies.length === plain.length);
+
 console.log("\n== branched tracks ==");
 check("fed_by naming a track that isn't in the list is refused",
   (await req("POST", "/api/config", { token: A_TOK, body: { tracks: [

@@ -22,7 +22,7 @@ import { excluderFor, isoDate, today, unknownTrack } from "../validate.js";
 export const COVERAGE_BATCH = 12;
 
 /**
- * GET /api/coverage/:key - requires a Bearer token ->
+ * GET /api/coverage/:key[?on=YYYY-MM-DD] - requires a Bearer token ->
  * `{ companies: [{company, last_swept, board, note}], total, batch }`.
  *
  * Which companies this run covers, chosen by the server. Least-recently-swept
@@ -56,9 +56,30 @@ export async function handleGetCoverage({ db, params, url }) {
     db.countCoverage(key),
   ]);
   const isExcluded = await excluderFor(db);
-  const allowed = companies.filter((c) => !isExcluded(c.company));
-  // The cap is applied after filtering, so an excluded company can't eat a
-  // slot in the batch a run is told to cover.
+  let allowed = companies.filter((c) => !isExcluded(c.company));
+
+  // `?on=YYYY-MM-DD` leaves out companies already swept on that date. It is
+  // what makes a run's second call for replacements safe (step 9e of the
+  // prompt): after reporting a slice, a run that could not read some of it
+  // asks for more, and without this it can be handed back the ones it has
+  // just covered.
+  //
+  // Only bites near the end of a cycle, which is exactly when it matters. The
+  // ordering puts never-swept first, so while the unswept pool is larger than
+  // the batch the caller never sees a repeat - but with 14 companies and 12
+  // covered, a second call returns 2 fresh and 10 already done, and a run
+  // needing 4 would re-cover 2 of them. That spends the slot it was trying to
+  // reclaim.
+  //
+  // The date comes from the caller because it has to: the worker knows only
+  // UTC, and a run's "today" is its own local date - the same reason
+  // /api/runs and the sweep POST take one. Absent or malformed, nothing is
+  // excluded, which is the behaviour every existing caller already gets.
+  const on = isoDate(url.searchParams.get("on") || "");
+  if (on) allowed = allowed.filter((c) => c.last_swept !== on);
+
+  // The cap is applied after filtering, so neither an excluded company nor one
+  // already covered today can eat a slot in the batch a run is told to cover.
   const batch = all ? allowed.length : COVERAGE_BATCH;
   return json({ companies: allowed.slice(0, batch), total: allowed.length, batch });
 }

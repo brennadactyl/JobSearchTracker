@@ -245,19 +245,26 @@ export function buildSearchPrompt({ user, track, settings, feeds, coverage }) {
    skipped it without fetching. Not the ones you read fine that had nothing
    matching: those are ordinary covered sweeps and by far the common case.
 
-   If that count is more than zero, **fetch step 1c again** - the same
-   \`GET /api/coverage/${key}\` call, unchanged - and cover that many companies
-   from the top of the list it returns. Then POST those with step 9d and repeat
-   until nothing in a slice was unreadable, or until you have spent the effort
-   a run should. This is a replacement for wasted work, not a licence to run
-   all night.
+   If that count is more than zero, fetch the rotation again with **today's
+   date on it**, and cover that many companies from the top of what comes back:
 
-   Fetching again is safe and gives you fresh companies rather than the same
-   ones: step 9d has already stamped everything you just reported, so it sorts
-   to the back and the list you get is the next ones along. The order matters -
-   record first, then fetch. Doing it the other way round would hand you
-   companies before anything says you attempted the last batch, and a run that
-   dies in between would leave them looking uncovered.
+   \`\`\`
+   curl -s "$TRACKER_URL/api/coverage/${key}?on=<today YYYY-MM-DD>" -H "Authorization: Bearer $TRACKER_API_TOKEN"
+   \`\`\`
+
+   Then POST those with step 9d and repeat until nothing in a slice was
+   unreadable, or until you have spent the effort a run should. This is a
+   replacement for wasted work, not a licence to run all night.
+
+   \`?on\` is what keeps the replacements genuinely new: it leaves out anything
+   already swept on that date, which is everything step 9d just recorded.
+   Without it you get the plain rotation, and late in a cycle - when fewer
+   companies remain unswept than a slice holds - the list would include ones
+   you covered minutes ago, so you would spend the slot you were reclaiming.
+
+   The order matters: record first, then fetch. Doing it the other way round
+   would hand you companies before anything says you attempted the last batch,
+   and a run that dies in between would leave them looking uncovered.
 
    Why this is a second call rather than something step 9d hands back: reading
    the list changes nothing and can be repeated safely, while recording a sweep
