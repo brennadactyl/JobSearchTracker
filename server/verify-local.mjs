@@ -424,8 +424,18 @@ check("and the two companies left in this cycle come first",
 await req("POST", "/api/coverage", { token: C_TOK, body: { search: ROT, on: day,
   swept: c1.companies.slice(0, 2).map((c) => ({ company: c.company })) } });
 const c2 = (await req("GET", `/api/coverage/${ROT}`, { token: C_TOK })).json;
-check("the cursor wraps at the end of the log rather than running off it",
-  c2.cursor === 0, JSON.stringify({ cursor: c2.cursor, total: c2.total }));
+// Wrapping happens at the read, not the write. The stored cursor is a
+// position and is left past the end of the log; the read then finds nothing at
+// or after it and starts again at the front. Wrapping on write instead meant
+// taking the cursor modulo the company *count* - a different quantity from a
+// position as soon as anything is excluded or a position is skipped.
+check("once past the end, the next slice starts again at the front of the log",
+  c2.companies[0].position === Math.min(...c2.companies.map((x) => x.position)) &&
+  c2.cursor > Math.max(...c2.companies.map((x) => x.position)),
+  JSON.stringify({ cursor: c2.cursor, firstServed: c2.companies[0].position }));
+check("and a full cycle reached every company before repeating any",
+  new Set(c0.companies.concat(c1.companies).map((x) => x.company)).size === rotN,
+  JSON.stringify({ reached: new Set(c0.companies.concat(c1.companies).map((x) => x.company)).size, of: rotN }));
 
 // Resilience: a run that dies before reporting must not skip its slice.
 const before = (await req("GET", `/api/coverage/${ROT}`, { token: C_TOK })).json;
@@ -433,6 +443,33 @@ const again = (await req("GET", `/api/coverage/${ROT}`, { token: C_TOK })).json;
 check("reading never moves the cursor, so a run that dies re-reads its slice",
   before.cursor === again.cursor &&
   JSON.stringify(before.companies.map((c) => c.company)) === JSON.stringify(again.companies.map((c) => c.company)));
+
+// The cursor is a position, not an index into the filtered list. Those differ
+// the moment a company is excluded, and treating one as the other skipped a
+// company silently: with position 0 excluded, eligible[4] is position 5, so a
+// cursor of 4 stepped straight over position 4. Only shows up when an excluded
+// company sits before the cursor, which is why it survived the first round of
+// tests - they happened to exclude one that sat after it.
+const EX = ROT + "X";
+await req("POST", "/api/config", { token: C_TOK, body: {
+  tracks: [{ key: ROT, label: "Rot" }, { key: EX, label: "Ex" }], excluded_companies: [] } });
+await req("POST", "/api/coverage", { token: C_TOK, body: { search: EX, on: "",
+  swept: Array.from({ length: 10 }, (_, i) => ({ company: `Ex ${rotStamp}-${i}` })) } });
+const exLog = (await req("GET", `/api/coverage/${EX}?all=1`, { token: C_TOK })).json.companies;
+const victim = exLog.find((c) => c.position === 0).company;
+await req("POST", "/api/config", { token: C_TOK, body: { excluded_companies: [victim] } });
+const exSlice = (await req("GET", `/api/coverage/${EX}`, { token: C_TOK })).json.companies.slice(0, 3);
+await req("POST", "/api/coverage", { token: C_TOK, body: { search: EX, on: day,
+  swept: exSlice.map((c) => ({ company: c.company })) } });
+const exNext = (await req("GET", `/api/coverage/${EX}`, { token: C_TOK })).json.companies;
+const highestSwept = Math.max(...exSlice.map((c) => c.position));
+const shouldBeNext = exLog
+  .filter((c) => c.company !== victim && c.position > highestSwept)
+  .sort((a, b) => a.position - b.position)[0];
+check("an excluded company before the cursor does not cause a skip",
+  exNext[0].position === shouldBeNext.position,
+  JSON.stringify({ expected: shouldBeNext.position, actual: exNext[0].position, excludedAt: 0 }));
+await req("POST", "/api/config", { token: C_TOK, body: { excluded_companies: [] } });
 
 // Discovery appends rather than jumping the queue or landing behind the cursor.
 const found = `Rot ${rotStamp}-discovered`;

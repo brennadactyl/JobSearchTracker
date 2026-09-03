@@ -432,13 +432,19 @@ export class Db {
    * "position 24 of 55" is readable without knowing the rule.
    * @param {string} key @param {number} next @param {number} total
    */
-  async setSweepCursor(key, next, total) {
-    const wrapped = total > 0 ? ((next % total) + total) % total : 0;
+  async setSweepCursor(key, next) {
+    // Stored as given, with no wrap. It used to be taken modulo the company
+    // count, which is a different quantity from a position: gaps or excluded
+    // rows make count and highest-position disagree, and the wrap then landed
+    // somewhere arbitrary. Wrapping belongs at the read, where "nothing is at
+    // or after the cursor" means "start again at the front" and needs no
+    // arithmetic at all.
+    const value = Math.max(0, Math.floor(next));
     await this.d1
       .prepare("UPDATE tracks SET sweep_cursor = ? WHERE user_id = ? AND key = ?")
-      .bind(wrapped, this.userId, key)
+      .bind(value, this.userId, key)
       .run();
-    return wrapped;
+    return value;
   }
 
   /** @param {string} search @returns {Promise<number>} how many companies this search tracks */

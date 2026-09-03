@@ -71,19 +71,31 @@ export async function handleGetCoverage({ db, params, url }) {
   // Excluded companies are stepped over without consuming a slot. Filtering
   // before the window rather than after is what stops a run being handed nine
   // companies because three in its stretch of the log are excluded.
-  const start = eligible.length ? ((cursor % eligible.length) + eligible.length) % eligible.length : 0;
+  //
+  // The cursor is compared against `position`, never used as an array index. Those are not
+  // the same number the moment any company is excluded: with the company at
+  // position 0 excluded, eligible[4] is position 5, so treating the cursor as
+  // an index skipped position 4 entirely and silently. Positions are the unit
+  // the cursor is stored in, so they have to be the unit it is read in.
+  //
+  // Wrapping falls out of the concatenation: once the cursor passes the last
+  // position, nothing is at or after it and the whole slice comes from the
+  // front of the log.
   const take = Math.min(COVERAGE_BATCH, eligible.length);
-  const companies = [];
-  for (let i = 0; i < take; i++) companies.push(eligible[(start + i) % eligible.length]);
+  const companies = eligible
+    .filter((c) => c.position >= cursor)
+    .concat(eligible.filter((c) => c.position < cursor))
+    .slice(0, take);
 
   return json({
     companies,
     total: eligible.length,
     batch: take,
-    // Where this search has read up to. Progress through the rotation is a
-    // number now rather than something inferred from dates - "24 of 55" is
-    // answerable, and so is "when does a given company come round".
-    cursor: start,
+    // Where this search has read up to, as a position rather than an index.
+    // Progress through the rotation is a number now rather than something
+    // inferred from dates - "24 of 55" is answerable, and so is "when does a
+    // given company come round".
+    cursor,
   });
 }
 
@@ -187,10 +199,7 @@ export async function handleRecordSweeps({ request, db }) {
     // Only the ones already in the log have a meaningful position; a company
     // discovered this run was appended past the cursor and is not something
     // the rotation had reached.
-    if (positions.length) {
-      const total = log.length + (recorded - positions.length);
-      cursor = await db.setSweepCursor(key, Math.max(...positions) + 1, total);
-    }
+    if (positions.length) cursor = await db.setSweepCursor(key, Math.max(...positions) + 1);
   }
 
   return json({ recorded, excluded, on, cursor });
