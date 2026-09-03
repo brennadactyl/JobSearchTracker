@@ -219,7 +219,7 @@ export function buildSearchPrompt({ user, track, settings, feeds, coverage }) {
   // remember to set - see migrations/0005_company_sweeps.sql.
   const rotates = Number(coverage) > 0;
   const coverageStep = rotates
-    ? `1c. Get this run's companies: \`curl -s "$TRACKER_URL/api/coverage/${key}" -H "Authorization: Bearer $TRACKER_API_TOKEN"\`. The server picks them - the least-recently-swept of the list, capped at what one run can actually verify - and returns \`{companies: [{company, last_swept, board, note}], total, batch}\`. **Cover exactly these, all of them**, and don't reach past them into the rest of the list in step 3: that list is longer than one run can do properly, and the failure mode isn't a company going uncovered for a day, it's every company being skimmed. They come back round - what you cover today sorts last tomorrow. \`board\` is a JSON endpoint already confirmed for that company (\`greenhouse\`, \`ashby\`, \`workday cxs\`, ...); it makes a company cheap to cover, not privileged - use it where it's there. Anything broader discovery turns up is covered as well, whether or not it is in this list.
+    ? `1c. Get this run's companies: \`curl -s "$TRACKER_URL/api/coverage/${key}" -H "Authorization: Bearer $TRACKER_API_TOKEN"\`. The server picks them, capped at what one run can actually verify, and returns \`{companies: [{company, last_swept, board, note, position}], total, batch, cursor}\`. The rotation is a fixed list with a cursor: you get the next \`batch\` from \`cursor\`, and \`cursor\` of \`total\` is how far through the cycle this search has read. **Cover exactly these, all of them**, and don't reach past them into the rest of the list in step 3: that list is longer than one run can do properly, and the failure mode isn't a company going uncovered for a day, it's every company being skimmed. They come back round - the cursor wraps, so everything is reached once per cycle before anything is reached twice. \`board\` is a JSON endpoint already confirmed for that company (\`greenhouse\`, \`ashby\`, \`workday cxs\`, ...); it makes a company cheap to cover, not privileged - use it where it's there. Anything broader discovery turns up is covered as well, whether or not it is in this list.
 `
     : "";
   const sweepStep = rotates
@@ -245,26 +245,21 @@ export function buildSearchPrompt({ user, track, settings, feeds, coverage }) {
    skipped it without fetching. Not the ones you read fine that had nothing
    matching: those are ordinary covered sweeps and by far the common case.
 
-   If that count is more than zero, fetch the rotation again with **today's
-   date on it**, and cover that many companies from the top of what comes back:
+   If that count is more than zero, **fetch step 1c again** - the same
+   \`GET /api/coverage/${key}\` call, unchanged - and cover that many companies
+   from what comes back. Then POST those with step 9d and repeat until nothing
+   in a slice was unreadable, or until you have spent the effort a run should.
+   This is a replacement for wasted work, not a licence to run all night.
 
-   \`\`\`
-   curl -s "$TRACKER_URL/api/coverage/${key}?on=<today YYYY-MM-DD>" -H "Authorization: Bearer $TRACKER_API_TOKEN"
-   \`\`\`
+   The companies you get will be new ones. The rotation is a fixed list with a
+   cursor, and step 9d moved the cursor past everything you just reported, so
+   fetching again reads further along rather than round again. You do not have
+   to filter anything out or tell the call what day it is.
 
-   Then POST those with step 9d and repeat until nothing in a slice was
-   unreadable, or until you have spent the effort a run should. This is a
-   replacement for wasted work, not a licence to run all night.
-
-   \`?on\` is what keeps the replacements genuinely new: it leaves out anything
-   already swept on that date, which is everything step 9d just recorded.
-   Without it you get the plain rotation, and late in a cycle - when fewer
-   companies remain unswept than a slice holds - the list would include ones
-   you covered minutes ago, so you would spend the slot you were reclaiming.
-
-   The order matters: record first, then fetch. Doing it the other way round
-   would hand you companies before anything says you attempted the last batch,
-   and a run that dies in between would leave them looking uncovered.
+   The order matters: record first, then fetch. The cursor only moves when a
+   sweep is recorded, so fetching first would hand you the same companies
+   again - and a run that died in between would have taken work nothing says
+   it attempted.
 
    Why this is a second call rather than something step 9d hands back: reading
    the list changes nothing and can be repeated safely, while recording a sweep

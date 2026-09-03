@@ -300,7 +300,13 @@ await req("POST", "/api/coverage", { token: A_TOK, body: { search: "SWE", on: "2
 // is handed, and the default response is capped.
 const cov = (await req("GET", "/api/coverage/SWE?all=1", { token: A_TOK })).json.companies;
 const at = (name) => cov.findIndex((c) => c.company === name);
-check("least-recently-swept sorts first", at("Globex") < at("Acme"), JSON.stringify(cov));
+// Ordering is the log's, not the dates'. Selection used to sort by
+// (last_swept, company), which made one column both record when a company was
+// attempted and decide who went next; a company's place in the cycle now comes
+// from `position` and nothing else.
+check("the table comes back in log order, whatever the sweep dates say",
+  cov.every((c, i) => i === 0 || c.position > cov[i - 1].position),
+  JSON.stringify(cov.map((c) => `${c.company}@${c.position}:${c.last_swept || "never"}`).slice(0, 5)));
 const acme = cov[at("Acme")];
 check("a later stamp keeps the board an earlier run confirmed",
   acme.board === "greenhouse" && acme.last_swept === "2026-08-28" && acme.note === "blocked",
@@ -310,9 +316,17 @@ await req("POST", "/api/coverage", { token: A_TOK, body: { search: "SWE", on: ""
 const seeded = (await req("GET", "/api/coverage/SWE?all=1", { token: A_TOK })).json.companies;
 check("registering with an empty date doesn't overwrite a real sweep",
   seeded.find((c) => c.company === "Acme").last_swept === "2026-08-28");
-check("a newly registered company sorts ahead of everything already swept",
-  seeded[0].last_swept === "" &&
-  seeded.findIndex((c) => c.company === "Initech") < seeded.findIndex((c) => c.company === "Globex"));
+// Asserted against the log as it was before the append, not against the end of
+// the list: later blocks in this file add companies of their own, so "last
+// overall" is a fact about the whole run rather than about where a new company
+// joins.
+check("a newly registered company joins past everything already in the log",
+  seeded.find((c) => c.company === "Initech").position >
+  Math.max(...cov.filter((c) => c.company !== "Initech").map((c) => c.position)),
+  JSON.stringify({
+    initech: seeded.find((c) => c.company === "Initech").position,
+    highestBefore: Math.max(...cov.map((c) => c.position)),
+  }));
 check("recording against a track you don't have 404s",
   (await req("POST", "/api/coverage", { token: A_TOK, body: { search: "GHOST", swept: [{ company: "Acme" }] } })).status === 404);
 check("an empty sweep list is refused rather than stamping nothing",
@@ -342,11 +356,15 @@ check("a run is handed a capped slice, not the whole list",
   JSON.stringify({ n: due.companies.length, total: due.total, batch: due.batch }));
 check("?all=1 returns the whole table, for seeding and for looking",
   all.companies.length === all.total && all.total === due.total);
-// The ordering contract the cap rests on: nothing already covered outranks
-// something never covered, and dates only ever go forwards down the list.
-const dates = all.companies.map((c) => c.last_swept);
-check("never-swept outranks swept, and older outranks newer",
-  dates.every((d, i) => i === 0 || d >= dates[i - 1]), JSON.stringify(dates.slice(0, 15)));
+// The ordering contract the cap rests on. It used to be about dates - nothing
+// covered outranking anything never covered - which is what made the same
+// alphabetical tail last every cycle. It is now about the log: positions are a
+// dense sequence, so the cursor reaches every company once before any twice.
+const positions = all.companies.map((c) => c.position);
+check("the log is a dense sequence, so the cursor cannot skip or repeat",
+  new Set(positions).size === positions.length &&
+  positions.every((p, i) => i === 0 || p > positions[i - 1]),
+  JSON.stringify(positions.slice(0, 15)));
 const today = "2026-09-01";
 await req("POST", "/api/coverage", { token: A_TOK, body: { search: "SWE", on: today,
   swept: due.companies.map((c) => ({ company: c.company })) } });
@@ -355,69 +373,67 @@ check("what a run covers goes to the back of the queue, not round again",
   next.every((c) => c.last_swept !== today),
   JSON.stringify(next.map((c) => `${c.company}:${c.last_swept}`).slice(0, 4)));
 
-// Step 9e of the prompt reclaims the slots an unreadable company would waste:
-// record the slice, then fetch again for replacements. That needs no new API,
-// but it does rest on a property of these two routes, so assert it - a run
-// following the prompt is broken if this stops holding.
-//
-// Measured live on 2026-09-03: four of twelve companies in a slice could not be
-// read - two of them domains the run correctly skipped without fetching, since
-// the baseline doc already had them down as walls - and the day produced one
-// lead from the eight actually searched. Skipping the work never gave the slot
-// back.
-const loopDay = "2026-09-07";
-await req("POST", "/api/coverage", { token: A_TOK, body: { search: "SWE", on: "",
-  swept: Array.from({ length: 20 }, (_, i) => ({ company: `LoopCo ${String(i).padStart(2, "0")}` })) } });
-const first = (await req("GET", "/api/coverage/SWE", { token: A_TOK })).json.companies;
-await req("POST", "/api/coverage", { token: A_TOK, body: { search: "SWE", on: loopDay,
-  swept: first.map((c) => ({ company: c.company })) } });
-const second = (await req("GET", "/api/coverage/SWE", { token: A_TOK })).json.companies;
-check("fetching the slice again after recording it returns different companies",
-  second.every((c) => !first.some((f) => f.company === c.company)),
-  JSON.stringify(second.map((c) => c.company).slice(0, 5)));
-check("and none of them are ones already covered today",
-  second.every((c) => c.last_swept !== loopDay),
-  JSON.stringify(second.map((c) => `${c.company}:${c.last_swept}`).slice(0, 4)));
-// The read has to stay side-effect free, or "record, then fetch" would itself
-// mark work done and a run dying mid-loop would lose companies.
-const reread = (await req("GET", "/api/coverage/SWE", { token: A_TOK })).json.companies;
-check("fetching is repeatable - reading the list never marks anything covered",
-  JSON.stringify(reread.map((c) => c.company)) === JSON.stringify(second.map((c) => c.company)));
+console.log("\n== the rotation is a log with a cursor ==");
+// Selection used to be ORDER BY last_swept, company - which made one column
+// both record when a company was attempted and decide who went next. Both
+// rotation bugs came from the second job: a run asking for replacements got
+// back companies it had just covered, and the alphabetical tiebreak put the
+// same 31 of 55 companies last every cycle, so none of them were reached in
+// the rotation's first two days.
+await req("POST", "/api/users", { admin: true, body: { name: "Cursor", password: "cursor-long-password" } });
+const C_TOK = (await req("POST", "/api/login", { body: { name: "Cursor", password: "cursor-long-password" } })).json.token;
+// A per-run track: these rows persist, and re-running against the same
+// database would otherwise leave the cursor and the log length carrying over
+// from the last run, which is exactly what the assertions below are about.
+const rotN = 14, rotStamp = Date.now(), ROT = "ROT" + rotStamp;
+await req("POST", "/api/config", { token: C_TOK, body: { tracks: [{ key: ROT, label: "Rot" }] } });
+await req("POST", "/api/coverage", { token: C_TOK, body: { search: ROT, on: "",
+  swept: Array.from({ length: rotN }, (_, i) => ({ company: `Rot ${rotStamp}-${String(i).padStart(2, "0")}` })) } });
 
-// The case that makes `?on` necessary rather than cosmetic. While more
-// companies remain unswept than a slice holds, the plain re-fetch is already
-// all-fresh - so this only shows up at the end of a cycle, which is exactly
-// where a run would silently re-cover work it had just done.
-// Its own user: posting a track list replaces it, and borrowing Ada's or Bo's
-// would pull their tracks out from under the checks further down.
-await req("POST", "/api/users", { admin: true, body: { name: "Tailer", password: "tailer-long-password" } });
-const T_TOK = (await req("POST", "/api/login", { body: { name: "Tailer", password: "tailer-long-password" } })).json.token;
-await req("POST", "/api/config", { token: T_TOK, body: { tracks: [{ key: "TAIL", label: "Tail" }] } });
-const tailDay = "2026-09-09";
-// Fresh company names each run. These rows persist, so a second run against the
-// same database would otherwise find every company already swept on tailDay and
-// have nothing left to hand back.
-const tailStamp = Date.now();
-await req("POST", "/api/coverage", { token: T_TOK, body: { search: "TAIL", on: "",
-  swept: Array.from({ length: 14 }, (_, i) => ({ company: `Tail ${tailStamp}-${String(i).padStart(2, "0")}` })) } });
-const tail1 = (await req("GET", "/api/coverage/TAIL", { token: T_TOK })).json.companies;
-await req("POST", "/api/coverage", { token: T_TOK, body: { search: "TAIL", on: tailDay,
-  swept: tail1.map((c) => ({ company: c.company })) } });
-const plain = (await req("GET", "/api/coverage/TAIL", { token: T_TOK })).json.companies;
-check("without ?on, a short rotation hands back companies just covered",
-  plain.some((c) => c.last_swept === tailDay),
-  JSON.stringify({ returned: plain.length, alreadyToday: plain.filter((c) => c.last_swept === tailDay).length }));
-const scoped = (await req("GET", `/api/coverage/TAIL?on=${tailDay}`, { token: T_TOK })).json;
-// Asserted as properties rather than an exact count: leftovers carry across
-// re-runs, so how many remain is a fact about this database, not about ?on.
-check("with ?on, only genuinely uncovered companies come back",
-  scoped.companies.length > 0 && scoped.companies.every((c) => c.last_swept !== tailDay),
-  JSON.stringify(scoped.companies.map((c) => `${c.company}:${c.last_swept}`).slice(0, 4)));
-check("and it actually filtered - fewer than the unscoped call returned",
-  scoped.companies.length < plain.length && scoped.total < plain.length,
-  JSON.stringify({ plain: plain.length, scoped: scoped.companies.length, total: scoped.total }));
-check("a malformed ?on is ignored rather than filtering everything out",
-  (await req("GET", "/api/coverage/TAIL?on=today", { token: T_TOK })).json.companies.length === plain.length);
+const c0 = (await req("GET", `/api/coverage/${ROT}`, { token: C_TOK })).json;
+check("seeding registers companies without moving the cursor",
+  c0.cursor === 0 && c0.total === rotN, JSON.stringify({ cursor: c0.cursor, total: c0.total }));
+const day = "2026-09-11";
+const rec1 = await req("POST", "/api/coverage", { token: C_TOK, body: { search: ROT, on: day,
+  swept: c0.companies.map((c) => ({ company: c.company })) } });
+check("recording a slice advances the cursor past it",
+  rec1.json.cursor === 12, JSON.stringify({ cursor: rec1.json.cursor }));
+
+// The replacement case, with no date filter anywhere.
+const c1 = (await req("GET", `/api/coverage/${ROT}`, { token: C_TOK })).json;
+check("reading again continues along the log instead of round again",
+  c1.companies.every((c) => !c0.companies.some((p) => p.company === c.company)) === false ||
+  c1.companies[0].company !== c0.companies[0].company,
+  JSON.stringify({ firstBefore: c0.companies[0].company, firstAfter: c1.companies[0].company }));
+check("and the two companies left in this cycle come first",
+  c1.companies.slice(0, 2).every((c) => !c0.companies.some((p) => p.company === c.company)),
+  JSON.stringify(c1.companies.slice(0, 3).map((c) => c.company)));
+
+// Wrapping: everything is reached once before anything is reached twice.
+await req("POST", "/api/coverage", { token: C_TOK, body: { search: ROT, on: day,
+  swept: c1.companies.slice(0, 2).map((c) => ({ company: c.company })) } });
+const c2 = (await req("GET", `/api/coverage/${ROT}`, { token: C_TOK })).json;
+check("the cursor wraps at the end of the log rather than running off it",
+  c2.cursor === 0, JSON.stringify({ cursor: c2.cursor, total: c2.total }));
+
+// Resilience: a run that dies before reporting must not skip its slice.
+const before = (await req("GET", `/api/coverage/${ROT}`, { token: C_TOK })).json;
+const again = (await req("GET", `/api/coverage/${ROT}`, { token: C_TOK })).json;
+check("reading never moves the cursor, so a run that dies re-reads its slice",
+  before.cursor === again.cursor &&
+  JSON.stringify(before.companies.map((c) => c.company)) === JSON.stringify(again.companies.map((c) => c.company)));
+
+// Discovery appends rather than jumping the queue or landing behind the cursor.
+const found = `Rot ${rotStamp}-discovered`;
+await req("POST", "/api/coverage", { token: C_TOK, body: { search: ROT, on: day,
+  swept: [{ company: found }] } });
+const rotAll = (await req("GET", `/api/coverage/${ROT}?all=1`, { token: C_TOK })).json.companies;
+check("a company found by discovery appends to the end of the log",
+  rotAll[rotAll.length - 1].company === found && rotAll.length === rotN + 1,
+  JSON.stringify({ last: rotAll[rotAll.length - 1].company, total: rotAll.length }));
+check("positions stay dense and unique after an append",
+  new Set(rotAll.map((c) => c.position)).size === rotAll.length,
+  JSON.stringify(rotAll.map((c) => c.position).slice(-4)));
 
 console.log("\n== branched tracks ==");
 check("fed_by naming a track that isn't in the list is refused",

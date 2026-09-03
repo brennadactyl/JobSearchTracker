@@ -51,37 +51,40 @@ export async function handleGetCoverage({ db, params, url }) {
   // Filtered rather than deleted: the row is the rotation's memory of when
   // that company was last looked at, the exclusion list is editable, and
   // reading is the wrong moment to destroy data.
-  const [companies, total] = await Promise.all([
-    db.getCoverage(key, 0),
-    db.countCoverage(key),
-  ]);
+  const [log, cursor] = await Promise.all([db.getCoverage(key), db.getSweepCursor(key)]);
   const isExcluded = await excluderFor(db);
-  let allowed = companies.filter((c) => !isExcluded(c.company));
+  const eligible = log.filter((c) => !isExcluded(c.company));
+  if (all) {
+    return json({ companies: eligible, total: eligible.length, batch: eligible.length, cursor });
+  }
 
-  // `?on=YYYY-MM-DD` leaves out companies already swept on that date. It is
-  // what makes a run's second call for replacements safe (step 9e of the
-  // prompt): after reporting a slice, a run that could not read some of it
-  // asks for more, and without this it can be handed back the ones it has
-  // just covered.
+  // Read forward from the cursor, wrapping at the end - the whole selection
+  // rule, with no date in it.
   //
-  // Only bites near the end of a cycle, which is exactly when it matters. The
-  // ordering puts never-swept first, so while the unswept pool is larger than
-  // the batch the caller never sees a repeat - but with 14 companies and 12
-  // covered, a second call returns 2 fresh and 10 already done, and a run
-  // needing 4 would re-cover 2 of them. That spends the slot it was trying to
-  // reclaim.
+  // Dates used to decide this (`ORDER BY last_swept, company`), which made the
+  // same column record when a company was attempted and choose who went next.
+  // Both rotation bugs came from the second job: a run asking for replacements
+  // got back companies it had just covered, and the alphabetical tiebreak put
+  // the same 31 companies last every cycle. Reading further along a fixed log
+  // is inherently fresh, so neither is expressible any more.
   //
-  // The date comes from the caller because it has to: the worker knows only
-  // UTC, and a run's "today" is its own local date - the same reason
-  // /api/runs and the sweep POST take one. Absent or malformed, nothing is
-  // excluded, which is the behaviour every existing caller already gets.
-  const on = isoDate(url.searchParams.get("on") || "");
-  if (on) allowed = allowed.filter((c) => c.last_swept !== on);
+  // Excluded companies are stepped over without consuming a slot. Filtering
+  // before the window rather than after is what stops a run being handed nine
+  // companies because three in its stretch of the log are excluded.
+  const start = eligible.length ? ((cursor % eligible.length) + eligible.length) % eligible.length : 0;
+  const take = Math.min(COVERAGE_BATCH, eligible.length);
+  const companies = [];
+  for (let i = 0; i < take; i++) companies.push(eligible[(start + i) % eligible.length]);
 
-  // The cap is applied after filtering, so neither an excluded company nor one
-  // already covered today can eat a slot in the batch a run is told to cover.
-  const batch = all ? allowed.length : COVERAGE_BATCH;
-  return json({ companies: allowed.slice(0, batch), total: allowed.length, batch });
+  return json({
+    companies,
+    total: eligible.length,
+    batch: take,
+    // Where this search has read up to. Progress through the rotation is a
+    // number now rather than something inferred from dates - "24 of 55" is
+    // answerable, and so is "when does a given company come round".
+    cursor: start,
+  });
 }
 
 /**
@@ -126,6 +129,50 @@ export async function handleRecordSweeps({ request, db }) {
   const excluded = valid.length - allowed.length;
   if (allowed.length === 0) return json({ recorded: 0, excluded, on });
 
-  const recorded = await db.recordSweeps(key, allowed, on);
-  return json({ recorded, excluded, on });
+  // A company the log has never seen appends after the highest position, so
+  // discovery adds to the end rather than jumping the queue or landing behind
+  // the cursor where it would wait a full cycle to be seen.
+  const log = await db.getCoverage(key);
+  const known = new Map(log.map((c) => [c.company, c]));
+
+  // A position is assigned once, when a company joins the log, and only to
+  // companies that are actually new. Counting the batch instead - or seeding
+  // from the log's length rather than its highest position - leaves gaps where
+  // an already-known company was re-swept, and eventually two companies with
+  // the same position, at which point the cursor starts stepping over one of
+  // them.
+  let nextPos = log.length ? Math.max(...log.map((c) => c.position)) + 1 : 0;
+  const positioned = allowed.map((i) =>
+    known.has(i.company)
+      ? { ...i, position: known.get(i.company).position }
+      : { ...i, position: nextPos++ }
+  );
+  const recorded = await db.recordSweeps(key, positioned, on);
+
+  // Advance the cursor past the furthest company actually reported, so the
+  // next read starts after it - including within the same run, which is what
+  // lets a run come back for replacements without a date filter.
+  //
+  // Committed only now, after the sweep is recorded. A run that dies before
+  // reporting leaves the cursor where it was and tomorrow re-reads the same
+  // stretch; it never advances past work nobody recorded.
+  //
+  // Seeding (`on: ""`) registers companies without claiming to have covered
+  // them, so it must not move the cursor.
+  let cursor = await db.getSweepCursor(key);
+  if (on !== "") {
+    const positions = allowed
+      .map((i) => known.get(i.company))
+      .filter(Boolean)
+      .map((c) => c.position);
+    // Only the ones already in the log have a meaningful position; a company
+    // discovered this run was appended past the cursor and is not something
+    // the rotation had reached.
+    if (positions.length) {
+      const total = log.length + (recorded - positions.length);
+      cursor = await db.setSweepCursor(key, Math.max(...positions) + 1, total);
+    }
+  }
+
+  return json({ recorded, excluded, on, cursor });
 }
