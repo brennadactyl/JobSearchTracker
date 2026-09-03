@@ -62,9 +62,12 @@ scripts/
   protect-backups.ps1          one-time elevated setup that creates that archive and its task
   verify-backups.ps1           proves the archive really refuses writes, from an unelevated shell
 server/                        API only - Cloudflare Worker + D1, no HTML served
-  src/index.js                  routing, session resolution, CORS preflight
+  src/index.js                  entry point: session resolution, CORS preflight, dispatch
+  src/routes/                   one module per resource; index.js is the route table
+  src/http.js                   every response the worker builds + CORS headers
+  src/validate.js               the checks more than one route makes
   src/auth.js                   passwords, session tokens, who a token belongs to
-  src/api.js                    request handlers + CORS headers
+  src/db.js                     all D1 access for a person's own data
   src/prompt.js                 composes each track's daily search prompt from its config
   migrations/                   the D1 schema, applied via `wrangler d1 migrations apply`
   wrangler.toml                  deploy config
