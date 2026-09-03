@@ -1,11 +1,10 @@
 /**
  * The one place that knows this is D1 (SQLite). Every `env.DB.prepare(...)`
- * call for a user's own data lives here - the route modules and index.js never
- * touch D1
- * directly for it, only Db's methods below. That's the point: if this ever
- * needs to run on a different database, only this file changes. The rest of
- * the codebase (request parsing, validation, deciding *when* something
- * happens) doesn't know or care what's storing the rows.
+ * call for a user's own data lives here - the route modules and index.js
+ * never touch D1 directly for it, only Db's methods below. That's the point:
+ * if this ever needs to run on a different database, only this file changes.
+ * The rest of the codebase (request parsing, validation, deciding *when*
+ * something happens) doesn't know or care what's storing the rows.
  *
  * ---- Every instance belongs to one user. `new Db(env.DB, userId)` binds the
  * repository to whoever is making the request, and every statement below
@@ -701,8 +700,8 @@ export class Db {
   /**
    * What one track actually gained on one date, counted from the rows
    * themselves. This is what a run record's three numbers are derived from
-   * instead of being taken from the caller - see routes/runs.js's handleRecordRun for
-   * why the caller's own tally isn't trusted.
+   * instead of being taken from the caller - see routes/runs.js's
+   * handleRecordRun for why the caller's own tally isn't trusted.
    *
    * Three counts, three different places they can be read from, and only one
    * of them is obvious:
@@ -942,9 +941,9 @@ export class Db {
     // a search scheduled in the evening is already the next UTC day - the same
     // reasoning /api/runs' `on` has always had. Falling back to UTC keeps the
     // behaviour every existing caller already gets.
-    // Already validated by the caller (validate.js's isoDate), so this only has to
-    // choose between a date and none. Re-validating here would be a second
-    // copy of the rule, and the two would eventually disagree.
+    // Already validated by the caller (validate.js's isoDate), so this only
+    // has to choose between a date and none. Re-validating here would be a
+    // second copy of the rule, and the two would eventually disagree.
     const t = on || today();
 
     const { fresh, duplicates } = await this.dropKnownUrls(leads);
@@ -1101,9 +1100,9 @@ export class Db {
    * @returns {Promise<{added: number, duplicates: number}>}
    */
   async addScreened(items, on) {
-    // Already validated by the caller (validate.js's isoDate), so this only has to
-    // choose between a date and none. Re-validating here would be a second
-    // copy of the rule, and the two would eventually disagree.
+    // Already validated by the caller (validate.js's isoDate), so this only
+    // has to choose between a date and none. Re-validating here would be a
+    // second copy of the rule, and the two would eventually disagree.
     const t = on || today();
 
     const { fresh, duplicates } = await this.dropKnownUrls(items);
@@ -1209,8 +1208,9 @@ export class Db {
    * @returns {Promise<Application|null>}
    */
   async setApplicationStatus(id, status, stageDateColumn, clearColumn = null, explicitDate = null) {
-    // Column names here come from routes/applications.js's own constants, never from the
-    // request body, so they're safe to interpolate; the values still bind.
+    // Column names here come from routes/applications.js's own constants,
+    // never from the request body, so they're safe to interpolate; the values
+    // still bind.
     const sets = ["status = ?"];
     const values = [status];
     if (stageDateColumn) {
@@ -1273,8 +1273,9 @@ export class Db {
 
   /**
    * Atomically (one D1 batch/transaction) deletes a lead and records its URL
-   * in `screened` - the mechanism behind routes/delisting.js's removeDelistedLead, which
-   * owns the decision about when this should happen at all.
+   * in `screened` - the mechanism behind routes/delisting.js's
+   * removeDelistedLead, which owns the decision about when this should happen
+   * at all.
    *
    * Both halves have to land together, and they fail in opposite directions:
    * the delete alone leaves a URL nothing remembers, so tomorrow's run

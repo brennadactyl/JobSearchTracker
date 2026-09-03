@@ -254,9 +254,9 @@ export function buildSearchPrompt({ user, track, settings, feeds, coverage }) {
   //
   // Both jobs now belong to the server: POST /api/runs derives all three
   // counts from the rows that actually landed and writes a record for each fed
-  // tab itself (see routes/runs.js's handleRecordRun). What's left in 9c is only what
-  // the run alone knows - which track it is, whether it worked, its local
-  // date, and a sentence for the page. The route still accepts
+  // tab itself (see routes/runs.js's handleRecordRun). What's left in 9c is
+  // only what the run alone knows - which track it is, whether it worked, its
+  // local date, and a sentence for the page. The route still accepts
   // leadsAdded/screenedAdded/delisted and ignores them, so a run that fetched
   // this prompt before the change and is still going records correctly too.
   const runFanoutNote = multi
