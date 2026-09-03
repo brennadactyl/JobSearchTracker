@@ -239,6 +239,35 @@ function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
+// Every column an application row is created with. There are two insert paths
+// - insertApplication, and the one inside
+// setLeadStatusAndMaybeCreateApplication that has to happen in the same
+// transaction as the status change - and they were each carrying their own
+// hand-written column list. The lists had already drifted: the composite one
+// named twelve columns picked out by hand, the other twenty-three built from
+// EXTRA_FIELDS and APP_STAGE_DATE_FIELDS.
+//
+// Nothing was broken by that, because every missing column is NOT NULL
+// DEFAULT '' and '' is exactly what the long path was writing into them. The
+// problem was the next edit rather than the current state: a field added to
+// EXTRA_FIELDS would reach one path and silently not the other, and which of
+// the two created a row is not something anyone would think to check.
+const APPLICATION_COLS = [
+  "leadId", "company", "title", "location", "dateApplied", "status", "notes",
+  ...EXTRA_FIELDS, ...APP_STAGE_DATE_FIELDS,
+];
+
+// The two columns a new application doesn't default to '': it is applied-to
+// today unless the caller says otherwise, and its status is "Applied" unless
+// the caller is logging something it hasn't reached yet ("To Apply").
+function applicationValues(fields) {
+  return APPLICATION_COLS.map((f) => {
+    if (f === "dateApplied") return fields.dateApplied || today();
+    if (f === "status") return fields.status || "Applied";
+    return fields[f] || "";
+  });
+}
+
 // How many lead ids one statement may name in an `IN (...)` list. D1 caps a
 // query at 100 bound parameters, and a nightly run re-confirming the postings
 // it tracks routinely reports more leads than that in one call - the whole
@@ -995,15 +1024,39 @@ export class Db {
    * @returns {Promise<Lead|null>} the updated row, or null if no row matched
    */
   async updateLead(id, patch) {
-    const fields = ["status", "notes", "search", ...EXTRA_FIELDS];
+    const changed = await this.#patchRow("leads", ["status", "notes", "search", ...EXTRA_FIELDS], id, patch);
+    return changed ? this.getLead(id) : null;
+  }
+
+  /**
+   * The field-whitelist partial update updateLead and updateApplication both
+   * are. Only keys `patch` carries as strings are written; every other column
+   * is bound null and left where it was by `COALESCE(?, col)`.
+   *
+   * That rule is subtler than it looks - a non-string value is not a validation
+   * error here, it is the instruction "don't touch this column", which is what
+   * makes a partial patch partial - so it is worth having stated once rather
+   * than in two places that could come to disagree about, say, whether a number
+   * or an empty string counts.
+   *
+   * Private for the same reason #applicationInsert is: `table` and `fields` are
+   * interpolated straight into SQL, which is safe only because both are this
+   * file's own literals and never a caller's, and `#` is what keeps it that way.
+   *
+   * @param {string} table
+   * @param {string[]} fields the writable columns, in any order
+   * @param {number|string} id
+   * @param {Object} patch
+   * @returns {Promise<boolean>} whether a row actually matched and changed
+   */
+  async #patchRow(table, fields, id, patch) {
     const setClause = fields.map((f) => `${f} = COALESCE(?, ${f})`).join(", ");
     const values = fields.map((f) => (typeof patch[f] === "string" ? patch[f] : null));
     const result = await this.d1
-      .prepare(`UPDATE leads SET ${setClause} WHERE id = ? AND user_id = ?`)
+      .prepare(`UPDATE ${table} SET ${setClause} WHERE id = ? AND user_id = ?`)
       .bind(...values, id, this.userId)
       .run();
-    if (result.meta.changes === 0) return null;
-    return this.getLead(id);
+    return result.meta.changes > 0;
   }
 
   /**
@@ -1155,36 +1208,44 @@ export class Db {
    * @returns {Promise<Application>}
    */
   async insertApplication(fields) {
-    const cols = ["leadId", "company", "title", "location", "dateApplied", "status", "notes", ...EXTRA_FIELDS, ...APP_STAGE_DATE_FIELDS];
-    const placeholders = ["?", ...cols.map(() => "?")].join(", ");
-    const values = cols.map((f) => {
-      if (f === "dateApplied") return fields.dateApplied || today();
-      if (f === "status") return fields.status || "Applied";
-      return fields[f] || "";
-    });
-    const result = await this.d1
-      .prepare(`INSERT INTO applications (user_id, ${cols.join(", ")}) VALUES (${placeholders})`)
-      .bind(this.userId, ...values)
-      .run();
+    const result = await this.#applicationInsert(fields).run();
     return this.getApplication(result.meta.last_row_id);
   }
 
   /**
-   * Field-whitelist partial update, same COALESCE pattern as updateLead.
+   * The prepared INSERT both application-creating paths use, bound and ready
+   * to `.run()` on its own or to drop into a `batch()` alongside other
+   * statements - which is the whole reason this hands back a statement instead
+   * of executing one. See APPLICATION_COLS for what the two paths were doing
+   * before, and why one list is worth the indirection.
+   *
+   * Private so it stays an implementation detail of this class: it interpolates
+   * a column list into SQL, which is only safe because that list is this
+   * file's own constant and never a caller's, and `#` is what guarantees no
+   * caller can ever reach it to try.
+   *
+   * @param {Partial<Application>} fields
+   * @returns {D1PreparedStatement}
+   */
+  #applicationInsert(fields) {
+    const placeholders = ["?", ...APPLICATION_COLS.map(() => "?")].join(", ");
+    return this.d1
+      .prepare(
+        `INSERT INTO applications (user_id, ${APPLICATION_COLS.join(", ")}) VALUES (${placeholders})`
+      )
+      .bind(this.userId, ...applicationValues(fields));
+  }
+
+  /**
+   * Field-whitelist partial update, same #patchRow rule as updateLead.
    * @param {number|string} id
    * @param {Partial<Application>} patch
    * @returns {Promise<Application|null>}
    */
   async updateApplication(id, patch) {
     const fields = ["company", "title", "location", "dateApplied", "status", "notes", "leadId", ...EXTRA_FIELDS, ...APP_STAGE_DATE_FIELDS];
-    const setClause = fields.map((f) => `${f} = COALESCE(?, ${f})`).join(", ");
-    const values = fields.map((f) => (typeof patch[f] === "string" ? patch[f] : null));
-    const result = await this.d1
-      .prepare(`UPDATE applications SET ${setClause} WHERE id = ? AND user_id = ?`)
-      .bind(...values, id, this.userId)
-      .run();
-    if (result.meta.changes === 0) return null;
-    return this.getApplication(id);
+    const changed = await this.#patchRow("applications", fields, id, patch);
+    return changed ? this.getApplication(id) : null;
   }
 
   /** @param {number|string} id @returns {Promise<boolean>} true if a row was actually deleted */
@@ -1246,21 +1307,7 @@ export class Db {
         .prepare("UPDATE leads SET status = ? WHERE id = ? AND user_id = ?")
         .bind(status, id, this.userId),
     ];
-    if (newApplicationFields) {
-      const cols = ["leadId", "company", "title", "location", "dateApplied", "status", "notes", "link", "referral", "comp", "team", "setup"];
-      const values = cols.map((f) => {
-        if (f === "dateApplied") return newApplicationFields.dateApplied || today();
-        if (f === "status") return newApplicationFields.status || "Applied";
-        return newApplicationFields[f] || "";
-      });
-      batch.push(
-        this.d1
-          .prepare(
-            `INSERT INTO applications (user_id, ${cols.join(", ")}) VALUES (${["?", ...cols.map(() => "?")].join(", ")})`
-          )
-          .bind(this.userId, ...values)
-      );
-    }
+    if (newApplicationFields) batch.push(this.#applicationInsert(newApplicationFields));
     const results = await this.d1.batch(batch);
 
     const lead = await this.getLead(id);
