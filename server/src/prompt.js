@@ -236,7 +236,41 @@ export function buildSearchPrompt({ user, track, settings, feeds, coverage }) {
    the list never gets searched at all. Record a company you attempted and
    *couldn't* fetch too, with the reason in \`note\` - the date tracks when a
    company was last attempted, not when it last worked, or a blocked domain
-   comes back to the front of the queue every single run. Send \`board\` whenever
+   comes back to the front of the queue every single run.
+
+9e. REPLACE THE COMPANIES YOU COULDN'T READ. Count the ones in tonight's slice
+   you got nothing usable out of - the domain refused the fetch, every job id
+   404'd, the board only filters client-side, the page was an empty JS shell,
+   or the doc's fetch-efficiency rule already had it down as a wall so you
+   skipped it without fetching. Not the ones you read fine that had nothing
+   matching: those are ordinary covered sweeps and by far the common case.
+
+   If that count is more than zero, **fetch step 1c again** - the same
+   \`GET /api/coverage/${key}\` call, unchanged - and cover that many companies
+   from the top of the list it returns. Then POST those with step 9d and repeat
+   until nothing in a slice was unreadable, or until you have spent the effort
+   a run should. This is a replacement for wasted work, not a licence to run
+   all night.
+
+   Fetching again is safe and gives you fresh companies rather than the same
+   ones: step 9d has already stamped everything you just reported, so it sorts
+   to the back and the list you get is the next ones along. The order matters -
+   record first, then fetch. Doing it the other way round would hand you
+   companies before anything says you attempted the last batch, and a run that
+   dies in between would leave them looking uncovered.
+
+   Why this is a second call rather than something step 9d hands back: reading
+   the list changes nothing and can be repeated safely, while recording a sweep
+   is the only thing that marks work as done. Keeping them apart means a run
+   that dies at any point has either recorded what it actually did or recorded
+   nothing, and never sits holding companies the rotation believes are covered.
+
+   The wall itself is not your decision here. Whether a domain is worth
+   retrying, and what workaround exists, is the doc's job - it holds the
+   URL-format fixes and ATS mirrors that a flag never could. Keep writing those
+   up in \`note\` and in step 8b.
+
+   Send \`board\` whenever
    you confirm one (\`greenhouse\`, \`ashby\`, \`lever\`, \`workday cxs\`, ...): that is
    what moves a company into the every-run tier. A company not already in the
    list is created by this call, so one that broader discovery turned up joins

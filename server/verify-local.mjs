@@ -355,6 +355,35 @@ check("what a run covers goes to the back of the queue, not round again",
   next.every((c) => c.last_swept !== today),
   JSON.stringify(next.map((c) => `${c.company}:${c.last_swept}`).slice(0, 4)));
 
+// Step 9e of the prompt reclaims the slots an unreadable company would waste:
+// record the slice, then fetch again for replacements. That needs no new API,
+// but it does rest on a property of these two routes, so assert it - a run
+// following the prompt is broken if this stops holding.
+//
+// Measured live on 2026-09-03: four of twelve companies in a slice could not be
+// read - two of them domains the run correctly skipped without fetching, since
+// the baseline doc already had them down as walls - and the day produced one
+// lead from the eight actually searched. Skipping the work never gave the slot
+// back.
+const loopDay = "2026-09-07";
+await req("POST", "/api/coverage", { token: A_TOK, body: { search: "SWE", on: "",
+  swept: Array.from({ length: 20 }, (_, i) => ({ company: `LoopCo ${String(i).padStart(2, "0")}` })) } });
+const first = (await req("GET", "/api/coverage/SWE", { token: A_TOK })).json.companies;
+await req("POST", "/api/coverage", { token: A_TOK, body: { search: "SWE", on: loopDay,
+  swept: first.map((c) => ({ company: c.company })) } });
+const second = (await req("GET", "/api/coverage/SWE", { token: A_TOK })).json.companies;
+check("fetching the slice again after recording it returns different companies",
+  second.every((c) => !first.some((f) => f.company === c.company)),
+  JSON.stringify(second.map((c) => c.company).slice(0, 5)));
+check("and none of them are ones already covered today",
+  second.every((c) => c.last_swept !== loopDay),
+  JSON.stringify(second.map((c) => `${c.company}:${c.last_swept}`).slice(0, 4)));
+// The read has to stay side-effect free, or "record, then fetch" would itself
+// mark work done and a run dying mid-loop would lose companies.
+const reread = (await req("GET", "/api/coverage/SWE", { token: A_TOK })).json.companies;
+check("fetching is repeatable - reading the list never marks anything covered",
+  JSON.stringify(reread.map((c) => c.company)) === JSON.stringify(second.map((c) => c.company)));
+
 console.log("\n== branched tracks ==");
 check("fed_by naming a track that isn't in the list is refused",
   (await req("POST", "/api/config", { token: A_TOK, body: { tracks: [
