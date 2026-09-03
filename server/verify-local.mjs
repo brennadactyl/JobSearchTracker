@@ -300,7 +300,13 @@ await req("POST", "/api/coverage", { token: A_TOK, body: { search: "SWE", on: "2
 // is handed, and the default response is capped.
 const cov = (await req("GET", "/api/coverage/SWE?all=1", { token: A_TOK })).json.companies;
 const at = (name) => cov.findIndex((c) => c.company === name);
-check("least-recently-swept sorts first", at("Globex") < at("Acme"), JSON.stringify(cov));
+// Ordering is the log's, not the dates'. Selection used to sort by
+// (last_swept, company), which made one column both record when a company was
+// attempted and decide who went next; a company's place in the cycle now comes
+// from `position` and nothing else.
+check("the table comes back in log order, whatever the sweep dates say",
+  cov.every((c, i) => i === 0 || c.position > cov[i - 1].position),
+  JSON.stringify(cov.map((c) => `${c.company}@${c.position}:${c.last_swept || "never"}`).slice(0, 5)));
 const acme = cov[at("Acme")];
 check("a later stamp keeps the board an earlier run confirmed",
   acme.board === "greenhouse" && acme.last_swept === "2026-08-28" && acme.note === "blocked",
@@ -310,9 +316,17 @@ await req("POST", "/api/coverage", { token: A_TOK, body: { search: "SWE", on: ""
 const seeded = (await req("GET", "/api/coverage/SWE?all=1", { token: A_TOK })).json.companies;
 check("registering with an empty date doesn't overwrite a real sweep",
   seeded.find((c) => c.company === "Acme").last_swept === "2026-08-28");
-check("a newly registered company sorts ahead of everything already swept",
-  seeded[0].last_swept === "" &&
-  seeded.findIndex((c) => c.company === "Initech") < seeded.findIndex((c) => c.company === "Globex"));
+// Asserted against the log as it was before the append, not against the end of
+// the list: later blocks in this file add companies of their own, so "last
+// overall" is a fact about the whole run rather than about where a new company
+// joins.
+check("a newly registered company joins past everything already in the log",
+  seeded.find((c) => c.company === "Initech").position >
+  Math.max(...cov.filter((c) => c.company !== "Initech").map((c) => c.position)),
+  JSON.stringify({
+    initech: seeded.find((c) => c.company === "Initech").position,
+    highestBefore: Math.max(...cov.map((c) => c.position)),
+  }));
 check("recording against a track you don't have 404s",
   (await req("POST", "/api/coverage", { token: A_TOK, body: { search: "GHOST", swept: [{ company: "Acme" }] } })).status === 404);
 check("an empty sweep list is refused rather than stamping nothing",
@@ -342,11 +356,15 @@ check("a run is handed a capped slice, not the whole list",
   JSON.stringify({ n: due.companies.length, total: due.total, batch: due.batch }));
 check("?all=1 returns the whole table, for seeding and for looking",
   all.companies.length === all.total && all.total === due.total);
-// The ordering contract the cap rests on: nothing already covered outranks
-// something never covered, and dates only ever go forwards down the list.
-const dates = all.companies.map((c) => c.last_swept);
-check("never-swept outranks swept, and older outranks newer",
-  dates.every((d, i) => i === 0 || d >= dates[i - 1]), JSON.stringify(dates.slice(0, 15)));
+// The ordering contract the cap rests on. It used to be about dates - nothing
+// covered outranking anything never covered - which is what made the same
+// alphabetical tail last every cycle. It is now about the log: positions are a
+// dense sequence, so the cursor reaches every company once before any twice.
+const positions = all.companies.map((c) => c.position);
+check("the log is a dense sequence, so the cursor cannot skip or repeat",
+  new Set(positions).size === positions.length &&
+  positions.every((p, i) => i === 0 || p > positions[i - 1]),
+  JSON.stringify(positions.slice(0, 15)));
 const today = "2026-09-01";
 await req("POST", "/api/coverage", { token: A_TOK, body: { search: "SWE", on: today,
   swept: due.companies.map((c) => ({ company: c.company })) } });
@@ -354,6 +372,116 @@ const next = (await req("GET", "/api/coverage/SWE", { token: A_TOK })).json.comp
 check("what a run covers goes to the back of the queue, not round again",
   next.every((c) => c.last_swept !== today),
   JSON.stringify(next.map((c) => `${c.company}:${c.last_swept}`).slice(0, 4)));
+
+console.log("\n== the rotation is a log with a cursor ==");
+// Selection used to be ORDER BY last_swept, company - which made one column
+// both record when a company was attempted and decide who went next. Both
+// rotation bugs came from the second job: a run asking for replacements got
+// back companies it had just covered, and the alphabetical tiebreak put the
+// same 31 of 55 companies last every cycle, so none of them were reached in
+// the rotation's first two days.
+await req("POST", "/api/users", { admin: true, body: { name: "Cursor", password: "cursor-long-password" } });
+const C_TOK = (await req("POST", "/api/login", { body: { name: "Cursor", password: "cursor-long-password" } })).json.token;
+// A per-run track: these rows persist, and re-running against the same
+// database would otherwise leave the cursor and the log length carrying over
+// from the last run, which is exactly what the assertions below are about.
+const rotN = 14, rotStamp = Date.now(), ROT = "ROT" + rotStamp;
+await req("POST", "/api/config", { token: C_TOK, body: { tracks: [{ key: ROT, label: "Rot" }] } });
+await req("POST", "/api/coverage", { token: C_TOK, body: { search: ROT, on: "",
+  swept: Array.from({ length: rotN }, (_, i) => ({ company: `Rot ${rotStamp}-${String(i).padStart(2, "0")}` })) } });
+
+// Seeding order must not become cycle order. A seeded list is written by a
+// person and is nearly always alphabetical, so assigning positions in arrival
+// order would rebuild exactly the bias migration 0008 removed.
+const seedOrder = (await req("GET", `/api/coverage/${ROT}?all=1`, { token: C_TOK })).json.companies;
+check("a seeded list is shuffled, not stored in the order it was posted",
+  seedOrder.map((c) => c.company).join() !==
+  Array.from({ length: rotN }, (_, i) => `Rot ${rotStamp}-${String(i).padStart(2, "0")}`).join(),
+  JSON.stringify(seedOrder.map((c) => c.company.split("-").pop()).join(",")));
+check("but every seeded company is present exactly once",
+  seedOrder.length === rotN && new Set(seedOrder.map((c) => c.position)).size === rotN);
+
+const c0 = (await req("GET", `/api/coverage/${ROT}`, { token: C_TOK })).json;
+check("seeding registers companies without moving the cursor",
+  c0.cursor === 0 && c0.total === rotN, JSON.stringify({ cursor: c0.cursor, total: c0.total }));
+const day = "2026-09-11";
+const rec1 = await req("POST", "/api/coverage", { token: C_TOK, body: { search: ROT, on: day,
+  swept: c0.companies.map((c) => ({ company: c.company })) } });
+check("recording a slice advances the cursor past it",
+  rec1.json.cursor === 12, JSON.stringify({ cursor: rec1.json.cursor }));
+
+// The replacement case, with no date filter anywhere.
+const c1 = (await req("GET", `/api/coverage/${ROT}`, { token: C_TOK })).json;
+check("reading again continues along the log instead of round again",
+  c1.companies.every((c) => !c0.companies.some((p) => p.company === c.company)) === false ||
+  c1.companies[0].company !== c0.companies[0].company,
+  JSON.stringify({ firstBefore: c0.companies[0].company, firstAfter: c1.companies[0].company }));
+check("and the two companies left in this cycle come first",
+  c1.companies.slice(0, 2).every((c) => !c0.companies.some((p) => p.company === c.company)),
+  JSON.stringify(c1.companies.slice(0, 3).map((c) => c.company)));
+
+// Wrapping: everything is reached once before anything is reached twice.
+await req("POST", "/api/coverage", { token: C_TOK, body: { search: ROT, on: day,
+  swept: c1.companies.slice(0, 2).map((c) => ({ company: c.company })) } });
+const c2 = (await req("GET", `/api/coverage/${ROT}`, { token: C_TOK })).json;
+// Wrapping happens at the read, not the write. The stored cursor is a
+// position and is left past the end of the log; the read then finds nothing at
+// or after it and starts again at the front. Wrapping on write instead meant
+// taking the cursor modulo the company *count* - a different quantity from a
+// position as soon as anything is excluded or a position is skipped.
+check("once past the end, the next slice starts again at the front of the log",
+  c2.companies[0].position === Math.min(...c2.companies.map((x) => x.position)) &&
+  c2.cursor > Math.max(...c2.companies.map((x) => x.position)),
+  JSON.stringify({ cursor: c2.cursor, firstServed: c2.companies[0].position }));
+check("and a full cycle reached every company before repeating any",
+  new Set(c0.companies.concat(c1.companies).map((x) => x.company)).size === rotN,
+  JSON.stringify({ reached: new Set(c0.companies.concat(c1.companies).map((x) => x.company)).size, of: rotN }));
+
+// Resilience: a run that dies before reporting must not skip its slice.
+const before = (await req("GET", `/api/coverage/${ROT}`, { token: C_TOK })).json;
+const again = (await req("GET", `/api/coverage/${ROT}`, { token: C_TOK })).json;
+check("reading never moves the cursor, so a run that dies re-reads its slice",
+  before.cursor === again.cursor &&
+  JSON.stringify(before.companies.map((c) => c.company)) === JSON.stringify(again.companies.map((c) => c.company)));
+
+// The cursor is a position, not an index into the filtered list. Those differ
+// the moment a company is excluded, and treating one as the other skipped a
+// company silently: with position 0 excluded, eligible[4] is position 5, so a
+// cursor of 4 stepped straight over position 4. Only shows up when an excluded
+// company sits before the cursor, which is why it survived the first round of
+// tests - they happened to exclude one that sat after it.
+const EX = ROT + "X";
+await req("POST", "/api/config", { token: C_TOK, body: {
+  tracks: [{ key: ROT, label: "Rot" }, { key: EX, label: "Ex" }], excluded_companies: [] } });
+await req("POST", "/api/coverage", { token: C_TOK, body: { search: EX, on: "",
+  swept: Array.from({ length: 10 }, (_, i) => ({ company: `Ex ${rotStamp}-${i}` })) } });
+const exLog = (await req("GET", `/api/coverage/${EX}?all=1`, { token: C_TOK })).json.companies;
+const victim = exLog.find((c) => c.position === 0).company;
+await req("POST", "/api/config", { token: C_TOK, body: { excluded_companies: [victim] } });
+const exSlice = (await req("GET", `/api/coverage/${EX}`, { token: C_TOK })).json.companies.slice(0, 3);
+await req("POST", "/api/coverage", { token: C_TOK, body: { search: EX, on: day,
+  swept: exSlice.map((c) => ({ company: c.company })) } });
+const exNext = (await req("GET", `/api/coverage/${EX}`, { token: C_TOK })).json.companies;
+const highestSwept = Math.max(...exSlice.map((c) => c.position));
+const shouldBeNext = exLog
+  .filter((c) => c.company !== victim && c.position > highestSwept)
+  .sort((a, b) => a.position - b.position)[0];
+check("an excluded company before the cursor does not cause a skip",
+  exNext[0].position === shouldBeNext.position,
+  JSON.stringify({ expected: shouldBeNext.position, actual: exNext[0].position, excludedAt: 0 }));
+await req("POST", "/api/config", { token: C_TOK, body: { excluded_companies: [] } });
+
+// Discovery appends rather than jumping the queue or landing behind the cursor.
+const found = `Rot ${rotStamp}-discovered`;
+await req("POST", "/api/coverage", { token: C_TOK, body: { search: ROT, on: day,
+  swept: [{ company: found }] } });
+const rotAll = (await req("GET", `/api/coverage/${ROT}?all=1`, { token: C_TOK })).json.companies;
+check("a company found by discovery appends to the end of the log",
+  rotAll[rotAll.length - 1].company === found && rotAll.length === rotN + 1,
+  JSON.stringify({ last: rotAll[rotAll.length - 1].company, total: rotAll.length }));
+check("positions stay dense and unique after an append",
+  new Set(rotAll.map((c) => c.position)).size === rotAll.length,
+  JSON.stringify(rotAll.map((c) => c.position).slice(-4)));
 
 console.log("\n== branched tracks ==");
 check("fed_by naming a track that isn't in the list is refused",

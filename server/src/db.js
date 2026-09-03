@@ -389,16 +389,62 @@ export class Db {
    * @param {string} search @param {number} [limit]
    * @returns {Promise<{company: string, last_swept: string, board: string, note: string}[]>}
    */
-  async getCoverage(search, limit = 0) {
+  /**
+   * The rotation in log order. Ordered by `position` - a fixed place per
+   * company, shuffled once and appended to since (see
+   * migrations/0008_sweep_cursor.sql) - never by date. Which slice a run gets
+   * is decided by the cursor, in routes/coverage.js.
+   *
+   * Returns the whole log; the caller windows it. Slicing in SQL would mean
+   * LIMIT-ing before excluded companies are filtered out, which is what would
+   * quietly hand a run a short batch.
+   * @param {string} search
+   * @returns {Promise<Array<{company: string, last_swept: string, board: string, note: string, position: number}>>}
+   */
+  async getCoverage(search) {
     const rows = await this.d1
       .prepare(
-        `SELECT company, last_swept, board, note FROM company_sweeps
-         WHERE user_id = ? AND search = ? ORDER BY last_swept, company` +
-          (limit > 0 ? " LIMIT ?" : "")
+        `SELECT company, last_swept, board, note, position FROM company_sweeps
+          WHERE user_id = ? AND search = ? ORDER BY position`
       )
-      .bind(...(limit > 0 ? [this.userId, search, limit] : [this.userId, search]))
+      .bind(this.userId, search)
       .all();
     return rows.results;
+  }
+
+  /** @param {string} key @returns {Promise<number>} how far along the log this search has read */
+  async getSweepCursor(key) {
+    const row = await this.d1
+      .prepare("SELECT sweep_cursor FROM tracks WHERE user_id = ? AND key = ?")
+      .bind(this.userId, key)
+      .first();
+    return (row && Number(row.sweep_cursor)) || 0;
+  }
+
+  /**
+   * Moves the cursor to just past the furthest company a run attempted, then
+   * wraps at the end of the log.
+   *
+   * Set rather than incremented, and from the positions actually reported: a
+   * run that covered fewer companies than it was handed must not advance the
+   * cursor past the ones it skipped, or they wait a whole cycle. Wrapping here
+   * rather than at read time keeps the stored value inside the log, so
+   * "position 24 of 55" is readable without knowing the rule.
+   * @param {string} key @param {number} next @param {number} total
+   */
+  async setSweepCursor(key, next) {
+    // Stored as given, with no wrap. It used to be taken modulo the company
+    // count, which is a different quantity from a position: gaps or excluded
+    // rows make count and highest-position disagree, and the wrap then landed
+    // somewhere arbitrary. Wrapping belongs at the read, where "nothing is at
+    // or after the cursor" means "start again at the front" and needs no
+    // arithmetic at all.
+    const value = Math.max(0, Math.floor(next));
+    await this.d1
+      .prepare("UPDATE tracks SET sweep_cursor = ? WHERE user_id = ? AND key = ?")
+      .bind(value, this.userId, key)
+      .run();
+    return value;
   }
 
   /** @param {string} search @returns {Promise<number>} how many companies this search tracks */
@@ -423,22 +469,31 @@ export class Db {
    * Registering must never look like a sweep: a seeded row has to sort ahead
    * of everything already covered, which is exactly what an empty date does.
    * @param {string} search
-   * @param {{company: string, board?: string, note?: string}[]} items
+   * @param {{company: string, board?: string, note?: string, position: number}[]} items
+   *   Each carries its own `position`, assigned by the caller: a company
+   *   already in the log keeps the one it has, a new one appends past the
+   *   highest. Discovery appends rather than inserting into the middle - a
+   *   company dropped in ahead of the cursor would not be seen for a whole
+   *   cycle, and one dropped in behind it would jump the queue.
    * @param {string} on - YYYY-MM-DD
    */
   async recordSweeps(search, items, on) {
     const stmt = this.d1.prepare(
-      `INSERT INTO company_sweeps (user_id, search, company, last_swept, board, note)
-       VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO company_sweeps (user_id, search, company, last_swept, board, note, position)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(user_id, search, company) DO UPDATE SET
          last_swept = CASE WHEN excluded.last_swept <> '' THEN excluded.last_swept ELSE company_sweeps.last_swept END,
          board = CASE WHEN excluded.board <> '' THEN excluded.board ELSE company_sweeps.board END,
          note = CASE WHEN excluded.note <> '' THEN excluded.note ELSE company_sweeps.note END`
+      // position is deliberately absent from the DO UPDATE: it is assigned
+      // once, when a company joins the log, and never moves. Re-sweeping a
+      // company must not shuffle it, or the cursor would step over companies
+      // it had already passed.
     );
     await this.d1.batch(
       items.map((i) =>
         stmt.bind(this.userId, search, i.company, on, typeof i.board === "string" ? i.board : "",
-          typeof i.note === "string" ? i.note : "")
+          typeof i.note === "string" ? i.note : "", Number.isFinite(i.position) ? i.position : 0)
       )
     );
     return items.length;

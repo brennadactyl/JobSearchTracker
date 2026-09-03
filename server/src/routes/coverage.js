@@ -22,7 +22,7 @@ import { excluderFor, isoDate, today, unknownTrack } from "../validate.js";
 export const COVERAGE_BATCH = 12;
 
 /**
- * GET /api/coverage/:key - requires a Bearer token ->
+ * GET /api/coverage/:key[?on=YYYY-MM-DD] - requires a Bearer token ->
  * `{ companies: [{company, last_swept, board, note}], total, batch }`.
  *
  * Which companies this run covers, chosen by the server. Least-recently-swept
@@ -51,16 +51,52 @@ export async function handleGetCoverage({ db, params, url }) {
   // Filtered rather than deleted: the row is the rotation's memory of when
   // that company was last looked at, the exclusion list is editable, and
   // reading is the wrong moment to destroy data.
-  const [companies, total] = await Promise.all([
-    db.getCoverage(key, 0),
-    db.countCoverage(key),
-  ]);
+  const [log, cursor] = await Promise.all([db.getCoverage(key), db.getSweepCursor(key)]);
   const isExcluded = await excluderFor(db);
-  const allowed = companies.filter((c) => !isExcluded(c.company));
-  // The cap is applied after filtering, so an excluded company can't eat a
-  // slot in the batch a run is told to cover.
-  const batch = all ? allowed.length : COVERAGE_BATCH;
-  return json({ companies: allowed.slice(0, batch), total: allowed.length, batch });
+  const eligible = log.filter((c) => !isExcluded(c.company));
+  if (all) {
+    return json({ companies: eligible, total: eligible.length, batch: eligible.length, cursor });
+  }
+
+  // Read forward from the cursor, wrapping at the end - the whole selection
+  // rule, with no date in it.
+  //
+  // Dates used to decide this (`ORDER BY last_swept, company`), which made the
+  // same column record when a company was attempted and choose who went next.
+  // Both rotation bugs came from the second job: a run asking for replacements
+  // got back companies it had just covered, and the alphabetical tiebreak put
+  // the same 31 companies last every cycle. Reading further along a fixed log
+  // is inherently fresh, so neither is expressible any more.
+  //
+  // Excluded companies are stepped over without consuming a slot. Filtering
+  // before the window rather than after is what stops a run being handed nine
+  // companies because three in its stretch of the log are excluded.
+  //
+  // The cursor is compared against `position`, never used as an array index. Those are not
+  // the same number the moment any company is excluded: with the company at
+  // position 0 excluded, eligible[4] is position 5, so treating the cursor as
+  // an index skipped position 4 entirely and silently. Positions are the unit
+  // the cursor is stored in, so they have to be the unit it is read in.
+  //
+  // Wrapping falls out of the concatenation: once the cursor passes the last
+  // position, nothing is at or after it and the whole slice comes from the
+  // front of the log.
+  const take = Math.min(COVERAGE_BATCH, eligible.length);
+  const companies = eligible
+    .filter((c) => c.position >= cursor)
+    .concat(eligible.filter((c) => c.position < cursor))
+    .slice(0, take);
+
+  return json({
+    companies,
+    total: eligible.length,
+    batch: take,
+    // Where this search has read up to, as a position rather than an index.
+    // Progress through the rotation is a number now rather than something
+    // inferred from dates - "24 of 55" is answerable, and so is "when does a
+    // given company come round".
+    cursor,
+  });
 }
 
 /**
@@ -105,6 +141,66 @@ export async function handleRecordSweeps({ request, db }) {
   const excluded = valid.length - allowed.length;
   if (allowed.length === 0) return json({ recorded: 0, excluded, on });
 
-  const recorded = await db.recordSweeps(key, allowed, on);
-  return json({ recorded, excluded, on });
+  // A company the log has never seen appends after the highest position, so
+  // discovery adds to the end rather than jumping the queue or landing behind
+  // the cursor where it would wait a full cycle to be seen.
+  const log = await db.getCoverage(key);
+  const known = new Map(log.map((c) => [c.company, c]));
+
+  // A position is assigned once, when a company joins the log, and only to
+  // companies that are actually new. Counting the batch instead - or seeding
+  // from the log's length rather than its highest position - leaves gaps where
+  // an already-known company was re-swept, and eventually two companies with
+  // the same position, at which point the cursor starts stepping over one of
+  // them.
+  let nextPos = log.length ? Math.max(...log.map((c) => c.position)) + 1 : 0;
+
+  // New companies take their places in a shuffled order, not the order they
+  // arrived in. Seeding a rotation means posting a list somebody wrote down,
+  // and a written list is almost always alphabetical or grouped by theme -
+  // which would make position, and therefore who is covered first every cycle
+  // and who is dropped when a run runs short, a function of the initial
+  // letter. That is the bias migration 0008 removed from the existing
+  // rotation; assigning in arrival order would rebuild it for the next person
+  // to set one up.
+  //
+  // Shuffled among themselves only - companies already in the log keep their
+  // place, so this never reorders a rotation that is partway through a cycle.
+  const fresh = allowed.filter((i) => !known.has(i.company));
+  for (let i = fresh.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [fresh[i], fresh[j]] = [fresh[j], fresh[i]];
+  }
+  const placement = new Map(fresh.map((i) => [i.company, nextPos++]));
+
+  const positioned = allowed.map((i) =>
+    known.has(i.company)
+      ? { ...i, position: known.get(i.company).position }
+      : { ...i, position: placement.get(i.company) }
+  );
+  const recorded = await db.recordSweeps(key, positioned, on);
+
+  // Advance the cursor past the furthest company actually reported, so the
+  // next read starts after it - including within the same run, which is what
+  // lets a run come back for replacements without a date filter.
+  //
+  // Committed only now, after the sweep is recorded. A run that dies before
+  // reporting leaves the cursor where it was and tomorrow re-reads the same
+  // stretch; it never advances past work nobody recorded.
+  //
+  // Seeding (`on: ""`) registers companies without claiming to have covered
+  // them, so it must not move the cursor.
+  let cursor = await db.getSweepCursor(key);
+  if (on !== "") {
+    const positions = allowed
+      .map((i) => known.get(i.company))
+      .filter(Boolean)
+      .map((c) => c.position);
+    // Only the ones already in the log have a meaningful position; a company
+    // discovered this run was appended past the cursor and is not something
+    // the rotation had reached.
+    if (positions.length) cursor = await db.setSweepCursor(key, Math.max(...positions) + 1);
+  }
+
+  return json({ recorded, excluded, on, cursor });
 }

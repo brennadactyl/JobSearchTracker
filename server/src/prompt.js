@@ -219,7 +219,7 @@ export function buildSearchPrompt({ user, track, settings, feeds, coverage }) {
   // remember to set - see migrations/0005_company_sweeps.sql.
   const rotates = Number(coverage) > 0;
   const coverageStep = rotates
-    ? `1c. Get this run's companies: \`curl -s "$TRACKER_URL/api/coverage/${key}" -H "Authorization: Bearer $TRACKER_API_TOKEN"\`. The server picks them - the least-recently-swept of the list, capped at what one run can actually verify - and returns \`{companies: [{company, last_swept, board, note}], total, batch}\`. **Cover exactly these, all of them**, and don't reach past them into the rest of the list in step 3: that list is longer than one run can do properly, and the failure mode isn't a company going uncovered for a day, it's every company being skimmed. They come back round - what you cover today sorts last tomorrow. \`board\` is a JSON endpoint already confirmed for that company (\`greenhouse\`, \`ashby\`, \`workday cxs\`, ...); it makes a company cheap to cover, not privileged - use it where it's there. Anything broader discovery turns up is covered as well, whether or not it is in this list.
+    ? `1c. Get this run's companies: \`curl -s "$TRACKER_URL/api/coverage/${key}" -H "Authorization: Bearer $TRACKER_API_TOKEN"\`. The server picks them, capped at what one run can actually verify, and returns \`{companies: [{company, last_swept, board, note, position}], total, batch, cursor}\`. The rotation is a fixed list with a cursor: you get the next \`batch\` from \`cursor\`, and \`cursor\` of \`total\` is how far through the cycle this search has read. **Cover exactly these, all of them**, and don't reach past them into the rest of the list in step 3: that list is longer than one run can do properly, and the failure mode isn't a company going uncovered for a day, it's every company being skimmed. They come back round - the cursor wraps, so everything is reached once per cycle before anything is reached twice. \`board\` is a JSON endpoint already confirmed for that company (\`greenhouse\`, \`ashby\`, \`workday cxs\`, ...); it makes a company cheap to cover, not privileged - use it where it's there. Anything broader discovery turns up is covered as well, whether or not it is in this list.
 `
     : "";
   const sweepStep = rotates
@@ -236,7 +236,43 @@ export function buildSearchPrompt({ user, track, settings, feeds, coverage }) {
    the list never gets searched at all. Record a company you attempted and
    *couldn't* fetch too, with the reason in \`note\` - the date tracks when a
    company was last attempted, not when it last worked, or a blocked domain
-   comes back to the front of the queue every single run. Send \`board\` whenever
+   comes back to the front of the queue every single run.
+
+9e. REPLACE THE COMPANIES YOU COULDN'T READ. Count the ones in tonight's slice
+   you got nothing usable out of - the domain refused the fetch, every job id
+   404'd, the board only filters client-side, the page was an empty JS shell,
+   or the doc's fetch-efficiency rule already had it down as a wall so you
+   skipped it without fetching. Not the ones you read fine that had nothing
+   matching: those are ordinary covered sweeps and by far the common case.
+
+   If that count is more than zero, **fetch step 1c again** - the same
+   \`GET /api/coverage/${key}\` call, unchanged - and cover that many companies
+   from what comes back. Then POST those with step 9d and repeat until nothing
+   in a slice was unreadable, or until you have spent the effort a run should.
+   This is a replacement for wasted work, not a licence to run all night.
+
+   The companies you get will be new ones. The rotation is a fixed list with a
+   cursor, and step 9d moved the cursor past everything you just reported, so
+   fetching again reads further along rather than round again. You do not have
+   to filter anything out or tell the call what day it is.
+
+   The order matters: record first, then fetch. The cursor only moves when a
+   sweep is recorded, so fetching first would hand you the same companies
+   again - and a run that died in between would have taken work nothing says
+   it attempted.
+
+   Why this is a second call rather than something step 9d hands back: reading
+   the list changes nothing and can be repeated safely, while recording a sweep
+   is the only thing that marks work as done. Keeping them apart means a run
+   that dies at any point has either recorded what it actually did or recorded
+   nothing, and never sits holding companies the rotation believes are covered.
+
+   The wall itself is not your decision here. Whether a domain is worth
+   retrying, and what workaround exists, is the doc's job - it holds the
+   URL-format fixes and ATS mirrors that a flag never could. Keep writing those
+   up in \`note\` and in step 8b.
+
+   Send \`board\` whenever
    you confirm one (\`greenhouse\`, \`ashby\`, \`lever\`, \`workday cxs\`, ...): that is
    what moves a company into the every-run tier. A company not already in the
    list is created by this call, so one that broader discovery turned up joins
