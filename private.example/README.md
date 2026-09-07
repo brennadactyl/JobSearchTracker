@@ -45,6 +45,13 @@ private/
     logs/                         created automatically by run-search.ps1
   <another-user-id>/
     ...
+  logs/                           created automatically by run-fill.ps1 -
+                                  applications.log, the nightly application
+                                  fill. One file for the machine, not one per
+                                  person, because that run isn't any one
+                                  person's: it covers every account above in a
+                                  single pass. Sits beside the user folders,
+                                  not inside one.
 ```
 
 `<key>` is a lowercase-hyphenated slug per track (e.g. `engineering`,

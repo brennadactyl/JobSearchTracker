@@ -446,7 +446,10 @@ waiting. It pulls every account's outstanding rows first, then fans the slow
 part out - one subagent per posting, reading pages in parallel - and makes the
 writes itself, one call per account with that account's own credential. The
 subagents get a URL and nothing else: no token, no account, no row id, so
-nothing they hand back can land on the wrong person's row.
+nothing they hand back can land on the wrong person's row. It runs at 06:30
+and writes `private\logs\applications.log` - one file for the machine, beside
+the per-person folders rather than inside one, and the only account of what it
+did, since unlike a search it records no run.
 
 **Headless runs use a scoped tool allowlist**, not full permission bypass -
 see `scripts/run-search.ps1`. If a search prompt ever needs a new capability,

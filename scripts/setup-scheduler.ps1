@@ -24,7 +24,10 @@
   under DataDir in a single CLI turn, fanning the posting-reading out to
   subagents - so adding an application is a paste rather than nine fields typed
   out by hand. Registered whether or not anyone has used it yet; a run with
-  nothing to read costs one API call per account. Its name carries no user id
+  nothing to read costs one API call per account. It runs at 06:30 daily - a
+  fixed slot rather than part of the searches' stagger, since it competes with
+  them for nothing - and logs to <DataDir>\logs\applications.log, one file for
+  the machine rather than one per person. Its name carries no user id
   because it belongs to no one person, which also keeps it clear of the
   per-person cleanup below.
 

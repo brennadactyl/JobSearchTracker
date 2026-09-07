@@ -47,7 +47,10 @@ tracks, leads, applications, page titles and location rules.
   looking a bearer token up to a user. The only file that touches either.
 - `src/db.js` - all D1 access for a person's own data. Every instance is
   bound to one user id at construction, so no query can forget to filter.
-- `src/prompt.js` - composes a track's daily search prompt from its config.
+- `src/prompt.js` - composes the two prompts the scheduled runs execute:
+  `buildSearchPrompt`, one track's daily search, from that track's config; and
+  `buildAutofillPrompt`, the nightly fill for applications logged as a bare
+  URL, which takes no arguments because it is the same text for everybody.
 - `verify-local.mjs` - the cross-user isolation checks, run against a local
   `wrangler dev`. `verify-migration.mjs` - what `0002` does to a database that
   already has data. See [Verifying](#verifying-a-change) below.
@@ -365,9 +368,11 @@ application id or track key simply doesn't resolve, and comes back as a 404.
 
 Logging an application by hand was nine fields copied off a posting open in
 the next tab. The tracker page now takes the URL alone, and a nightly run
-reads the posting and fills the rest in - one more scheduled task per person
-(`<prefix>Applications`, registered by `setup-scheduler.ps1`), running the
-reserved `_applications` prompt below.
+reads the posting and fills the rest in - **one task for the whole machine**,
+not one per person (`JobSearch-Applications`, running `scripts/run-fill.ps1`
+against the reserved `_applications` prompt below). It covers every account in
+a single CLI turn, pulling each one's outstanding rows and then fanning the
+reading out to a subagent per posting.
 
 **Almost none of this is visible on the tracker page, deliberately.** There is
 no per-row "waiting", no button to press and nothing to answer while it works.
@@ -454,10 +459,11 @@ lost them silently. Only the fields the app itself reads (`key`, `label`,
 
 There's no CI and no test suite, but there is one property worth checking
 before every deploy: **two people's data cannot reach each other.**
-`verify-local.mjs` is 40 checks of exactly that - one user trying to read and
-write another's leads, applications, tracks, runs and prompts by id, and
-getting a 404 each time - plus the auth behaviour around it (password reset,
-indistinguishable login failures, per-token revocation).
+`verify-local.mjs` is over 170 checks, most of them exactly that - one user
+trying to read and write another's leads, applications, tracks, runs, prompts
+and application-fill queue by id, and getting a 404 or an empty result each
+time - plus the auth behaviour around it (password reset, indistinguishable
+login failures, per-token revocation).
 
 ```bash
 cd server

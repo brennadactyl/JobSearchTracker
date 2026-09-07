@@ -128,7 +128,7 @@
   <header>
     <p class="eyebrow">System architecture</p>
     <h1>Job Search Tracker</h1>
-    <p>Headless searches run daily on a schedule, one per track you've configured, verify postings against real career pages, and sync new results to a small hosted webpage — with no AI-specific tooling anywhere past the search step itself.</p>
+    <p>Headless searches run daily on a schedule, one per track you've configured, verify postings against real career pages, and sync new results to a small hosted webpage — with no AI-specific tooling anywhere past the search step itself. One further daily task belongs to the machine rather than to any track: it reads the postings behind applications logged as nothing but a URL, and fills in what they say.</p>
   </header>
 
   <figure>
@@ -321,6 +321,7 @@
           <tr><td class="mono">/api/prompt/&lt;track&gt;</td><td class="mono">GET</td><td>the daily search prompt, composed from that track's config &mdash; what the scheduled runner fetches instead of reading a prompt file off one machine</td></tr>
           <tr><td class="mono">/api/applications/pending</td><td class="mono">GET</td><td>applications with a link and a gap in them, whose posting hasn't been read yet &mdash; two columns, for the same reason <code class="mono">/api/dedup</code> is small</td></tr>
           <tr><td class="mono">/api/applications/autofill</td><td class="mono">POST</td><td>what the nightly fill read off those postings, in whole or in part, and the ones it couldn't read at all; only ever writes into fields still empty, so what you typed yourself wins, and either way the row is flagged read so it isn't opened again</td></tr>
+          <tr><td class="mono">/api/applications/requeue</td><td class="mono">POST</td><td>clears the read flag on named rows so the fill looks at them again &mdash; not a retry and nothing calls it on a schedule; it is for when the reader itself improves and rows that failed under the old one never really had a first read</td></tr>
           <tr><td class="mono">/api/prompt/_applications</td><td class="mono">GET</td><td>the nightly fill's own prompt &mdash; a reserved key, not a track, and the one route whose body is the same for everybody: a single task covers every account, so the prompt takes the accounts from its runner rather than from who asked</td></tr>
         </tbody>
       </table>
