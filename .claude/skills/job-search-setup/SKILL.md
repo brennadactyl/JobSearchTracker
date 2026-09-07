@@ -410,6 +410,15 @@ a machine runs more than one person's searches, stagger across all of them:
 they share one CLI and one Claude account (the machine owner's), and each run
 takes several minutes.
 
+Everyone also gets one task that isn't a search: `<prefix>Applications`, the
+nightly fill for applications logged on the tracker page by pasting a job
+posting's URL and nothing else. It reads those postings and writes down the
+company, role and location. Registered for everyone whether or not they have
+used it - the queue is empty until someone pastes a URL, and a run against an
+empty queue stops immediately - so there is nothing to ask about or configure
+here. Worth mentioning to the person, though: it is the reason adding an
+application is a paste rather than nine fields typed out by hand.
+
 Re-run this step (the copy + `setup-scheduler.ps1`) any time after a plugin
 update, so the stable copy and the registered tasks stay current.
 

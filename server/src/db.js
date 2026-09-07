@@ -90,6 +90,8 @@
  * @property {string} dateOffer
  * @property {string} dateRejected
  * @property {string} dateWithdrawn
+ * @property {string} autofill - one of AUTOFILL_STATES: '' | 'pending' | 'filled' | 'failed'
+ * @property {string} autofill_note - why a 'failed' fill failed; '' otherwise
  */
 
 /**
@@ -254,16 +256,41 @@ function today() {
 // the two created a row is not something anyone would think to check.
 const APPLICATION_COLS = [
   "leadId", "company", "title", "location", "dateApplied", "status", "notes",
-  ...EXTRA_FIELDS, ...APP_STAGE_DATE_FIELDS,
+  ...EXTRA_FIELDS, ...APP_STAGE_DATE_FIELDS, "autofill", "autofill_note",
 ];
 
-// The two columns a new application doesn't default to '': it is applied-to
-// today unless the caller says otherwise, and its status is "Applied" unless
-// the caller is logging something it hasn't reached yet ("To Apply").
+// The queue state of an application's overnight fill - see
+// migrations/0009_application_autofill.sql for what each one means and why
+// 'failed' is terminal. Exported because routes/applications.js validates
+// against it and the client renders from it.
+export const AUTOFILL_STATES = ["", "pending", "filled", "failed"];
+
+// What a fill is allowed to write. Everything a job posting states plainly and
+// nothing else: the rest of an application's fields (referral, resume, source,
+// notes, the stage dates) are the person's own account of their search, which
+// no amount of reading the posting can tell you. Same three posting-stated
+// extras the search itself captures - see step 6b in prompt.js.
+export const AUTOFILL_FILL_FIELDS = ["company", "title", "location", "team", "setup", "comp"];
+
+// The three columns a new application doesn't default to '': it is applied-to
+// today unless the caller says otherwise, its status is "Applied" unless the
+// caller is logging something it hasn't reached yet ("To Apply"), and it
+// joins the overnight fill queue when it was created out of a URL and nothing
+// else.
+//
+// That last one is derived here rather than asked of the caller because it is
+// not a preference - it is a description of the row. "Has a link, has no
+// company and no title" is exactly what the tracker page's paste-a-URL box
+// creates and exactly what a run can do something about; the lead-to-
+// application path copies a company and title in, so it never matches, and a
+// caller that spells out its own `autofill` (the Try again route) still wins.
 function applicationValues(fields) {
+  const queued =
+    (fields.link || "").trim() && !(fields.company || "").trim() && !(fields.title || "").trim();
   return APPLICATION_COLS.map((f) => {
     if (f === "dateApplied") return fields.dateApplied || today();
     if (f === "status") return fields.status || "Applied";
+    if (f === "autofill") return fields.autofill || (queued ? "pending" : "");
     return fields[f] || "";
   });
 }
@@ -1337,6 +1364,119 @@ export class Db {
     const result = await this.d1
       .prepare(`UPDATE applications SET ${sets.join(", ")} WHERE id = ? AND user_id = ?`)
       .bind(...values, id, this.userId)
+      .run();
+    if (result.meta.changes === 0) return null;
+    return this.getApplication(id);
+  }
+
+  // --------------------------------------------- the overnight fill --
+
+  /**
+   * The fill queue: applications waiting for a run to read their link, as
+   * `{id, link}` and nothing else - the same deliberate narrowness as
+   * getDedupData, and for the same reason (this lands in a nightly run's
+   * context).
+   *
+   * The rule is exactly "someone asked, and there is a link to read", and
+   * deliberately says nothing about which fields are still blank. An earlier
+   * version also required company and title to be empty, so that a row the
+   * person got tired of waiting for and typed in themselves would leave the
+   * queue with nothing having to write to it. That is a nice property and it
+   * was wrong: requestAutofill (the page's Fill tonight, on a row that has a
+   * company but no role) then produced a row marked pending that this query
+   * could never return - reading as "waiting for the nightly fill" forever,
+   * with nothing able to resolve it. A wasted fetch on the rare row that was
+   * hand-filled in the meantime is the cheaper mistake, and applyAutofill
+   * drops what it can't write anyway.
+   *
+   * @returns {Promise<{id: number, link: string}[]>}
+   */
+  async getAutofillQueue() {
+    const { results } = await this.d1
+      .prepare(
+        `SELECT id, link FROM applications
+          WHERE user_id = ? AND autofill = 'pending' AND link != ''
+          ORDER BY id`
+      )
+      .bind(this.userId)
+      .all();
+    return results || [];
+  }
+
+  /**
+   * Writes what a run read off one posting, and marks the row filled.
+   *
+   * Only ever writes into a column that is still empty - same CASE-guarded
+   * shape as setApplicationStatus's date stamp, for a stronger version of the
+   * same reason. A day passes between the row being queued and the run
+   * reading it, and the person may well have filled half of it in by hand in
+   * the meantime; their typing is the better source and must not be
+   * overwritten by a machine's reading of a page.
+   *
+   * `AND autofill = 'pending'` is the other half of that: a row that has been
+   * dealt with, retried, or deleted since the queue was fetched matches
+   * nothing and comes back to the caller as unmatched rather than being
+   * silently stamped.
+   *
+   * @param {number|string} id
+   * @param {Partial<Application>} fields - only AUTOFILL_FILL_FIELDS are read
+   * @returns {Promise<Application|null>} null if the row is no longer pending
+   */
+  async applyAutofill(id, fields) {
+    const sets = ["autofill = 'filled'", "autofill_note = ''"];
+    const values = [];
+    for (const f of AUTOFILL_FILL_FIELDS) {
+      const value = typeof fields[f] === "string" ? fields[f].trim() : "";
+      if (!value) continue;
+      // Column names come from this file's own constant, never the body.
+      sets.push(`${f} = CASE WHEN ${f} = '' THEN ? ELSE ${f} END`);
+      values.push(value);
+    }
+    const result = await this.d1
+      .prepare(
+        `UPDATE applications SET ${sets.join(", ")}
+          WHERE id = ? AND user_id = ? AND autofill = 'pending'`
+      )
+      .bind(...values, id, this.userId)
+      .run();
+    if (result.meta.changes === 0) return null;
+    return this.getApplication(id);
+  }
+
+  /**
+   * Records that a run opened the link and couldn't read it. Terminal until
+   * the person asks again - see the migration for why a failed fill isn't
+   * retried on its own.
+   * @param {number|string} id
+   * @param {string} note - short, human-readable; shown on the row
+   * @returns {Promise<Application|null>} null if the row is no longer pending
+   */
+  async failAutofill(id, note) {
+    const result = await this.d1
+      .prepare(
+        `UPDATE applications SET autofill = 'failed', autofill_note = ?
+          WHERE id = ? AND user_id = ? AND autofill = 'pending'`
+      )
+      .bind(note, id, this.userId)
+      .run();
+    if (result.meta.changes === 0) return null;
+    return this.getApplication(id);
+  }
+
+  /**
+   * Puts one application (back) in the queue - the Try again button, and the
+   * way an application that was added by hand and later given a link gets
+   * filled in too.
+   * @param {number|string} id
+   * @returns {Promise<Application|null>} null if there's no such row
+   */
+  async requestAutofill(id) {
+    const result = await this.d1
+      .prepare(
+        `UPDATE applications SET autofill = 'pending', autofill_note = ''
+          WHERE id = ? AND user_id = ?`
+      )
+      .bind(id, this.userId)
       .run();
     if (result.meta.changes === 0) return null;
     return this.getApplication(id);

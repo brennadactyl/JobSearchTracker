@@ -409,6 +409,21 @@ job market. Tune the threshold with `stale_run_hours` via `/api/config` if a
 track is scheduled less often than daily - a weekly search left at 36 hours
 would warn nearly all week.
 
+**Logging an application takes a URL and nothing else.** The Applications tab
+is the one thing on the page no search writes to - it's the record of what you
+actually applied to - and keeping it up to date used to mean copying nine
+fields off a posting you had open in the next tab. Paste the posting's URL
+into the box on that tab instead: the row appears immediately saying "filling
+in overnight", and one more nightly task per person (`JobSearch-<you>-Applications`,
+registered by the same `setup-scheduler.ps1`) opens the posting and writes
+down the company, role, location, work setup and any posted comp range. It
+only ever writes into fields that are still empty, so anything you type in
+yourself in the meantime wins. A posting it can't read - taken down, login
+wall, a domain that blocks fetches - says so on the row with a Try again
+button rather than being retried silently every night forever. Nothing else
+about the tab changes: it is still yours alone, and a row only ever gets there
+because you put it there.
+
 **Headless runs use a scoped tool allowlist**, not full permission bypass -
 see `scripts/run-search.ps1`. If a search prompt ever needs a new capability,
 add it there deliberately rather than reaching for `--dangerously-skip-permissions`.

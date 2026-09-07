@@ -252,6 +252,93 @@ check("B cannot fetch A's prompt for a key B also has (gets B's own)",
 check("an unconfigured track key 404s",
   (await req("GET", "/api/prompt/NOPE", { token: A_TOK })).status === 404);
 
+console.log("\n== the overnight application fill ==");
+// Adding an application by pasting its URL, and the nightly run that reads
+// the posting and fills the rest in. The property worth checking hardest is
+// the same one as everywhere else here - one person's queue is invisible and
+// unwritable to another - plus the two rules that decide whether this is
+// trustworthy at all: a fill never overwrites what the person typed, and a
+// row only leaves the queue when something actually happened to it.
+const urlApp = (await req("POST", "/api/update", { token: A_TOK, body: {
+  type: "application", company: "", title: "", location: "", link: "https://example.com/jobs/9911",
+} })).json.application;
+check("an application created from a URL alone is queued for the fill",
+  urlApp.autofill === "pending" && urlApp.link === "https://example.com/jobs/9911",
+  JSON.stringify({ autofill: urlApp.autofill, link: urlApp.link }));
+check("an application created from a lead is not queued",
+  (await req("GET", "/api/data", { token: A_TOK })).json.applications
+    .find((x) => x.id === aApp.id).autofill === "");
+
+const aQueue = await req("GET", "/api/applications/pending", { token: A_TOK });
+check("the queue lists it, with the link and nothing else",
+  aQueue.json.applications.some((x) => x.id === urlApp.id && x.link === urlApp.link) &&
+  Object.keys(aQueue.json.applications[0]).sort().join() === "id,link",
+  JSON.stringify(aQueue.json.applications));
+check("B's queue can't see A's row",
+  !(await req("GET", "/api/applications/pending", { token: B_TOK }))
+    .json.applications.some((x) => x.id === urlApp.id));
+check("B cannot fill A's row",
+  (await req("POST", "/api/applications/autofill", { token: B_TOK, body: {
+    filled: [{ id: urlApp.id, company: "Pwned" }] } })).json.unmatched.length === 1);
+check("B cannot re-queue A's row",
+  (await req("POST", `/api/applications/${urlApp.id}/autofill`, { token: B_TOK })).status === 404);
+
+// A day passes, and the person fills the title in themselves before the run
+// gets to it. The run's reading of the page must not win that.
+await req("POST", "/api/update", { token: A_TOK, body: { type: "application", id: urlApp.id, title: "Staff Engineer" } });
+const fillRes = await req("POST", "/api/applications/autofill", { token: A_TOK, body: {
+  filled: [{ id: urlApp.id, company: "Initech", title: "SDE II", location: "Austin, TX", comp: "$1" }] } });
+check("the fill is accepted", fillRes.json.filled === 1 && fillRes.json.unmatched.length === 0,
+  JSON.stringify(fillRes.json));
+const filled = (await req("GET", "/api/data", { token: A_TOK })).json.applications.find((x) => x.id === urlApp.id);
+check("it wrote the fields that were empty",
+  filled.company === "Initech" && filled.location === "Austin, TX" && filled.comp === "$1",
+  JSON.stringify(filled));
+check("it did not overwrite the one the person had typed",
+  filled.title === "Staff Engineer", filled.title);
+check("a filled row is out of the queue",
+  !(await req("GET", "/api/applications/pending", { token: A_TOK }))
+    .json.applications.some((x) => x.id === urlApp.id));
+check("filling it twice does nothing the second time",
+  (await req("POST", "/api/applications/autofill", { token: A_TOK, body: {
+    filled: [{ id: urlApp.id, company: "Wrong" }] } })).json.unmatched.length === 1);
+
+const deadApp = (await req("POST", "/api/update", { token: A_TOK, body: {
+  type: "application", link: "https://example.com/jobs/gone" } })).json.application;
+const failRes = await req("POST", "/api/applications/autofill", { token: A_TOK, body: {
+  failed: [{ id: deadApp.id, reason: "posting has been taken down" }] } });
+check("a failed fill is recorded with its reason", failRes.json.failed === 1);
+const failed = (await req("GET", "/api/data", { token: A_TOK })).json.applications.find((x) => x.id === deadApp.id);
+check("the row says what went wrong and is out of the queue",
+  failed.autofill === "failed" && failed.autofill_note === "posting has been taken down" &&
+  !(await req("GET", "/api/applications/pending", { token: A_TOK }))
+    .json.applications.some((x) => x.id === deadApp.id),
+  JSON.stringify({ autofill: failed.autofill, note: failed.autofill_note }));
+check("Try again puts it back in the queue",
+  (await req("POST", `/api/applications/${deadApp.id}/autofill`, { token: A_TOK }))
+    .json.application.autofill === "pending" &&
+  (await req("GET", "/api/applications/pending", { token: A_TOK }))
+    .json.applications.some((x) => x.id === deadApp.id));
+// A row with no link would sit in the queue saying "waiting" with nothing
+// able to resolve it, so asking is refused rather than accepted and stranded.
+// (aApp isn't the fixture for this: an application created from a lead
+// carries the lead's url as its link, so it can be filled like any other.)
+const linkless = (await req("POST", "/api/update", { token: A_TOK, body: {
+  type: "application", company: "Typed in by hand" } })).json.application;
+check("a row created with no link is not queued in the first place",
+  linkless.autofill === "", linkless.autofill);
+check("and cannot be queued by hand either",
+  (await req("POST", `/api/applications/${linkless.id}/autofill`, { token: A_TOK })).status === 400);
+check("a fill carrying no usable fields is refused rather than marking the row done",
+  (await req("POST", "/api/applications/autofill", { token: A_TOK, body: {
+    filled: [{ id: deadApp.id, company: "  " }] } })).json.unmatched.length === 1);
+check("an empty report is a 400, not a silent no-op",
+  (await req("POST", "/api/applications/autofill", { token: A_TOK, body: {} })).status === 400);
+const fillPrompt = await req("GET", "/api/prompt/_applications", { token: A_TOK });
+check("the fill prompt is served as its own reserved key, not as a track",
+  fillPrompt.status === 200 && fillPrompt.text.includes("/api/applications/pending"),
+  fillPrompt.text.slice(0, 120));
+
 console.log("\n== dedup endpoint (what every scheduled run fetches) ==");
 const aDedup = await req("GET", "/api/dedup/SWE", { token: A_TOK });
 check("returns this track's leads as {id, url, status} and nothing else",

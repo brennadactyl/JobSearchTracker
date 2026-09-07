@@ -416,3 +416,119 @@ ${sweepStep}10. ${report}
 Never add an unverified link to any output.${footer}
 `;
 }
+
+/**
+ * The nightly fill for applications added as nothing but a URL.
+ *
+ * A second prompt in this file rather than a step bolted onto a track's
+ * search, because it is not a search: it has no companies, no fit rule, no
+ * geographic scope, and nothing it does depends on which track a person is
+ * running. Folding it into the track prompts would also mean every track
+ * running it - one queue, several runs racing to read the same postings.
+ *
+ * Served as the reserved key `_applications` under GET /api/prompt (see
+ * routes/index.js), so scripts/run-search.ps1 fetches and runs it exactly the
+ * way it runs a search, and setup-scheduler.ps1 registers it as one more daily
+ * task.
+ *
+ * ---- Why there is no run record for this one.
+ * Every search records itself to /api/runs because a search that finds nothing
+ * writes nothing, so a search that quietly stopped firing looks identical to a
+ * quiet night. That does not apply here: a fill that stops running leaves its
+ * rows sitting on the Applications tab saying "waiting for the nightly fill",
+ * with the date they were added next to them. The evidence is the queue
+ * itself, and it is in front of the person who is waiting for it.
+ *
+ * @param {{user: {id: string, name: string}, settings: import("./db.js").Settings}} args
+ * @returns {string} the full prompt text
+ */
+export function buildAutofillPrompt({ user, settings }) {
+  const name = user.name;
+  const pn = PRONOUNS[(settings && settings.pronouns) || ""] || PRONOUNS["they/them"];
+
+  return `# Scheduled task: fill in applications added by URL
+# Schedule: nightly (headless, via Windows Task Scheduler + scripts\\run-search.ps1)
+# ---------------------------------------------------------------------------
+
+${name} logs an application by pasting the job posting's URL and nothing else.
+Your whole job is to open those postings and write down what they say, so that
+nobody has to copy company, title and location off a page by hand. You are not
+searching for anything tonight, and you are not judging whether any of these
+are a good fit - ${name} has already applied to every one of them.
+
+Do the following:
+
+1. GET THE QUEUE.
+
+   \`\`\`
+   curl -s "$TRACKER_URL/api/applications/pending" -H "Authorization: Bearer $TRACKER_API_TOKEN"
+   \`\`\`
+
+   It returns \`{"applications":[{"id":123,"link":"https://..."}]}\` - every
+   application waiting to be filled in, with the URL to read and nothing else.
+   \`TRACKER_URL\` and \`TRACKER_API_TOKEN\` are environment variables; run the
+   curl as written and let the shell expand them rather than spending a step
+   checking whether they're set.
+
+   **An empty list is the normal answer, and it means you are done.** Say so in
+   one line and end the run. Don't call anything else, don't go looking for
+   applications another way, and don't treat it as a problem to investigate.
+
+2. OPEN EACH POSTING and read off, *only where the page states it plainly*:
+
+   - \`company\` - the employer's name as the posting gives it
+   - \`title\` - the role title
+   - \`location\` - as posted ("Seattle, WA", "Remote (U.S.)", "London, UK")
+   - \`team\` - the team or org named for the role, if it names one
+   - \`setup\` - the stated work arrangement ("Remote", "Hybrid - 3 days/week
+     onsite", "Onsite")
+   - \`comp\` - any posted compensation range ("$180,000-$230,000/yr")
+
+   **Never infer, complete or tidy up any of these.** Not the company from the
+   domain name, not the location from an office you know the company has, not a
+   title from the URL slug. This is ${name}'s record of a job ${pn.subj} really
+   applied to, and a plausible guess in it is worse than a blank field: a blank
+   field is visibly still to be filled in, while a wrong company reads as fact
+   forever. Omit a key entirely rather than sending an empty string or a
+   placeholder. If the page states none of them, that posting is a failure, not
+   a fill - see step 3.
+
+   Read the page itself. Don't web-search for the role to fill in what the
+   posting didn't say.
+
+3. REPORT WHAT YOU READ - one call for the whole night, not one per row:
+
+   \`\`\`
+   curl -s -X POST "$TRACKER_URL/api/applications/autofill" \\
+     -H "Authorization: Bearer $TRACKER_API_TOKEN" -H "Content-Type: application/json" \\
+     -d '{"filled":[{"id":123,"company":"...","title":"...","location":"...","team":"...","setup":"...","comp":"..."}],
+          "failed":[{"id":456,"reason":"posting has been taken down"}]}'
+   \`\`\`
+
+   \`id\` is the id from step 1, unchanged. Send both lists in the one call;
+   either may be omitted if it's empty.
+
+   **\`failed\` is for a posting you opened and genuinely could not read** - it
+   404s, it has been taken down or filled, it's behind a login wall, the domain
+   refuses the fetch, or the page renders nothing but a JS shell. Put a short,
+   specific reason in plain words: it is shown to ${name} on the row, next to a
+   Try again button, and it is what tells ${pn.obj} whether retrying is worth
+   it or the fields are quicker typed in. A failed row is **not** retried
+   automatically on later nights, so a posting you couldn't read tonight is one
+   you have handed back, not one you have postponed.
+
+   Nothing here overwrites anything. The tracker only writes into fields that
+   are still empty, so if ${name} filled some of them in during the day,
+   ${pn.poss} version stays and yours is dropped. Send what you read and don't
+   try to work out what is already there.
+
+   The response is \`{"filled":N,"failed":N,"unmatched":[id,...]}\`. An id in
+   \`unmatched\` means that row was dealt with or deleted between step 1 and
+   now - ordinary, and nothing to retry or work around.
+
+4. Report in a few lines: how many postings were in the queue, what you filled
+   in for each (company and title is enough), and every one you couldn't read
+   with the reason you sent. If the queue was empty, that one line is the whole
+   report - don't pad it.
+`;
+}

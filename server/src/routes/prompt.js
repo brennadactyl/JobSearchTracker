@@ -5,7 +5,7 @@
  */
 
 import { json, text } from "../http.js";
-import { buildSearchPrompt } from "../prompt.js";
+import { buildAutofillPrompt, buildSearchPrompt } from "../prompt.js";
 import { unknownTrack } from "../validate.js";
 
 /**
@@ -63,4 +63,24 @@ export async function handleGetPrompt({ db, user, params }) {
   const coverage = await db.countCoverage(key);
 
   return text(buildSearchPrompt({ user, track, settings: config.settings, feeds, coverage }));
+}
+
+/**
+ * GET /api/prompt/_applications - requires a Bearer token -> text/plain.
+ *
+ * The nightly fill for applications added as nothing but a URL. A reserved key
+ * rather than a track (see ./index.js for how it's kept out of the
+ * track pattern's way): it belongs to the person, not to any one search, and
+ * it is fetched and run exactly like a search prompt so scripts/run-search.ps1
+ * needed no special case for it.
+ *
+ * Composed unconditionally, including for someone whose queue is empty
+ * tonight - which is most nights. The prompt's first step is to fetch the
+ * queue and stop if it's empty, so an empty queue costs one API call rather
+ * than a refusal here; and a 409 for "nothing to do" would look exactly like
+ * the two real 409s next door, which mean a track is misconfigured.
+ */
+export async function handleGetAutofillPrompt({ db, user }) {
+  const { settings } = await db.getTracksAndSettings();
+  return text(buildAutofillPrompt({ user, settings }));
 }

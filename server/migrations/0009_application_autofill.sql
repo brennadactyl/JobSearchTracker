@@ -1,0 +1,34 @@
+-- Lets an application be added as nothing but a URL, and filled in overnight.
+--
+-- Adding an application by hand is nine empty fields, and the person filling
+-- them is copying every one of them off a posting they have open in the next
+-- tab. The URL is the only part of that they can't derive - so this makes the
+-- URL the whole of what they have to enter, and hands the copying to the same
+-- nightly Claude run that already opens and reads job postings for the search
+-- tabs (see src/prompt.js's buildAutofillPrompt, and the `_applications`
+-- reserved key in src/routes/index.js).
+--
+-- `autofill` is the queue state, and it is deliberately not a boolean:
+--
+--   ''        nothing asked for - every existing row, and every application
+--             created from a lead or filled in by hand
+--   'pending' waiting for a run to read the link
+--   'filled'  a run read it and wrote what it found
+--   'failed'  a run opened it and couldn't - `autofill_note` says why
+--
+-- 'failed' is terminal on purpose. The failures that actually happen here are
+-- the ones a retry doesn't fix - a posting already taken down, a login wall, a
+-- domain that refuses automated fetches - so a row that keeps its place in the
+-- queue would be fetched again every night forever, and the person would never
+-- be told the machine had given up. Instead the row says what went wrong and
+-- offers a Try again button (the tracker page's only writer of 'pending'
+-- besides creation), which is the right shape for the case a retry does fix:
+-- the site was down for an hour.
+--
+-- `autofill_note` is the reason, kept out of `notes` rather than appended to
+-- it. `notes` is the person's own field, written back wholesale by every edit
+-- on the page, so a run writing into it would race the textarea they may be
+-- typing in - and would put a machine's apology inside the one column that is
+-- theirs.
+ALTER TABLE applications ADD COLUMN autofill TEXT NOT NULL DEFAULT '';
+ALTER TABLE applications ADD COLUMN autofill_note TEXT NOT NULL DEFAULT '';

@@ -19,13 +19,19 @@
 
 import { handleGetMe, handleLogin, handleLogout, handleUpsertUser } from "./accounts.js";
 import { handlePurgeSearch } from "./admin.js";
-import { handleDeleteApplication, handleSetApplicationStatus } from "./applications.js";
+import {
+  handleDeleteApplication,
+  handleGetAutofillQueue,
+  handleReportAutofill,
+  handleRequestAutofill,
+  handleSetApplicationStatus,
+} from "./applications.js";
 import { handleGetConfig, handleSetConfig } from "./config.js";
 import { handleGetCoverage, handleRecordSweeps } from "./coverage.js";
 import { handleGetData } from "./data.js";
 import { handleDelistUrls, handleMarkVerified } from "./delisting.js";
 import { handleAddLeads, handleDeleteLeads, handleSetLeadStatus } from "./leads.js";
-import { handleGetPrompt } from "./prompt.js";
+import { handleGetAutofillPrompt, handleGetPrompt } from "./prompt.js";
 import { handleRecordRun } from "./runs.js";
 import { handleAddScreened, handleGetDedup } from "./screened.js";
 import { handleUpdate } from "./update.js";
@@ -77,9 +83,23 @@ export const SESSION_ROUTES = [
   ["POST", "/api/delist", handleDelistUrls],
   ["POST", /^\/api\/leads\/(\d+)\/status$/, handleSetLeadStatus],
   ["POST", /^\/api\/applications\/(\d+)\/status$/, handleSetApplicationStatus],
+  // The overnight fill of an application added as nothing but a URL: the
+  // queue, the run's report of what it read, and one row asked for again.
+  // `pending` can't collide with the id routes above and below - an id is
+  // \d+ - so this needs no ordering care, unlike the prompt pair.
+  ["GET", "/api/applications/pending", handleGetAutofillQueue],
+  ["POST", "/api/applications/autofill", handleReportAutofill],
+  ["POST", /^\/api\/applications\/(\d+)\/autofill$/, handleRequestAutofill],
   ["GET", /^\/api\/dedup\/([^/]+)$/, handleGetDedup],
   ["GET", /^\/api\/coverage\/([^/]+)$/, handleGetCoverage],
   ["POST", "/api/coverage", handleRecordSweeps],
+  // `_applications` is a reserved key under /api/prompt, not a track: it is
+  // the nightly fill's prompt, and it sits above the track route because
+  // matchRoute takes the first match and the pattern below would otherwise
+  // swallow it and 404 on a track nobody configured. The leading underscore
+  // is what keeps it out of the space installers actually name tracks in -
+  // run-search.ps1 fetches it like any other, as `-Task _applications`.
+  ["GET", "/api/prompt/_applications", handleGetAutofillPrompt],
   ["GET", /^\/api\/prompt\/([^/]+)$/, handleGetPrompt],
   ["POST", "/api/delete-application", handleDeleteApplication],
   ["POST", "/api/delete-leads", handleDeleteLeads],

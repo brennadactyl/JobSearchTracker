@@ -360,6 +360,21 @@ application id or track key simply doesn't resolve, and comes back as a 404.
 - `POST /api/leads/:id/status` - body `{ status }` - validates against `LEAD_STATUS`; if the new status is "Applied", atomically also creates the matching application row unless one already exists.
 - `POST /api/applications/:id/status` - body `{ status }` - validates against `APP_STATUS`; stamps the matching Stage history date if that column is still empty.
 - `POST /api/delete-application` - body `{ "id": ... }` - removes one application row.
+
+#### Applications added as nothing but a URL
+
+Logging an application by hand was nine fields copied off a posting open in
+the next tab. The tracker page now takes the URL alone, and a nightly run
+reads the posting and fills the rest in - one more scheduled task per person
+(`<prefix>Applications`, registered by `setup-scheduler.ps1`), running the
+reserved `_applications` prompt below. Queue state lives in `applications.autofill`:
+`''` (nothing asked), `pending`, `filled`, `failed` - see
+`migrations/0009_application_autofill.sql`.
+
+- `GET /api/applications/pending` -> `{ applications: [{id, link}] }` - the fill queue. Two columns, for the same reason `/api/dedup/:key` is narrow: it lands in a headless run's context every night. A row qualifies on `pending` and having a link, and on nothing else - not on which fields are still blank, which would let the route below queue a row this one could never return, leaving it reading as "waiting" forever. An empty list is the ordinary answer and means "stop", not "something is wrong".
+- `POST /api/applications/autofill` - body `{ filled: [{id, company, title, location, team, setup, comp}], failed: [{id, reason}] }` -> `{ filled, failed, unmatched: [id] }`. One call for the whole night, the shape `/api/verified` and `/api/delist` take. **A fill only ever writes into a column that is still empty** - a day passes between queueing and reading, and the person's own typing must win over a machine's reading of a page. Only rows still `pending` move, so an id in `unmatched` means that row was dealt with or deleted in between: ordinary, and nothing to retry. A `filled` entry carrying no usable field is refused into `unmatched` rather than marking the row done - an unreadable posting belongs in `failed`. `failed` is terminal (`autofill_note` holds the reason, shown on the row): the failures that happen here - taken down, login wall, blocked domain - are the ones a retry doesn't fix, so a row that kept its place would be re-fetched every night forever and never say so.
+- `POST /api/applications/:id/autofill` - no body -> `{ application }` - puts one row (back) in the queue: the page's Try again on a failed fill, and how an application added by hand and given a link afterwards gets read too. 400s for a row with no link, which would otherwise sit in the queue reading as "waiting" with nothing able to resolve it.
+- `GET /api/prompt/_applications` -> **`text/plain`** - that nightly run's prompt (`src/prompt.js`'s `buildAutofillPrompt`). A reserved key under `/api/prompt`, not a track: it belongs to the person rather than to any one search, and being served here is what let `run-search.ps1` run it with no special case (`-Task _applications`). Underscore-first so it can't collide with a track key someone actually chose; the route sits above the track pattern in `src/routes/index.js` for the same reason. **It records no run**, unlike every search - a fill that stops running leaves its rows visibly saying "waiting" on the Applications tab with the date beside them, so the queue is its own evidence.
 - `POST /api/delete-leads` - body `{ "ids": [...], "reason": "..." }` ->
   `{ removed, kept, unmatched, reason }`. Postings the person has decided
   against. Each lead is deleted and its URL written to `screened` with the

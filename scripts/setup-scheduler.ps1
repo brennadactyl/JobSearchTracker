@@ -18,6 +18,14 @@
   second, near-identical search of the same job boards, which is the thing the
   arrangement exists to avoid.
 
+  Everyone also gets one task that isn't a search: "<prefix>Applications", the
+  nightly fill for applications logged as nothing but a URL. It reads the
+  postings behind them and writes down the company, role and location, so
+  adding an application is a paste rather than nine fields typed out by hand.
+  Registered whether or not that person has used it yet - the queue is empty
+  until someone pastes a URL, and a run against an empty queue stops
+  immediately.
+
   Safe to re-run: existing tasks for a still-present track are replaced in
   place; tasks left over from a track that no longer exists are unregistered.
   **Cleanup is scoped to the people this run actually processed** - a machine
@@ -65,6 +73,60 @@ function ConvertTo-TaskSuffix([string]$key) {
     ($key -split "[-_ ]" | Where-Object { $_ } | ForEach-Object {
         $_.Substring(0, 1).ToUpper() + $_.Substring(1)
     }) -join ""
+}
+
+# Registers one daily task and applies the power settings that decide whether
+# it runs overnight at all. Two callers - a track's search, and the nightly
+# application fill - and the second one is why this is a function: the
+# settings block below is the difference between a task that runs while the
+# machine sleeps and one that silently doesn't, and a copy of it is a copy
+# that can be missed off.
+#
+# Reads $runScript and $DataDir from the script scope rather than taking them
+# as parameters: they are fixed for the whole run, and threading them through
+# each call site would say nothing the caller doesn't already know.
+#
+# Returns $true if the task was registered, $false if it wasn't.
+function Register-JobSearchTask([string]$Name, [string]$TaskKey, [string]$UserId, [string]$Time) {
+    $userArg = if ($UserId) { " -User $UserId" } else { "" }
+    $action = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$runScript`" -Task $TaskKey$userArg -DataDir `"$DataDir`""
+    # /TR has a 261-character limit and native exes don't trip
+    # ErrorActionPreference, so a too-long path (or any other failure)
+    # would otherwise print the same cheerful line as a success and leave
+    # a track silently unscheduled.
+    schtasks /Create /TN $Name /TR $action /SC DAILY /ST $Time /F | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "  FAILED to register $Name (schtasks exit $LASTEXITCODE). Action string is $($action.Length) chars; /TR's limit is 261."
+        return $false
+    }
+
+    # schtasks creates the task but cannot say how it behaves around power:
+    # it has no flag for waking the machine or for catching up a missed run,
+    # and it defaults "don't start if on batteries" to ON. A task registered
+    # by it alone therefore does nothing at all on any night the machine is
+    # asleep - and says nothing about it afterwards.
+    #
+    # That is not hypothetical. On 2026-09-07 all three searches silently
+    # missed their 01:00, 02:00 and 02:30 slots: the machine slept from
+    # 23:16 to 03:14, nothing woke it, and nothing re-ran them once it did.
+    # The backup task, registered through the cmdlets with exactly the
+    # settings below, woke the machine at 03:14:36 for its own 03:15 slot
+    # and ran normally - same machine, same user, same night. The settings
+    # were the only difference.
+    #
+    # Applied after creation rather than by switching to Register-ScheduledTask
+    # wholesale, so the /TR length check above keeps working - the cmdlets
+    # have no equivalent limit to check for.
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun `
+        -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+        -ExecutionTimeLimit (New-TimeSpan -Hours 2) -MultipleInstances IgnoreNew
+    try {
+        Set-ScheduledTask -TaskName $Name -Settings $settings -ErrorAction Stop | Out-Null
+    } catch {
+        Write-Warning ("  $Name was registered but its wake/catch-up settings did not apply: {0}" -f $_.Exception.Message)
+        Write-Warning "  It will not wake a sleeping machine, and will not re-run a slot it misses."
+    }
+    return $true
 }
 
 Write-Host "== Checking prerequisites ==" -ForegroundColor Cyan
@@ -143,6 +205,11 @@ $registered = @()
 # both landing on 08:00 is the collision this is here to avoid.
 $auto = [datetime]"08:00"
 
+# When each person's application fill runs. Early enough that a URL pasted
+# yesterday is filled in before they next look at the tracker, and deliberately
+# off the stagger the searches use so it doesn't drift as tracks are added.
+$FILL_TIME = "06:30"
+
 foreach ($person in $people) {
     $label = if ($person.Id) { $person.Id } else { "single-user" }
     try {
@@ -190,47 +257,36 @@ foreach ($person in $people) {
             Write-Warning "  $($track.key) collides with an already-registered task name ($name) - skipped. Rename one of the track keys."
             continue
         }
-        $userArg = if ($person.Id) { " -User $($person.Id)" } else { "" }
-        $action = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$runScript`" -Task $($track.key)$userArg -DataDir `"$DataDir`""
-        # /TR has a 261-character limit and native exes don't trip
-        # ErrorActionPreference, so a too-long path (or any other failure)
-        # would otherwise print the same cheerful line as a success and leave
-        # a track silently unscheduled.
-        schtasks /Create /TN $name /TR $action /SC DAILY /ST $time /F | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warning "  FAILED to register $name (schtasks exit $LASTEXITCODE). Action string is $($action.Length) chars; /TR's limit is 261."
-            continue
-        }
-
-        # schtasks creates the task but cannot say how it behaves around power:
-        # it has no flag for waking the machine or for catching up a missed run,
-        # and it defaults "don't start if on batteries" to ON. A task registered
-        # by it alone therefore does nothing at all on any night the machine is
-        # asleep - and says nothing about it afterwards.
-        #
-        # That is not hypothetical. On 2026-09-07 all three searches silently
-        # missed their 01:00, 02:00 and 02:30 slots: the machine slept from
-        # 23:16 to 03:14, nothing woke it, and nothing re-ran them once it did.
-        # The backup task, registered through the cmdlets with exactly the
-        # settings below, woke the machine at 03:14:36 for its own 03:15 slot
-        # and ran normally - same machine, same user, same night. The settings
-        # were the only difference.
-        #
-        # Applied after creation rather than by switching to Register-ScheduledTask
-        # wholesale, so the /TR length check above keeps working - the cmdlets
-        # have no equivalent limit to check for.
-        $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun `
-            -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-            -ExecutionTimeLimit (New-TimeSpan -Hours 2) -MultipleInstances IgnoreNew
-        try {
-            Set-ScheduledTask -TaskName $name -Settings $settings -ErrorAction Stop | Out-Null
-        } catch {
-            Write-Warning ("  $name was registered but its wake/catch-up settings did not apply: {0}" -f $_.Exception.Message)
-            Write-Warning "  It will not wake a sleeping machine, and will not re-run a slot it misses."
-        }
+        if (-not (Register-JobSearchTask -Name $name -TaskKey $track.key -UserId $person.Id -Time $time)) { continue }
 
         Write-Host "  $name - daily at $time ($label / $($track.key))"
         $registered += $name
+    }
+
+    # One more task per person, and it is not a track: the nightly fill for
+    # applications added as nothing but a URL. It fetches the reserved
+    # `_applications` prompt (see ../server/src/routes/index.js) exactly the
+    # way a search fetches its track's, which is why run-search.ps1 needed no
+    # special case for it.
+    #
+    # Registered for everyone rather than only for people who have used the
+    # paste-a-URL box, because there is nothing to detect in advance: the
+    # queue is empty until someone pastes a URL, and a run against an empty
+    # queue is one API call and an immediate stop. Registering it lazily would
+    # mean the day someone first used the box is the day nothing happened
+    # overnight.
+    #
+    # $FILL_TIME rather than a slot from the stagger: it is not a search, it
+    # does not compete with the searches for job boards, and a fixed
+    # early-morning time is what makes "filled in overnight" true for anything
+    # pasted the day before.
+    $fillName = $prefix + "Applications"
+    if ($registered -contains $fillName) {
+        Write-Warning "  the nightly application fill collides with a task already registered for $label ($fillName) - skipped."
+        Write-Warning "  Rename the track whose key reads as 'applications'; the fill has no other name to fall back on."
+    } elseif (Register-JobSearchTask -Name $fillName -TaskKey "_applications" -UserId $person.Id -Time $FILL_TIME) {
+        Write-Host "  $fillName - daily at $FILL_TIME ($label / applications added by URL)"
+        $registered += $fillName
     }
 }
 

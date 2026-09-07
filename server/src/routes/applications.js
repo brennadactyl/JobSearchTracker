@@ -6,6 +6,7 @@
  * keeping it (see ./leads.js's handleDeleteLeads and ./delisting.js).
  */
 
+import { AUTOFILL_FILL_FIELDS } from "../db.js";
 import { json, readJson } from "../http.js";
 import { isoDate } from "../validate.js";
 
@@ -95,3 +96,106 @@ export async function handleDeleteApplication({ request, db }) {
   return json({ ok: true });
 }
 
+// ------------------------------------------------- the overnight fill --
+//
+// Adding an application used to mean typing out nine fields off a posting the
+// person had open in another tab. Now the URL is the whole of it: the row is
+// created with a link and nothing else, and the nightly run that already
+// opens and reads postings for the search tabs reads this one too and fills
+// in what it says. See migrations/0009_application_autofill.sql for the queue
+// states, and prompt.js's buildAutofillPrompt for what the run is told.
+
+/** Longest `reason` accepted on a failed fill. It's a line on a row, not a report. */
+const MAX_REASON = 200;
+
+/**
+ * GET /api/applications/pending - requires a Bearer token ->
+ * `{ applications: [{id, link}] }`.
+ *
+ * What the nightly fill run fetches. Two columns, because that is all it can
+ * act on, and because this lands in a headless run's context every night -
+ * the same reasoning as /api/dedup/:key. An empty list is the ordinary answer
+ * on most nights and means "stop here", not "something is wrong".
+ */
+export async function handleGetAutofillQueue({ db }) {
+  return json({ applications: await db.getAutofillQueue() });
+}
+
+/**
+ * POST /api/applications/autofill - requires a Bearer token. Body
+ * `{ filled: [{id, company, title, location, team, setup, comp}],
+ *    failed: [{id, reason}] }` -> `{ filled, failed, unmatched: [id] }`.
+ *
+ * One call for the whole night's work rather than one per row - the same
+ * shape /api/verified and /api/delist take, for the same reason: a run asked
+ * to make thirty calls makes twenty-nine of them and stops.
+ *
+ * A row only moves if it is still pending, so an id in `unmatched` means the
+ * person got there first (or deleted the row) between the queue being fetched
+ * and this call. That is not an error and there is nothing to retry - it is
+ * reported so a run can say plainly what did and didn't land.
+ */
+export async function handleReportAutofill({ request, db }) {
+  const body = await readJson(request);
+  if (body instanceof Response) return body;
+
+  const filled = Array.isArray(body.filled) ? body.filled : [];
+  const failed = Array.isArray(body.failed) ? body.failed : [];
+  if (filled.length === 0 && failed.length === 0) {
+    return json({ error: "no filled or failed rows provided" }, 400);
+  }
+
+  const unmatched = [];
+  let filledCount = 0;
+  let failedCount = 0;
+
+  for (const row of filled) {
+    if (!row || !row.id) continue;
+    // A row with nothing usable in it is a posting that couldn't be read, not
+    // a fill. Marking it 'filled' would take it out of the queue and tell the
+    // person it had been dealt with, so it is refused here and reported back -
+    // the run's own `failed` list is where an unreadable posting belongs.
+    const anything = AUTOFILL_FILL_FIELDS.some((f) => typeof row[f] === "string" && row[f].trim());
+    if (!anything) {
+      unmatched.push(row.id);
+      continue;
+    }
+    if (await db.applyAutofill(row.id, row)) filledCount++;
+    else unmatched.push(row.id);
+  }
+
+  for (const row of failed) {
+    if (!row || !row.id) continue;
+    const reason = String(row.reason || "").trim() || "couldn't read the posting";
+    if (await db.failAutofill(row.id, reason.slice(0, MAX_REASON))) failedCount++;
+    else unmatched.push(row.id);
+  }
+
+  // Only a fill changes anything anyone looks at; a failure writes a line on a
+  // row that was already sitting there waiting, and shouldn't bump the page's
+  // "last updated" banner into claiming the search found something.
+  if (filledCount > 0) await db.touchUpdated();
+  return json({ filled: filledCount, failed: failedCount, unmatched });
+}
+
+/**
+ * POST /api/applications/:id/autofill - requires a Bearer token, no body ->
+ * `{ application }`.
+ *
+ * Queues one application for the next fill run: the tracker page's Try again
+ * on a fill that failed, and how an application added by hand and given a
+ * link afterwards gets read too.
+ *
+ * Refused for a row with no link - there would be nothing for a run to open,
+ * and the row would sit in the queue reading as "waiting" forever with
+ * nothing able to resolve it.
+ */
+export async function handleRequestAutofill({ db, params }) {
+  const id = params[0];
+  const application = await db.getApplication(id);
+  if (!application) return json({ error: "application not found" }, 404);
+  if (!String(application.link || "").trim()) {
+    return json({ error: "this application has no link to read - add one first" }, 400);
+  }
+  return json({ application: await db.requestAutofill(id) });
+}
