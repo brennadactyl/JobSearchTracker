@@ -556,15 +556,49 @@ Do the following, for each account in turn:
    > Read the page itself. Don't web-search for the role to fill in what the
    > posting didn't say.
    >
-   > If you cannot read it - it 404s, the posting has been taken down or
-   > filled, it is behind a login wall, the domain refuses the fetch, the page
-   > renders nothing but a JS shell - return \`{"failed":"<short, specific
-   > reason in plain words>"}\` instead. **That sentence is shown to the person
-   > whose application it is**, next to a row that will now stay blank until
-   > they fill it in themselves, so write it for them: say what you actually
-   > hit. Not being able to check is not the same as the posting being gone,
-   > and they need to know which it was - one means the details are gone, the
-   > other means the page is sitting there and only you couldn't have it.
+   > **A body that needs JavaScript is not an unreadable page.** Modern job
+   > boards render the description client-side but still ship the facts in the
+   > HTML you already have, and that is the page stating them, not you guessing:
+   >
+   > - a \`JobPosting\` block in \`<script type="application/ld+json">\` -
+   >   \`title\`, \`hiringOrganization\`, \`jobLocation\` / \`locationName\`,
+   >   \`employmentType\`, \`baseSalary\`. Check for this first on any board that
+   >   looks empty; Ashby, Greenhouse, Lever and Workday all emit one.
+   > - \`og:title\` / \`og:description\` meta tags.
+   > - the \`<title>\` tag, which on these boards is usually
+   >   "Role Title @ Company" or "Role Title - Company".
+   >
+   > A \`<title>\` that names no role - "Careers", "Jobs at Acme", "Job Board" -
+   > states nothing; don't read a role out of it. But one that plainly gives
+   > the role and the employer has given you \`title\` and \`company\`.
+   >
+   > **A closed posting is still a posting.** "This job has been closed", "no
+   > longer accepting applications", an expired-listing banner - if the page
+   > still says what the role was, report it exactly as you would a live one.
+   > Whether the listing outlived the application is beside the point here:
+   > this is the record of a job somebody already applied to, not a check on
+   > whether it is still open. Say it was closed in \`note\`, and fill in
+   > everything the page still states. Only a closed page that has stopped
+   > showing the details is a \`failed\`.
+   >
+   > **Partial is wanted.** Return every key you could establish, whatever you
+   > could not - two fields beat none, and a field the person doesn't have to
+   > type is worth having on its own. When you got some of it but not all,
+   > add a \`"note"\` key saying in one short sentence what you couldn't read
+   > and why, alongside the fields: e.g.
+   > \`{"company":"...","title":"...","note":"the description needs JavaScript,
+   > so only the page metadata was readable - no location or pay stated there"}\`.
+   >
+   > Use \`{"failed":"<short, specific reason in plain words>"}\` **only when you
+   > established nothing at all** - it 404s, the posting has been taken down or
+   > filled, it is behind a login wall or a CAPTCHA, the domain refused the
+   > fetch, or the HTML carried no metadata either.
+   >
+   > **\`note\` and \`failed\` are both shown to the person whose application it
+   > is**, on that row, so write them for them: say what you actually hit. Not
+   > being able to check is not the same as the posting being gone, and they
+   > need to know which it was - one means the details are gone, the other
+   > means the page is sitting there and only you couldn't have it.
 
    Do not give a subagent a token, an account, an id, or anything to POST.
    They read one page and hand back what it said; every write in this run is
@@ -590,18 +624,24 @@ Do the following, for each account in turn:
    Pair each subagent's answer back up with the account and \`id\` you dispatched
    it for, and send each account's rows with that account's token. \`id\` is the
    id from that account's step 1, unchanged. Send both lists in the one call;
-   either may be omitted if it's empty.
+   either may be omitted if it's empty. A \`filled\` row may carry a \`"note"\`
+   alongside its fields - pass through whatever \`note\` the subagent returned,
+   unchanged.
 
-   **A subagent's fields go in \`filled\`; a subagent that came back with
-   \`failed\` goes in \`failed\`, with its reason.** Pass the reason through as it
-   wrote it rather than summarising it. Nothing retries the row - reporting a
-   posting as failed is how you say "this one is done, leave it alone" - and
-   **the reason is shown to the person on that row**, as the one thing this
-   whole job ever says on their page. It is what they read to decide what to do
-   about a row that is going to stay blank, so it has to be specific and true:
-   "the posting has been taken down" and "the domain blocks automated fetches"
-   ask completely different things of them. A vague reason is worse than none,
-   and a wrong one sends them looking for a page that is fine.
+   **Anything a subagent established goes in \`filled\`, even one field.** Only a
+   subagent that came back with \`failed\` - nothing established at all - goes in
+   \`failed\`. A partial read is a result, not a failure: every field there is one
+   the person doesn't have to type.
+
+   Pass \`note\` and \`failed\` reasons through as the subagent wrote them rather
+   than summarising, because **both are shown to the person on that row** -
+   they are the only thing this whole job ever says on their page. A note
+   explains why a filled-in row is still missing something; a \`failed\` reason
+   explains why a row is blank and going to stay that way, since nothing
+   retries it. Both have to be specific and true: "the posting has been taken
+   down" and "the domain blocks automated fetches" ask completely different
+   things of the reader. A vague one is worse than none, and a wrong one sends
+   them looking for a page that is fine.
 
    Report every id every account gave you, in one list or the other. An id you
    report in neither comes back tomorrow night and every night after, which is

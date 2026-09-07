@@ -425,13 +425,18 @@ the page doesn't show records that it has been - so nothing is read twice, and
 a row that filled in just looks like a row you typed. The run only ever writes
 into fields that are still empty, so anything you fill in yourself wins.
 
-**A posting it couldn't read says so on its row**, with the reason: taken
-down, a login wall, a domain that blocks automated fetches. That is the one
-thing this ever puts on the page, and it is there because that row is now
-yours to type in - nothing is coming for it, and without saying so it would
-look exactly like a row still waiting its turn. There is no retry button: a
-posting is read once, and the reason tells you whether the details are gone or
-the page is sitting right there for you to open. Nothing else about the tab
+**What it couldn't read says so on its row.** Either it got nothing at all -
+a login wall, a 404, a domain that blocks automated fetches - or it got part
+of the posting and not the rest, which is the ordinary outcome on a board that
+renders its description in the browser but still ships the role and employer
+in the page's metadata. A closed listing that still names the role is filled
+in too: this is the record of what you applied to, not a check on whether the
+listing outlived it. Either way the row says what happened, in the run's own
+words, because that row is the one with something still to do on it - nothing
+is coming for it, and without saying so it would look exactly like a row still
+waiting its turn. There is no retry button: a posting is read once, and the
+note tells you whether the details are gone or the page is sitting right there
+for you to open. Nothing else about the tab
 changes: it is still yours alone, and a row only ever gets there because you
 put it there.
 

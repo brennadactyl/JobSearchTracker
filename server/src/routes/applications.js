@@ -111,7 +111,7 @@ export async function handleDeleteApplication({ request, db }) {
 // getAutofillQueue for which rows qualify, and prompt.js's buildAutofillPrompt
 // for what the run is told.
 
-/** Longest `reason` accepted on a failed read. It's a line on a row, not a report. */
+/** Longest `reason` or `note` accepted. It's a line on a row, not a report. */
 const MAX_REASON = 200;
 
 /**
@@ -134,7 +134,7 @@ export async function handleGetAutofillQueue({ db }) {
 
 /**
  * POST /api/applications/autofill - requires a Bearer token. Body
- * `{ filled: [{id, company, title, location, team, setup, comp}],
+ * `{ filled: [{id, company, title, location, team, setup, comp, note?}],
  *    failed: [{id, reason}] }` -> `{ filled, failed, unmatched: [id] }`.
  *
  * One call for the whole night's work rather than one per row - the same
@@ -145,6 +145,13 @@ export async function handleGetAutofillQueue({ db }) {
  * it was deleted, or already reported, between the queue being fetched and
  * this call. That is not an error and there is nothing to retry - it is
  * reported so a run can say plainly what did and didn't land.
+ *
+ * A `filled` row may carry a `note`: some of the posting was readable and the
+ * rest wasn't, which is the ordinary outcome on a board that renders its
+ * description client-side but ships the role and employer in its metadata.
+ * That belongs in `filled` rather than `failed` - the fields are real - and
+ * the note says why the row is still short. Both it and a `failed` reason are
+ * shown on the row.
  */
 export async function handleReportAutofill({ request, db }) {
   const body = await readJson(request);
@@ -162,7 +169,11 @@ export async function handleReportAutofill({ request, db }) {
 
   for (const row of filled) {
     if (!row || !row.id) continue;
-    if (await db.applyAutofill(row.id, row)) filledCount++;
+    // `note` is the partial read - some fields off a posting whose rest
+    // couldn't be reached - and it is shown to the person the same way a
+    // failure's reason is, so it gets the same length cap.
+    const note = String((row.note || "")).trim().slice(0, MAX_REASON);
+    if (await db.applyAutofill(row.id, { ...row, note })) filledCount++;
     else unmatched.push(row.id);
   }
 

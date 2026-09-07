@@ -320,6 +320,23 @@ check("and that row is done - not retried on later nights",
     .json.applications.some((x) => x.id === deadApp.id),
   JSON.stringify({ autofill: failed.autofill, note: failed.autofill_note }));
 
+// The partial read: a board that renders its description client-side still
+// ships the role and employer in its metadata, so a run legitimately comes
+// back with some fields and an explanation for the rest. That is a fill, not a
+// failure - the fields are real - and the note is what tells the person why
+// the row is still short.
+const partApp = (await req("POST", "/api/update", { token: A_TOK, body: {
+  type: "application", link: "https://example.com/jobs/jsonly" } })).json.application;
+await req("POST", "/api/applications/autofill", { token: A_TOK, body: { filled: [{
+  id: partApp.id, company: "Whatnot", title: "Engineering Manager",
+  note: "the description needs JavaScript, so only the page metadata was readable" }] } });
+const partial = (await req("GET", "/api/data", { token: A_TOK })).json.applications.find((x) => x.id === partApp.id);
+check("a partial read keeps its fields, its note, and counts as read",
+  partial.company === "Whatnot" && partial.title === "Engineering Manager" &&
+  partial.location === "" && partial.autofill === "filled" &&
+  /only the page metadata/.test(partial.autofill_note),
+  JSON.stringify({ co: partial.company, loc: partial.location, flag: partial.autofill, note: partial.autofill_note }));
+
 // A posting a run opened and got nothing usable out of still has to leave the
 // queue. Refusing it would be tidier and would put that row back in every queue
 // from then on, which is the one failure the flag exists to prevent.

@@ -1424,13 +1424,22 @@ export class Db {
    * outcome, and leaving it unmarked would put it back in tomorrow's queue and
    * every queue after that - the one thing the flag exists to prevent.
    *
+   * `fields.note` is the partial-read case, and it is why a filled row has a
+   * note at all: a job board that renders its description client-side still
+   * ships the role and employer in its metadata, so a run can legitimately
+   * come back with two fields and an explanation for the rest. Recording that
+   * as a failure would throw away the fields; recording it as a plain fill
+   * would leave the person wondering why a filled-in row has no location. The
+   * note is shown on the row, the same as a failure's reason.
+   *
    * @param {number|string} id
-   * @param {Partial<Application>} fields - only AUTOFILL_FILL_FIELDS are read
+   * @param {Partial<Application>} fields - only AUTOFILL_FILL_FIELDS and `note` are read
    * @returns {Promise<Application|null>} null if the row was already read
    */
   async applyAutofill(id, fields) {
-    const sets = ["autofill = 'filled'", "autofill_note = ''"];
-    const values = [];
+    const note = typeof fields.note === "string" ? fields.note.trim() : "";
+    const sets = ["autofill = 'filled'", "autofill_note = ?"];
+    const values = [note];
     for (const f of AUTOFILL_FILL_FIELDS) {
       const value = typeof fields[f] === "string" ? fields[f].trim() : "";
       if (!value) continue;

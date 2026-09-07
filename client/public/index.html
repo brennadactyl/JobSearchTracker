@@ -336,16 +336,20 @@ input.dh-loc-in{width:auto;max-width:calc(100% + 8px);font-size:12.5px;color:var
 .mf-open:hover{text-decoration:underline}
 .note{font-size:12.5px;color:var(--ink3);padding:14px 0 0;line-height:1.6}
 
-/* The one thing the overnight fill ever says on this page: a posting it
-   opened and couldn't read (see autofillFailedHtml). Everything else about
-   the fill is invisible - waiting isn't worth saying, and a row that filled
-   in speaks for itself. This is the exception because it is the row that will
-   now stay blank until you type it in, and nothing else on the page would
-   tell you that. Bordered rather than tinted: it wants to be noticed on the
-   row it belongs to, not to read as an error on the whole tab. */
+/* The only thing the overnight fill ever says on this page: what it couldn't
+   read (see autofillNoteHtml) - either nothing at all, or the rest of a
+   posting it got part of. Everything else about the fill is invisible -
+   waiting isn't worth saying, and a row that filled in completely speaks for
+   itself. These two are the exception because they are the rows with
+   something still to do on them, and nothing else on the page would say so. */
 .af{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;margin-top:12px;
-  padding:9px 12px;border:1px solid var(--crit);border-radius:8px;
-  font-size:12.5px;color:var(--ink2);line-height:1.5}
+  padding:9px 12px;border:1px solid var(--line);border-radius:8px;
+  background:var(--surface2);font-size:12.5px;color:var(--ink2);line-height:1.5}
+/* Only a posting that couldn't be read at all is drawn as a problem. A
+   partial read is a good outcome with a footnote - it filled in what the page
+   stated - and colouring it like a failure would train the eye to ignore
+   both. */
+.af.bad{border-color:var(--crit);background:none}
 .af .af-why{color:var(--ink3)}
 
 @media (max-width:900px){
@@ -666,26 +670,38 @@ function hostOf(v){
   try{return new URL(u).hostname.replace(/^www\./,"");}catch(e){return "";}
 }
 
-// The only thing the overnight fill says on this page.
+// The only thing the overnight fill says on this page, and it says it only
+// when there is something the person has to do about it.
 //
-// It is otherwise deliberately invisible - a row waiting to be read has
-// nothing worth saying about it, and a row that got read shows its own
-// company and role. A row it opened and could not read is different: nothing
-// is coming for it, and without this the only difference between "not filled
-// in yet" and "never will be" is that one of them stays blank forever.
+// Two cases, both driven by the run having left a note (autofill_note):
 //
-// The reason is the server-stored autofill_note, shown as the run wrote it.
-// That is what makes this actionable rather than just discouraging: "the
-// posting has been taken down" and "the domain blocks automated fetches" call
-// for different things from the reader - the first means the details are gone,
-// the second means the page is right there and only the machine couldn't have
-// it. There is no Try again: a row is read once by design (see
-// server/migrations/0009_application_autofill.sql), and the answer here is to
-// type the fields in, which the Link field above is already open at.
-function autofillFailedHtml(a){
-  if((a.autofill||"")!=="failed")return "";
-  return '<div class="af">The nightly fill could not read this posting &mdash; fill it in by hand.'+
-    (a.autofill_note?' <span class="af-why">'+esc(a.autofill_note)+'</span>':'')+
+//   failed  it established nothing, so the row is blank and staying blank
+//   filled + note   it got some of the posting and not the rest - the ordinary
+//                   outcome on a board that renders its description
+//                   client-side but ships the role and employer in its
+//                   metadata, or on a closed listing that still names the role
+//
+// A plain filled row - everything the posting stated, nothing left over -
+// says nothing at all, which is most of them. Nor does a row still waiting
+// to be read: there is nothing to do about that but wait.
+//
+// The note is shown as the run wrote it, and that is what makes this
+// actionable rather than just discouraging: "the posting has been taken down"
+// and "the domain blocks automated fetches" call for different things from
+// the reader - the first means the details are gone, the second means the
+// page is right there and only the machine couldn't have it. There is no Try
+// again: a row is read once by design (see
+// server/migrations/0009_application_autofill.sql), and the answer either way
+// is to fill in what's missing, which the Link field above is already open at.
+function autofillNoteHtml(a){
+  var note=a.autofill_note||"";
+  if(!note)return "";
+  var failed=(a.autofill||"")==="failed";
+  return '<div class="af'+(failed?" bad":"")+'">'+
+    (failed
+      ? 'The nightly fill could not read this posting &mdash; fill it in by hand.'
+      : 'The nightly fill read part of this posting &mdash; check what&rsquo;s missing.')+
+    ' <span class="af-why">'+esc(note)+'</span>'+
   '</div>';
 }
 
@@ -1491,7 +1507,7 @@ function appsGridHtml(A){
     '</tr>';
     if(open){
       row+='<tr class="more-row"><td colspan="'+COLS+'">'+
-        autofillFailedHtml(a)+factsCardsHtml(a,true,true)+'</td></tr>';
+        autofillNoteHtml(a)+factsCardsHtml(a,true,true)+'</td></tr>';
     }
     return row;
   }).join("")+'</tbody></table></div>';
@@ -1550,7 +1566,7 @@ function appDetailHtml(a){
   h+='<div class="dh-status">'+selectHtml(APP_STATUS,a.status,'data-id="'+a.id+'" data-field="status" data-app="1"')+
     '<span class="dh-dates">Applied <input type="date" data-id="'+a.id+'" data-field="dateApplied" data-app="1" value="'+esc(a.dateApplied)+'">'+
       (d!==null?' &middot; '+d+' days':'')+'</span></div>';
-  h+=autofillFailedHtml(a);
+  h+=autofillNoteHtml(a);
   h+=factsCardsHtml(a,true,false);
   h+='<div class="dh-notes"><div class="mf-label">Notes</div>'+
     '<textarea data-id="'+a.id+'" data-field="notes" data-app="1" rows="3">'+esc(a.notes)+'</textarea></div>';
