@@ -54,6 +54,7 @@ docs/
   architecture.html           full architecture write-up (open in a browser)
 scripts/
   run-search.ps1              runs one track for one person (fetches its prompt from the API)
+  run-fill.ps1                 reads the postings behind URL-only applications - every account, one run
   setup-scheduler.ps1          registers every person's tracks as daily Windows Scheduled Tasks
   seed-demo-user.ps1           creates the demo account and fills it with invented postings
   demo-user.json               that invented data - the only fabricated content in this repo
@@ -427,6 +428,14 @@ what you'd have done anyway. The run only ever writes into fields that are
 still empty, so anything you fill in yourself wins. Nothing else about the tab
 changes: it is still yours alone, and a row only ever gets there because you
 put it there.
+
+It is **one task for the whole machine**, not one per person: the job is the
+same whoever the applications belong to, and most nights there is nothing
+waiting. It pulls every account's outstanding rows first, then fans the slow
+part out - one subagent per posting, reading pages in parallel - and makes the
+writes itself, one call per account with that account's own credential. The
+subagents get a URL and nothing else: no token, no account, no row id, so
+nothing they hand back can land on the wrong person's row.
 
 **Headless runs use a scoped tool allowlist**, not full permission bypass -
 see `scripts/run-search.ps1`. If a search prompt ever needs a new capability,

@@ -34,13 +34,6 @@
   many tracks exist or what they're called, only that the API has config for
   the one you name.
 
-  One value isn't a track: "_applications" fetches the nightly fill that reads
-  the postings behind applications logged as nothing but a URL (see
-  ../server/src/prompt.js's buildAutofillPrompt). It's a reserved key on the
-  same /api/prompt route, which is the whole reason it needs no special
-  handling here - underscore-first so it can't collide with a track someone
-  actually named.
-
 .PARAMETER User
   Which person's search this is - the user id (a GUID) whose folder under
   <DataDir> holds their resumes, docs, logs, and tracker.json credentials.

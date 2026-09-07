@@ -69,18 +69,21 @@ export async function handleGetPrompt({ db, user, params }) {
  * GET /api/prompt/_applications - requires a Bearer token -> text/plain.
  *
  * The nightly fill for applications added as nothing but a URL. A reserved key
- * rather than a track (see ./index.js for how it's kept out of the
- * track pattern's way): it belongs to the person, not to any one search, and
- * it is fetched and run exactly like a search prompt so scripts/run-search.ps1
- * needed no special case for it.
+ * rather than a track (see ./index.js for how it's kept out of the track
+ * pattern's way): it isn't one search's prompt, or even one person's.
  *
- * Composed unconditionally, including for someone whose queue is empty
- * tonight - which is most nights. The prompt's first step is to fetch the
- * queue and stop if it's empty, so an empty queue costs one API call rather
- * than a refusal here; and a 409 for "nothing to do" would look exactly like
- * the two real 409s next door, which mean a track is misconfigured.
+ * The only route here whose body doesn't depend on who asked. That is the
+ * point of it: one nightly task covers every account on a machine, so the
+ * prompt is written for "each account you were given" and scripts/run-fill.ps1
+ * supplies the accounts. It still needs a session to read - you have to be
+ * somebody - it just doesn't matter which somebody.
+ *
+ * Composed unconditionally, including for a machine whose queues are all empty
+ * tonight, which is most nights. The prompt's first step is to fetch a queue
+ * and move on if it's empty, so that costs one API call rather than a refusal
+ * here - and a 409 for "nothing to do" would look exactly like the two real
+ * 409s next door, which mean a track is misconfigured.
  */
-export async function handleGetAutofillPrompt({ db, user }) {
-  const { settings } = await db.getTracksAndSettings();
-  return text(buildAutofillPrompt({ user, settings }));
+export async function handleGetAutofillPrompt() {
+  return text(buildAutofillPrompt());
 }

@@ -434,9 +434,33 @@ Never add an unverified link to any output.${footer}
  * running it - one queue, several runs racing to read the same postings.
  *
  * Served as the reserved key `_applications` under GET /api/prompt (see
- * routes/index.js), so scripts/run-search.ps1 fetches and runs it exactly the
- * way it runs a search, and setup-scheduler.ps1 registers it as one more daily
- * task.
+ * routes/index.js) and run by scripts/run-fill.ps1 as a single nightly task
+ * for the whole machine.
+ *
+ * ---- Why this one prompt covers everybody.
+ * It is one job, not one job per person: the work is "read the postings behind
+ * the applications that still have a gap", and whose they are changes nothing
+ * about how it is done. A task per account would mean N headless CLI runs a
+ * night, nearly all of them starting up only to find an empty queue.
+ *
+ * ---- Why the reading fans out to subagents.
+ * Pulling the rows is one cheap query per account; reading the postings behind
+ * them is the slow part, and every posting is independent of every other. So
+ * the run gathers the whole list first and then dispatches a subagent per
+ * posting, in batches, rather than walking the list serially. The split is also
+ * a boundary worth having: a subagent gets one URL and no token, no account and
+ * no row id, so it cannot write anywhere or confuse one person's row with
+ * another's. Every write stays in the main turn, with the right account's
+ * token.
+ *
+ * The database is still only ever read one account at a time, and that is not
+ * a compromise - it is what lets this exist without a cross-user route. Every
+ * route stays session-scoped exactly as it is for the search runs (see
+ * db.js's constructor), and the runner hands the model one bearer token per
+ * account in the environment. So this text is written for "each account you
+ * were given" and takes no user: it is identical for everyone, and the wrapper
+ * scripts/run-fill.ps1 puts in front of it is what says how many accounts
+ * there are tonight and which variable holds each one's token.
  *
  * ---- Why there is no run record for this one.
  * Every search records itself to /api/runs because a search that finds nothing
@@ -448,34 +472,38 @@ Never add an unverified link to any output.${footer}
  * evidence that it stopped is a row that stayed blank, and the fix for that
  * row is the same either way.
  *
- * @param {{user: {id: string, name: string}, settings: import("./db.js").Settings}} args
- * @returns {string} the full prompt text
+ * @returns {string} the full prompt text - the same for every caller
  */
-export function buildAutofillPrompt({ user, settings }) {
-  const name = user.name;
-  const pn = PRONOUNS[(settings && settings.pronouns) || ""] || PRONOUNS["they/them"];
-
+export function buildAutofillPrompt() {
   return `# Scheduled task: fill in applications added by URL
-# Schedule: nightly (headless, via Windows Task Scheduler + scripts\\run-search.ps1)
+# Schedule: nightly (headless, via Windows Task Scheduler + scripts\\run-fill.ps1)
 # ---------------------------------------------------------------------------
 
-${name} logs an application by pasting the job posting's URL and nothing else.
-Your whole job is to open those postings and write down what they say, so that
-nobody has to copy company, title and location off a page by hand. You are not
-searching for anything tonight, and you are not judging whether any of these
-are a good fit - ${name} has already applied to every one of them.
+People log an application on the tracker page by pasting the job posting's URL
+and nothing else. Your whole job is to open those postings and write down what
+they say, so that nobody has to copy company, title and location off a page by
+hand. You are not searching for anything tonight, and you are not judging
+whether any of these are a good fit - they have already been applied to.
 
-None of this is visible on ${pn.poss} tracker page while it happens, and each
+None of this is visible on anyone's tracker page while it happens, and each
 posting is read once and never again. So the standard you are held to is not
 "did it look like it worked" - it is that whatever you write down is what the
 posting actually said.
 
-Do the following:
+**This run covers every account on this machine.** The note above this prompt
+says how many there are and which environment variable holds each one's token
+(\`$TRACKER_TOKEN_1\`, \`$TRACKER_TOKEN_2\`, ...). Do steps 1-3 once per account,
+finishing one before starting the next. Ids are per account and mean different
+rows in different accounts, so never carry an id from one account's queue into
+another's report - that is the one mistake here that would write a posting's
+details onto somebody else's application.
 
-1. GET THE QUEUE.
+Do the following, for each account in turn:
+
+1. GET THAT ACCOUNT'S QUEUE - the same call for each, with that account's token:
 
    \`\`\`
-   curl -s "$TRACKER_URL/api/applications/pending" -H "Authorization: Bearer $TRACKER_API_TOKEN"
+   curl -s "$TRACKER_URL/api/applications/pending" -H "Authorization: Bearer $TRACKER_TOKEN_1"
    \`\`\`
 
    It returns \`{"applications":[{"id":123,"link":"https://..."}]}\` - every
@@ -483,76 +511,109 @@ Do the following:
    nothing else. The tracker decides what is on this list; don't go looking for
    other applications to fill in, and don't skip one because its URL looks
    unpromising.
-   \`TRACKER_URL\` and \`TRACKER_API_TOKEN\` are environment variables; run the
+   \`TRACKER_URL\` and the token variables are environment variables; run the
    curl as written and let the shell expand them rather than spending a step
-   checking whether they're set.
+   checking whether they're set, and never print or echo a token.
 
-   **An empty list is the normal answer, and it means you are done.** Say so in
-   one line and end the run. Don't call anything else, don't go looking for
-   applications another way, and don't treat it as a problem to investigate.
+   **An empty list is the normal answer.** Most accounts on most nights have
+   nothing waiting. Say so in one line and move to the next account; when every
+   account is empty that is the whole run, and it is not a problem to
+   investigate.
 
-2. OPEN EACH POSTING and read off, *only where the page states it plainly*:
+   Collect every account's list before going on to step 2, keeping each row's
+   account alongside its \`id\` and \`link\`. Step 2 reads them all together.
 
-   - \`company\` - the employer's name as the posting gives it
-   - \`title\` - the role title
-   - \`location\` - as posted ("Seattle, WA", "Remote (U.S.)", "London, UK")
-   - \`team\` - the team or org named for the role, if it names one
-   - \`setup\` - the stated work arrangement ("Remote", "Hybrid - 3 days/week
-     onsite", "Onsite")
-   - \`comp\` - any posted compensation range ("$180,000-$230,000/yr")
+2. FAN THE READING OUT. Postings are slow to fetch and completely independent
+   of each other, so **dispatch one subagent per posting and let them run in
+   parallel** rather than opening them one after another yourself. Send them in
+   batches of about ten so a long queue doesn't spawn dozens of agents at once,
+   and wait for each batch before sending the next.
 
-   **Never infer, complete or tidy up any of these.** Not the company from the
-   domain name, not the location from an office you know the company has, not a
-   title from the URL slug. This is ${name}'s record of a job ${pn.subj} really
-   applied to, and a plausible guess in it is worse than a blank field: a blank
-   field is visibly still to be filled in, while a wrong company reads as fact
-   forever. Omit a key entirely rather than sending an empty string or a
-   placeholder. If the page states none of them, that posting is a failure, not
-   a fill - see step 3.
+   Give each subagent exactly one URL and this brief, near enough word for
+   word - it is the whole of what makes the result trustworthy, and a subagent
+   only knows what you tell it:
 
-   Read the page itself. Don't web-search for the role to fill in what the
-   posting didn't say.
+   > Fetch this URL and report what the job posting *states*, as JSON with
+   > these keys, omitting any key the page does not state plainly:
+   > \`company\` (the employer's name as the posting gives it), \`title\` (the
+   > role title), \`location\` (as posted - "Seattle, WA", "Remote (U.S.)",
+   > "London, UK"), \`team\` (the team or org named for the role), \`setup\`
+   > (the stated work arrangement - "Remote", "Hybrid - 3 days/week onsite",
+   > "Onsite"), \`comp\` (any posted compensation range -
+   > "$180,000-$230,000/yr").
+   >
+   > **Never infer, complete or tidy up any of these.** Not the company from
+   > the domain name, not the location from an office you know the company
+   > has, not a title from the URL slug. This is somebody's record of a job
+   > they really applied to, and a plausible guess in it is worse than a blank
+   > field: a blank field is visibly still to be filled in, while a wrong
+   > company reads as fact forever. Omit a key entirely rather than returning
+   > an empty string or a placeholder.
+   >
+   > Read the page itself. Don't web-search for the role to fill in what the
+   > posting didn't say.
+   >
+   > If you cannot read it - it 404s, the posting has been taken down or
+   > filled, it is behind a login wall, the domain refuses the fetch, the page
+   > renders nothing but a JS shell - return \`{"failed":"<short, specific
+   > reason in plain words>"}\` instead. Not being able to check is not the
+   > same as the posting being gone; say which it was.
 
-3. REPORT WHAT YOU READ - one call for the whole night, not one per row:
+   Do not give a subagent a token, an account, an id, or anything to POST.
+   They read one page and hand back what it said; every write in this run is
+   yours to make, with the right account's token, in step 3. Keep your own note
+   of which account and \`id\` each dispatched URL belongs to - the subagent
+   never sees either, so nothing it returns can put a posting's details onto
+   the wrong row.
+
+   These subagents run inside this same turn and you wait for their results.
+   That is the difference between this and backgrounding work, which the note
+   at the top of this prompt rules out: nothing here outlives your turn.
+
+3. REPORT WHAT THEY READ - one call per account, not one per row, and with that
+   same account's token:
 
    \`\`\`
    curl -s -X POST "$TRACKER_URL/api/applications/autofill" \\
-     -H "Authorization: Bearer $TRACKER_API_TOKEN" -H "Content-Type: application/json" \\
+     -H "Authorization: Bearer $TRACKER_TOKEN_1" -H "Content-Type: application/json" \\
      -d '{"filled":[{"id":123,"company":"...","title":"...","location":"...","team":"...","setup":"...","comp":"..."}],
           "failed":[{"id":456,"reason":"posting has been taken down"}]}'
    \`\`\`
 
-   \`id\` is the id from step 1, unchanged. Send both lists in the one call;
+   Pair each subagent's answer back up with the account and \`id\` you dispatched
+   it for, and send each account's rows with that account's token. \`id\` is the
+   id from that account's step 1, unchanged. Send both lists in the one call;
    either may be omitted if it's empty.
 
-   **\`failed\` is for a posting you opened and genuinely could not read** - it
-   404s, it has been taken down or filled, it's behind a login wall, the domain
-   refuses the fetch, or the page renders nothing but a JS shell. Put a short,
-   specific reason in plain words. Nothing displays it, and nothing retries the
-   row: reporting a posting as failed is how you say "this one is done, leave
-   it alone", and the reason is the only record of why those fields stayed
-   blank. Say what you actually saw, so it can be told apart from this task
-   having stopped running altogether.
+   **A subagent's fields go in \`filled\`; a subagent that came back with
+   \`failed\` goes in \`failed\`, with its reason.** Pass the reason through as it
+   wrote it rather than summarising it - nothing displays it, and nothing
+   retries the row: reporting a posting as failed is how you say "this one is
+   done, leave it alone", and the reason is the only record of why those fields
+   stayed blank. It is what tells a posting that was genuinely gone apart from
+   this task having stopped running altogether.
 
-   Report every id you were given, in one list or the other. An id you report
-   in neither comes back tomorrow night and every night after, which is the
-   one outcome this is built to avoid.
+   Report every id every account gave you, in one list or the other. An id you
+   report in neither comes back tomorrow night and every night after, which is
+   the one outcome this is built to avoid - so a subagent that returned nothing
+   usable at all, or that you never got an answer from, still gets a \`failed\`
+   entry saying so.
 
    Nothing here overwrites anything. The tracker only writes into fields that
-   are still empty, so if ${name} filled some of them in during the day,
-   ${pn.poss} version stays and yours is dropped. Send what you read and don't
-   try to work out what is already there - you were not told what is in the
-   row, and that is deliberate.
+   are still empty, so if the person filled some of them in during the day,
+   their version stays and yours is dropped. Send what came back and don't try
+   to work out what is already in the row - you were not told, and that is
+   deliberate.
 
    The response is \`{"filled":N,"failed":N,"unmatched":[id,...]}\`. An id in
    \`unmatched\` means that row was dealt with or deleted between step 1 and
    now - ordinary, and nothing to retry or work around.
 
-4. Report in a few lines: how many postings you were given, what you filled in
-   for each (company and title is enough), and every one you couldn't read with
-   the reason you sent. Nobody reads this in the normal course of things - it
-   is the log someone checks when a row stayed blank - so be accurate rather
-   than reassuring. If the list was empty, that one line is the whole report;
-   don't pad it.
+4. Report in a few lines **per account**, naming which account each line is
+   about: how many postings it gave you, what got filled in for each (company
+   and title is enough), and every one that couldn't be read with the reason
+   you sent. Nobody reads this in the normal course of things - it is the log
+   someone checks when a row stayed blank - so be accurate rather than
+   reassuring, and don't pad an account that had nothing.
 `;
 }

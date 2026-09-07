@@ -410,14 +410,15 @@ a machine runs more than one person's searches, stagger across all of them:
 they share one CLI and one Claude account (the machine owner's), and each run
 takes several minutes.
 
-Everyone also gets one task that isn't a search: `<prefix>Applications`, the
-nightly fill for applications logged on the tracker page by pasting a job
-posting's URL and nothing else. It reads those postings and writes down the
-company, role and location, and none of it is visible on the page - no
-setting, no status, nothing to configure here. Registered for everyone whether
-or not they have used it; a run with nothing to read stops after one API call.
-Worth mentioning to the person, though: it is the reason adding an application
-is a paste rather than nine fields typed out by hand.
+One further task gets registered that isn't a search and isn't per person:
+`JobSearch-Applications`, the nightly fill for applications logged on the
+tracker page by pasting a job posting's URL and nothing else. It runs
+`run-fill.ps1` once for the whole machine - every account in one turn - and
+reads those postings to write down the company, role and location. None of it
+is visible on the page: no setting, no status, nothing to configure here, and
+nothing extra to do when you add a second person. Worth mentioning to them,
+though: it is the reason adding an application is a paste rather than nine
+fields typed out by hand.
 
 Re-run this step (the copy + `setup-scheduler.ps1`) any time after a plugin
 update, so the stable copy and the registered tasks stay current.

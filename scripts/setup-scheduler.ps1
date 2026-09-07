@@ -18,12 +18,15 @@
   second, near-identical search of the same job boards, which is the thing the
   arrangement exists to avoid.
 
-  Everyone also gets one task that isn't a search: "<prefix>Applications", the
-  nightly fill for applications logged as nothing but a URL. It reads the
-  postings behind them and writes down the company, role and location, so
-  adding an application is a paste rather than nine fields typed out by hand.
-  Registered whether or not that person has used it yet - a run with nothing
-  to read stops after one API call.
+  One further task is registered that isn't a search and isn't per person:
+  "JobSearch-Applications", the nightly fill for applications logged as nothing
+  but a URL. It runs run-fill.ps1 once for the whole machine - every account
+  under DataDir in a single CLI turn, fanning the posting-reading out to
+  subagents - so adding an application is a paste rather than nine fields typed
+  out by hand. Registered whether or not anyone has used it yet; a run with
+  nothing to read costs one API call per account. Its name carries no user id
+  because it belongs to no one person, which also keeps it clear of the
+  per-person cleanup below.
 
   Safe to re-run: existing tasks for a still-present track are replaced in
   place; tasks left over from a track that no longer exists are unregistered.
@@ -64,6 +67,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $runScript = Join-Path $PSScriptRoot "run-search.ps1"
+$fillScript = Join-Path $PSScriptRoot "run-fill.ps1"
 
 # Turns a track key like "technical-pm" into a Windows Task Scheduler name
 # suffix like "TechnicalPm" - not meant to reproduce any particular past
@@ -81,14 +85,13 @@ function ConvertTo-TaskSuffix([string]$key) {
 # machine sleeps and one that silently doesn't, and a copy of it is a copy
 # that can be missed off.
 #
-# Reads $runScript and $DataDir from the script scope rather than taking them
-# as parameters: they are fixed for the whole run, and threading them through
-# each call site would say nothing the caller doesn't already know.
+# Takes the script and its arguments rather than building them, because the two
+# callers run different scripts with different parameters - a search is per
+# track and per person, the fill is neither.
 #
 # Returns $true if the task was registered, $false if it wasn't.
-function Register-JobSearchTask([string]$Name, [string]$TaskKey, [string]$UserId, [string]$Time) {
-    $userArg = if ($UserId) { " -User $UserId" } else { "" }
-    $action = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$runScript`" -Task $TaskKey$userArg -DataDir `"$DataDir`""
+function Register-JobSearchTask([string]$Name, [string]$Script, [string]$Arguments, [string]$Time) {
+    $action = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$Script`" $Arguments"
     # /TR has a 261-character limit and native exes don't trip
     # ErrorActionPreference, so a too-long path (or any other failure)
     # would otherwise print the same cheerful line as a success and leave
@@ -256,35 +259,41 @@ foreach ($person in $people) {
             Write-Warning "  $($track.key) collides with an already-registered task name ($name) - skipped. Rename one of the track keys."
             continue
         }
-        if (-not (Register-JobSearchTask -Name $name -TaskKey $track.key -UserId $person.Id -Time $time)) { continue }
+        $userArg = if ($person.Id) { " -User $($person.Id)" } else { "" }
+        $trackArgs = "-Task $($track.key)$userArg -DataDir `"$DataDir`""
+        if (-not (Register-JobSearchTask -Name $name -Script $runScript -Arguments $trackArgs -Time $time)) { continue }
 
         Write-Host "  $name - daily at $time ($label / $($track.key))"
         $registered += $name
     }
 
-    # One more task per person, and it is not a track: the nightly fill for
-    # applications added as nothing but a URL. It fetches the reserved
-    # `_applications` prompt (see ../server/src/routes/index.js) exactly the
-    # way a search fetches its track's, which is why run-search.ps1 needed no
-    # special case for it.
-    #
-    # Registered for everyone rather than only for people who have used the
-    # paste-a-URL box, because there is nothing to detect in advance: the
-    # queue is empty until someone pastes a URL, and a run against an empty
-    # queue is one API call and an immediate stop. Registering it lazily would
-    # mean the day someone first used the box is the day nothing happened
-    # overnight.
-    #
-    # $FILL_TIME rather than a slot from the stagger: it is not a search, it
-    # does not compete with the searches for job boards, and a fixed
-    # early-morning time is what makes "filled in overnight" true for anything
-    # pasted the day before.
-    $fillName = $prefix + "Applications"
-    if ($registered -contains $fillName) {
-        Write-Warning "  the nightly application fill collides with a task already registered for $label ($fillName) - skipped."
-        Write-Warning "  Rename the track whose key reads as 'applications'; the fill has no other name to fall back on."
-    } elseif (Register-JobSearchTask -Name $fillName -TaskKey "_applications" -UserId $person.Id -Time $FILL_TIME) {
-        Write-Host "  $fillName - daily at $FILL_TIME ($label / applications added by URL)"
+}
+
+# One task for the whole machine, outside the per-person loop, and not a
+# search: the nightly fill for applications logged as nothing but a URL. It
+# runs run-fill.ps1, which covers every account found under DataDir in a single
+# CLI turn (see that script for why one run rather than one per person, and how
+# it stays scoped to one account's rows at a time regardless).
+#
+# Registered whether or not anyone has used the paste-a-URL box, because there
+# is nothing to detect in advance and a run with nothing to read costs one API
+# call per account. Registering it lazily would mean the day someone first
+# pasted a URL is the day nothing happened overnight.
+#
+# $FILL_TIME rather than a slot from the stagger: it is not a search, it does
+# not compete with the searches for job boards, and a fixed early-morning time
+# is what makes "filled in overnight" true for anything pasted the day before.
+#
+# The name carries no user id because the task belongs to no one person. That
+# also keeps it clear of every "JobSearch-<id>-" prefix, so one person's setup
+# run can neither claim it nor sweep it away - but it does mean it has to be
+# added to $registered by hand below, since a legacy single-user machine owns
+# the bare "JobSearch-" prefix and would otherwise see it as stale.
+if ($people.Count -gt 0) {
+    Write-Host "`n== Registering the application fill (one task, all accounts) ==" -ForegroundColor Cyan
+    $fillName = "JobSearch-Applications"
+    if (Register-JobSearchTask -Name $fillName -Script $fillScript -Arguments "-DataDir `"$DataDir`"" -Time $FILL_TIME) {
+        Write-Host "  $fillName - daily at $FILL_TIME (every account under $DataDir, applications added by URL)"
         $registered += $fillName
     }
 }
