@@ -76,11 +76,27 @@ if (-not $claude) {
     Write-Host "claude CLI found: $($claude.Source)"
 }
 
-if (-not $env:CLAUDE_CODE_OAUTH_TOKEN) {
+# What matters is whether the *scheduled task* will see the token, and it runs
+# in a fresh process as this user - so the persisted User (or Machine) value is
+# the one that counts, not this shell's copy.
+#
+# Checking only $env: gets both directions wrong. It reports a correctly
+# configured machine as broken whenever the shell predates the `setx` (or simply
+# didn't inherit it, which is how this read as unset on 2026-09-07 while the
+# scheduled runs had been authenticating fine for a week). And it passes a token
+# that was only ever set inline in one shell, never persisted - which looks
+# right here and then fails every overnight run.
+$tokenUser    = [Environment]::GetEnvironmentVariable("CLAUDE_CODE_OAUTH_TOKEN", "User")
+$tokenMachine = [Environment]::GetEnvironmentVariable("CLAUDE_CODE_OAUTH_TOKEN", "Machine")
+if ($tokenUser -or $tokenMachine) {
+    $scope = if ($tokenUser) { "User" } else { "Machine" }
+    Write-Host "CLAUDE_CODE_OAUTH_TOKEN is set ($scope scope) - scheduled runs will see it."
+} elseif ($env:CLAUDE_CODE_OAUTH_TOKEN) {
+    Write-Warning "CLAUDE_CODE_OAUTH_TOKEN is set in this shell only, not persisted."
+    Write-Warning 'Scheduled runs start a fresh process and will NOT see it. Persist it: setx CLAUDE_CODE_OAUTH_TOKEN "<token>"'
+} else {
     Write-Warning "CLAUDE_CODE_OAUTH_TOKEN is not set for this user. Headless/scheduled runs will fail to authenticate."
     Write-Warning 'Run `claude setup-token`, then `setx CLAUDE_CODE_OAUTH_TOKEN "<token>"`, then open a new terminal.'
-} else {
-    Write-Host "CLAUDE_CODE_OAUTH_TOKEN is set."
 }
 
 if (-not (Test-Path $DataDir)) {
@@ -185,6 +201,34 @@ foreach ($person in $people) {
             Write-Warning "  FAILED to register $name (schtasks exit $LASTEXITCODE). Action string is $($action.Length) chars; /TR's limit is 261."
             continue
         }
+
+        # schtasks creates the task but cannot say how it behaves around power:
+        # it has no flag for waking the machine or for catching up a missed run,
+        # and it defaults "don't start if on batteries" to ON. A task registered
+        # by it alone therefore does nothing at all on any night the machine is
+        # asleep - and says nothing about it afterwards.
+        #
+        # That is not hypothetical. On 2026-09-07 all three searches silently
+        # missed their 01:00, 02:00 and 02:30 slots: the machine slept from
+        # 23:16 to 03:14, nothing woke it, and nothing re-ran them once it did.
+        # The backup task, registered through the cmdlets with exactly the
+        # settings below, woke the machine at 03:14:36 for its own 03:15 slot
+        # and ran normally - same machine, same user, same night. The settings
+        # were the only difference.
+        #
+        # Applied after creation rather than by switching to Register-ScheduledTask
+        # wholesale, so the /TR length check above keeps working - the cmdlets
+        # have no equivalent limit to check for.
+        $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun `
+            -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+            -ExecutionTimeLimit (New-TimeSpan -Hours 2) -MultipleInstances IgnoreNew
+        try {
+            Set-ScheduledTask -TaskName $name -Settings $settings -ErrorAction Stop | Out-Null
+        } catch {
+            Write-Warning ("  $name was registered but its wake/catch-up settings did not apply: {0}" -f $_.Exception.Message)
+            Write-Warning "  It will not wake a sleeping machine, and will not re-run a slot it misses."
+        }
+
         Write-Host "  $name - daily at $time ($label / $($track.key))"
         $registered += $name
     }
@@ -222,7 +266,36 @@ if ($ownedPrefixes.Count -gt 0) {
     }
 }
 
+# Read the settings back rather than trusting that applying them worked. This
+# is the check that was missing: the tasks were mis-registered on 2026-09-01 and
+# nothing noticed for six days, because a task that cannot wake the machine
+# looks completely normal in every listing until the night it doesn't run - and
+# a search that never fired is indistinguishable from one that found nothing.
+if ($registered.Count -gt 0) {
+    $broken = @()
+    foreach ($n in $registered) {
+        $t = Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue
+        if (-not $t) { $broken += "$n (not found after registering)"; continue }
+        $s = $t.Settings
+        $missing = @()
+        if (-not $s.WakeToRun)            { $missing += "won't wake the machine" }
+        if (-not $s.StartWhenAvailable)   { $missing += "won't catch up a missed run" }
+        if ($s.DisallowStartIfOnBatteries){ $missing += "won't start on battery" }
+        if ($missing) { $broken += "$n - $($missing -join '; ')" }
+    }
+    if ($broken) {
+        Write-Host "`n== These tasks will not run reliably overnight ==" -ForegroundColor Red
+        $broken | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+        Write-Host "Fix in Task Scheduler (Conditions + Settings tabs), or re-run this script." -ForegroundColor Red
+    } else {
+        Write-Host "`nAll $($registered.Count) task(s) verified: wake the machine, catch up a missed run, run on battery." -ForegroundColor Green
+    }
+}
+
 Write-Host "`nDone. Tasks run only while you're logged in (no stored password required)." -ForegroundColor Green
+Write-Host "They will wake a sleeping machine, and re-run a slot they missed once it's available."
+Write-Host "A machine that is shut down or hibernated at the scheduled time cannot be woken by" -ForegroundColor Yellow
+Write-Host "anything Task Scheduler does - leave it asleep rather than off if you want overnight runs." -ForegroundColor Yellow
 if ($registered.Count -gt 0) {
     Write-Host "Test one now with, e.g.: schtasks /Run /TN $($registered[0])"
     Write-Host "View/manage them in Task Scheduler under the root task folder, or: schtasks /Query /TN $($registered[0]) /V /FO LIST"

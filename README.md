@@ -191,9 +191,20 @@ note after each step if you'd rather do it the traditional way instead.
    this line leaves a copy of your data anywhere but Cloudflare.
 
 Tasks run daily while you're logged in - no stored Windows password required.
-If the machine is off or you're logged out at the scheduled time, that run is
-skipped (not queued/retried). The webpage itself, unlike the tasks, is always
-up - it's hosted on Cloudflare, independent of any machine being on.
+They are registered to **wake a sleeping machine** and to **re-run a slot they
+missed** once it's available, so an overnight schedule works on a machine you
+leave asleep.
+
+A machine that is **shut down or hibernated** is a different matter: nothing
+Task Scheduler does can wake it, the missed run waits until you next boot, and
+`StartWhenAvailable` then runs it late rather than at the hour you picked. If
+you want reliable overnight searches, leave the machine asleep rather than off.
+Worth knowing because the failure is silent - a task that never fired looks
+exactly like a search that found nothing, which is what the per-track run record
+(`/api/runs`, shown on each tab) exists to tell apart.
+
+The webpage itself, unlike the tasks, is always up - it's hosted on Cloudflare,
+independent of any machine being on.
 
 ## Running a search manually
 
