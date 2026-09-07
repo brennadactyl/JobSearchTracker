@@ -190,3 +190,35 @@ export async function handleReportAutofill({ request, db }) {
   if (filledCount > 0) await db.touchUpdated();
   return json({ filled: filledCount, failed: failedCount, unmatched });
 }
+
+/**
+ * POST /api/applications/requeue - requires a Bearer token. Body
+ * `{ ids: [...] }` -> `{ requeued }`.
+ *
+ * Puts rows back in front of the fill, by clearing the flag that says their
+ * posting has been read. Scoped to the caller like everything else, so an id
+ * that isn't theirs simply doesn't match and isn't counted.
+ *
+ * **Not a retry, and nothing calls it on a schedule.** A row is read once by
+ * design (see migrations/0009_application_autofill.sql), and this does not
+ * change that: it exists for the one case the design can't cover on its own -
+ * the reader itself got better, so rows that failed under the older
+ * instructions never really had a first read. That is a judgement about a
+ * change to the code, made by whoever made the change, which is why it takes
+ * explicit ids rather than offering a "re-read everything that failed" switch
+ * that would invite being wired to a schedule.
+ *
+ * The tracker page has no control for this and shouldn't: a person looking at
+ * a row that couldn't be read wants to type it in, not to ask a machine to try
+ * again on the same terms and probably fail the same way.
+ */
+export async function handleRequeueAutofill({ request, db }) {
+  const body = await readJson(request);
+  if (body instanceof Response) return body;
+
+  const ids = Array.isArray(body.ids) ? body.ids.filter((id) => id || id === 0) : [];
+  if (ids.length === 0) return json({ error: "no ids provided" }, 400);
+
+  const requeued = await db.requeueAutofill(ids);
+  return json({ requeued });
+}

@@ -1459,6 +1459,41 @@ export class Db {
   }
 
   /**
+   * Clears the read flag on rows the caller names, so the next run reads their
+   * postings again. The only way back into the queue, and deliberately not a
+   * retry: nothing here reacts to a row having failed, and no schedule calls
+   * it.
+   *
+   * It exists for one situation - the reader itself got better. A row that
+   * failed under an older set of instructions never really had its first read,
+   * and without this every improvement to the fill could only ever help
+   * postings nobody had looked at yet. That is an operator's judgement about a
+   * change to the code, not something a row's own state should trigger, which
+   * is why it takes ids and has no "everything that failed" mode.
+   *
+   * Chunked like markVerified: D1 caps a statement at 100 bound parameters.
+   *
+   * @param {(number|string)[]} ids
+   * @returns {Promise<number>} rows actually cleared
+   */
+  async requeueAutofill(ids) {
+    if (!ids.length) return 0;
+    const chunks = [];
+    for (let i = 0; i < ids.length; i += ID_CHUNK) chunks.push(ids.slice(i, i + ID_CHUNK));
+    const results = await this.d1.batch(
+      chunks.map((chunk) =>
+        this.d1
+          .prepare(
+            `UPDATE applications SET autofill = '', autofill_note = ''
+              WHERE user_id = ? AND id IN (${chunk.map(() => "?").join(", ")})`
+          )
+          .bind(this.userId, ...chunk)
+      )
+    );
+    return results.reduce((n, r) => n + (r.meta.changes || 0), 0);
+  }
+
+  /**
    * Records that a run opened the link and couldn't read it. Final - see the
    * migration for why a failed read isn't retried.
    *

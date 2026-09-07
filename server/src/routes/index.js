@@ -23,6 +23,7 @@ import {
   handleDeleteApplication,
   handleGetAutofillQueue,
   handleReportAutofill,
+  handleRequeueAutofill,
   handleSetApplicationStatus,
 } from "./applications.js";
 import { handleGetConfig, handleSetConfig } from "./config.js";
@@ -90,6 +91,10 @@ export const SESSION_ROUTES = [
   // ordering care, unlike the prompt pair below.
   ["GET", "/api/applications/pending", handleGetAutofillQueue],
   ["POST", "/api/applications/autofill", handleReportAutofill],
+  // Not a retry - see the handler. Nothing on the page or on a schedule calls
+  // this; it is how a person who has just improved the reader gives rows that
+  // failed under the old one a real first read.
+  ["POST", "/api/applications/requeue", handleRequeueAutofill],
   ["GET", /^\/api\/dedup\/([^/]+)$/, handleGetDedup],
   ["GET", /^\/api\/coverage\/([^/]+)$/, handleGetCoverage],
   ["POST", "/api/coverage", handleRecordSweeps],

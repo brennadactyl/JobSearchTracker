@@ -354,6 +354,23 @@ const linkless = (await req("POST", "/api/update", { token: A_TOK, body: {
 check("a row with no link is never queued - there is nothing to open",
   !(await req("GET", "/api/applications/pending", { token: A_TOK }))
     .json.applications.some((x) => x.id === linkless.id));
+// Requeueing: the only way back into the queue, and the only route here that
+// can undo the read flag. Same scoping rule as everything else - B naming A's
+// id gets nothing, and is told nothing about whether it exists.
+check("B cannot requeue A's row",
+  (await req("POST", "/api/applications/requeue", { token: B_TOK, body: { ids: [deadApp.id] } }))
+    .json.requeued === 0);
+const requeued = await req("POST", "/api/applications/requeue", { token: A_TOK, body: { ids: [deadApp.id] } });
+check("requeueing a failed row puts it back in the queue, note cleared",
+  requeued.json.requeued === 1 &&
+  (await req("GET", "/api/applications/pending", { token: A_TOK }))
+    .json.applications.some((x) => x.id === deadApp.id) &&
+  (await req("GET", "/api/data", { token: A_TOK })).json.applications
+    .find((x) => x.id === deadApp.id).autofill_note === "",
+  JSON.stringify(requeued.json));
+check("requeueing nothing is a 400",
+  (await req("POST", "/api/applications/requeue", { token: A_TOK, body: { ids: [] } })).status === 400);
+
 check("an empty report is a 400, not a silent no-op",
   (await req("POST", "/api/applications/autofill", { token: A_TOK, body: {} })).status === 400);
 const fillPrompt = await req("GET", "/api/prompt/_applications", { token: A_TOK });
