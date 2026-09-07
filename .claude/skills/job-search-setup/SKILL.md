@@ -339,6 +339,34 @@ Leave it empty where you don't know - a run fills it in when it finds one. Seed 
 a `fed_by` tab shares its feeder's coverage list, it doesn't get one of its
 own.
 
+**Seed a starting point, not a finished list, and make sure discovery can grow
+it.** The rotation is the only list a run reads, so a track whose rotation never
+gains a company can only ever re-check the names it was born with. Once every
+posting those companies have open is tracked or screened, the search reports
+zero new every night and looks broken while working exactly as configured.
+
+That is a real failure, not a caution: one track was seeded with 36 well-known
+employers and ran for eight days. Every one of its 75 leads came from 12 of
+those 36 - nothing ever entered from outside the seed - and by day six it was
+finding nothing at all. Its doc had a broader-discovery step the whole time. The
+step had nowhere to put what it found, because the doc told it to write names
+into an "Expanded net" prose section that no run reads, while the rotation sat
+untouched at exactly 36.
+
+So when setting a track up:
+
+- **Say the discovery step out loud in the track's doc**, including the
+  non-tech verticals - `templates/tracked-postings.template.md` now carries
+  both, and the rule that a discovered company is added with
+  `POST /api/coverage` rather than only written down.
+- **Prefer a smaller seed.** A dozen strong names plus working discovery beats
+  forty that fill the rotation and leave no room. Roughly 12 companies are
+  covered per run, so a 36-company seed is already a three-day cycle before
+  discovery adds anything.
+- **Check back after a few days.** `GET /api/coverage/<key>?all=1` returns
+  `total`. If that number is identical to what you seeded a week ago, discovery
+  is not reaching the rotation, whatever the doc says.
+
 If there's no deployment to post to yet, skip this step and tell the
 installer to come back to it (re-running this skill is fine, or they can run
 the curls above by hand) once they've deployed the API and the webpage.
