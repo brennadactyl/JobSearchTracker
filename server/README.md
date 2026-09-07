@@ -369,12 +369,13 @@ reads the posting and fills the rest in - one more scheduled task per person
 (`<prefix>Applications`, registered by `setup-scheduler.ps1`), running the
 reserved `_applications` prompt below.
 
-**None of this is visible on the tracker page, deliberately.** There is no
-per-row "waiting" or "couldn't read this", no button to press and nothing to
-answer: an application either has its company and role in it or it doesn't,
-and typing them in is the fix either way. `applications.autofill` is
-bookkeeping for the server alone - `''` (not read yet), `filled`, `failed` -
-and its only job is that a posting is read **once**. Which rows a run gets is
+**Almost none of this is visible on the tracker page, deliberately.** There is
+no per-row "waiting", no button to press and nothing to answer while it works.
+`applications.autofill` is bookkeeping - `''` (not read yet), `filled`,
+`failed` - and its only job is that a posting is read **once**. The single
+exception is a `failed` row: the page shows it, with `autofill_note`'s reason,
+because that row is now the person's to fill in and nothing else would tell
+them so. There is no route that re-queues it. Which rows a run gets is
 derived from the rows themselves, not requested: a link, the flag still `''`,
 and a blank company, role or location. So nothing is queued or flagged at
 creation, an application made from a lead is never fetched (it has all three

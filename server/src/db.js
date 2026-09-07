@@ -91,11 +91,11 @@
  * @property {string} dateRejected
  * @property {string} dateWithdrawn
  * @property {string} autofill - '' | 'filled' | 'failed'; whether this row's posting has
- *   been read yet. Bookkeeping for the nightly fill and nothing else - no route takes
- *   it from a caller and nothing displays it. See
+ *   been read yet. Bookkeeping for the nightly fill - no route takes it from a caller,
+ *   and the page renders nothing from it but the 'failed' case. See
  *   migrations/0009_application_autofill.sql.
- * @property {string} autofill_note - why a 'failed' read failed; '' otherwise, and
- *   likewise never displayed
+ * @property {string} autofill_note - why a 'failed' read failed; '' otherwise. Shown on
+ *   the row, and the only thing about the fill the page ever says
  */
 
 /**
@@ -1451,11 +1451,15 @@ export class Db {
 
   /**
    * Records that a run opened the link and couldn't read it. Final - see the
-   * migration for why a failed read isn't retried. The note is not displayed
-   * anywhere; it is the answer to "why is this row still blank", which is
-   * otherwise indistinguishable from the nightly task having stopped running.
+   * migration for why a failed read isn't retried.
+   *
+   * The note is shown on the row, and is the only thing about the fill that
+   * ever reaches the page: it is the answer to "why is this one still blank",
+   * which without it is indistinguishable from a row that simply hasn't been
+   * read yet. Stored as the run wrote it.
+   *
    * @param {number|string} id
-   * @param {string} note - short, human-readable
+   * @param {string} note - short, human-readable; the person reads this
    * @returns {Promise<Application|null>} null if the row was already read
    */
   async failAutofill(id, note) {

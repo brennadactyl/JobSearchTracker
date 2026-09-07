@@ -336,6 +336,18 @@ input.dh-loc-in{width:auto;max-width:calc(100% + 8px);font-size:12.5px;color:var
 .mf-open:hover{text-decoration:underline}
 .note{font-size:12.5px;color:var(--ink3);padding:14px 0 0;line-height:1.6}
 
+/* The one thing the overnight fill ever says on this page: a posting it
+   opened and couldn't read (see autofillFailedHtml). Everything else about
+   the fill is invisible - waiting isn't worth saying, and a row that filled
+   in speaks for itself. This is the exception because it is the row that will
+   now stay blank until you type it in, and nothing else on the page would
+   tell you that. Bordered rather than tinted: it wants to be noticed on the
+   row it belongs to, not to read as an error on the whole tab. */
+.af{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;margin-top:12px;
+  padding:9px 12px;border:1px solid var(--crit);border-radius:8px;
+  font-size:12.5px;color:var(--ink2);line-height:1.5}
+.af .af-why{color:var(--ink3)}
+
 @media (max-width:900px){
   .wrap{padding:0 13px 60px}
 }
@@ -652,6 +664,29 @@ function hostOf(v){
   var u=safeUrl(v);
   if(!u)return "";
   try{return new URL(u).hostname.replace(/^www\./,"");}catch(e){return "";}
+}
+
+// The only thing the overnight fill says on this page.
+//
+// It is otherwise deliberately invisible - a row waiting to be read has
+// nothing worth saying about it, and a row that got read shows its own
+// company and role. A row it opened and could not read is different: nothing
+// is coming for it, and without this the only difference between "not filled
+// in yet" and "never will be" is that one of them stays blank forever.
+//
+// The reason is the server-stored autofill_note, shown as the run wrote it.
+// That is what makes this actionable rather than just discouraging: "the
+// posting has been taken down" and "the domain blocks automated fetches" call
+// for different things from the reader - the first means the details are gone,
+// the second means the page is right there and only the machine couldn't have
+// it. There is no Try again: a row is read once by design (see
+// server/migrations/0009_application_autofill.sql), and the answer here is to
+// type the fields in, which the Link field above is already open at.
+function autofillFailedHtml(a){
+  if((a.autofill||"")!=="failed")return "";
+  return '<div class="af">The nightly fill could not read this posting &mdash; fill it in by hand.'+
+    (a.autofill_note?' <span class="af-why">'+esc(a.autofill_note)+'</span>':'')+
+  '</div>';
 }
 
 function factsGridHtml(item,fields,isApp){
@@ -1400,8 +1435,12 @@ function appsTab(){
       '<div class="md-row-top"><span class="co">'+esc(a.company||hostOf(a.link)||"Untitled")+'</span>'+
         '<span class="pill '+pillFor(a.status)+'">'+esc(a.status)+'</span></div>'+
       // The dash is markup, so it can't go through esc() with the title -
-      // that turned the fallback into a literal "&mdash;" on screen.
-      '<div class="md-row-ttl">'+(a.title?esc(a.title):"&mdash;")+'</div>'+
+      // that turned the fallback into a literal "&mdash;" on screen. A row
+      // whose posting couldn't be read says so here rather than showing the
+      // same bare dash as a row nobody has filled in yet: those two look
+      // identical in a list, and only one of them is waiting for anything.
+      '<div class="md-row-ttl">'+(a.title?esc(a.title)
+        :(a.autofill==="failed"?'Couldn&rsquo;t read the posting':"&mdash;"))+'</div>'+
       // The same three-part line a lead row has (place, geo tier, date
       // stamp), so the two lists scan alike - and so the Location sort has
       // something visible to have sorted by. A "To Apply" row has no applied
@@ -1451,7 +1490,8 @@ function appsGridHtml(A){
       '<td><button class="btn ghost" data-del="'+a.id+'" title="Remove">&times;</button></td>'+
     '</tr>';
     if(open){
-      row+='<tr class="more-row"><td colspan="'+COLS+'">'+factsCardsHtml(a,true,true)+'</td></tr>';
+      row+='<tr class="more-row"><td colspan="'+COLS+'">'+
+        autofillFailedHtml(a)+factsCardsHtml(a,true,true)+'</td></tr>';
     }
     return row;
   }).join("")+'</tbody></table></div>';
@@ -1510,6 +1550,7 @@ function appDetailHtml(a){
   h+='<div class="dh-status">'+selectHtml(APP_STATUS,a.status,'data-id="'+a.id+'" data-field="status" data-app="1"')+
     '<span class="dh-dates">Applied <input type="date" data-id="'+a.id+'" data-field="dateApplied" data-app="1" value="'+esc(a.dateApplied)+'">'+
       (d!==null?' &middot; '+d+' days':'')+'</span></div>';
+  h+=autofillFailedHtml(a);
   h+=factsCardsHtml(a,true,false);
   h+='<div class="dh-notes"><div class="mf-label">Notes</div>'+
     '<textarea data-id="'+a.id+'" data-field="notes" data-app="1" rows="3">'+esc(a.notes)+'</textarea></div>';

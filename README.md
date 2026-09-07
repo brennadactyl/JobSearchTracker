@@ -421,11 +421,17 @@ location, work setup and any posted comp range.
 
 There is nothing to watch and nothing to press. Any application with a link
 and a blank company, role or location is read once, automatically, and a flag
-nothing displays records that it has been - so a posting nobody can read
-(taken down, login wall, a domain that blocks fetches) isn't retried every
-night forever, it just leaves those fields blank for you to type, which is
-what you'd have done anyway. The run only ever writes into fields that are
-still empty, so anything you fill in yourself wins. Nothing else about the tab
+the page doesn't show records that it has been - so nothing is read twice, and
+a row that filled in just looks like a row you typed. The run only ever writes
+into fields that are still empty, so anything you fill in yourself wins.
+
+**A posting it couldn't read says so on its row**, with the reason: taken
+down, a login wall, a domain that blocks automated fetches. That is the one
+thing this ever puts on the page, and it is there because that row is now
+yours to type in - nothing is coming for it, and without saying so it would
+look exactly like a row still waiting its turn. There is no retry button: a
+posting is read once, and the reason tells you whether the details are gone or
+the page is sitting right there for you to open. Nothing else about the tab
 changes: it is still yours alone, and a row only ever gets there because you
 put it there.
 

@@ -8,11 +8,11 @@
 -- tabs (see src/prompt.js's buildAutofillPrompt, and the `_applications`
 -- reserved key in src/routes/index.js).
 --
--- `autofill` is bookkeeping, not a status. Nothing on the tracker page reads
--- it or renders anything from it: an application either has its company and
--- role in it or it doesn't, and that is all the person needs to see. This
--- column exists for exactly one reason - so a row is looked at once and then
--- left alone.
+-- `autofill` is bookkeeping, not a status. The page renders nothing from it
+-- except the one case that needs answering (see below): an application either
+-- has its company and role in it or it doesn't, and that is all the person
+-- needs to see while this is working. The column exists for one reason - so a
+-- row is looked at once and then left alone.
 --
 --   ''        not looked at yet (also every row that never needed looking at)
 --   'filled'  a run read the posting and wrote down what it said
@@ -38,8 +38,14 @@
 -- it. `notes` is the person's own field, written back wholesale by every edit
 -- on the page, so a run writing into it would race the textarea they may be
 -- typing in - and would put a machine's apology inside the one column that is
--- theirs. Nothing displays this either; it is what makes "the posting was
--- gone" distinguishable from "the nightly task stopped running" when someone
--- asks why a row is still blank.
+-- theirs.
+--
+-- This one *is* shown, on the row it belongs to, and it is the only thing
+-- about the fill that ever appears on the page. A 'failed' row is the row
+-- nothing is coming for: without saying so it looks exactly like one that
+-- hasn't been read yet, and the person waits for a fill that will never
+-- happen. The reason is what makes that actionable - "the posting has been
+-- taken down" and "the domain blocks automated fetches" call for different
+-- things from the reader.
 ALTER TABLE applications ADD COLUMN autofill TEXT NOT NULL DEFAULT '';
 ALTER TABLE applications ADD COLUMN autofill_note TEXT NOT NULL DEFAULT '';

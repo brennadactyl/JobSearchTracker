@@ -490,6 +490,9 @@ posting is read once and never again. So the standard you are held to is not
 "did it look like it worked" - it is that whatever you write down is what the
 posting actually said.
 
+The one exception, and the only thing here anybody ever reads: a posting you
+report as unreadable shows the reason you gave, on that row. See step 3.
+
 **This run covers every account on this machine.** The note above this prompt
 says how many there are and which environment variable holds each one's token
 (\`$TRACKER_TOKEN_1\`, \`$TRACKER_TOKEN_2\`, ...). Do steps 1-3 once per account,
@@ -556,8 +559,12 @@ Do the following, for each account in turn:
    > If you cannot read it - it 404s, the posting has been taken down or
    > filled, it is behind a login wall, the domain refuses the fetch, the page
    > renders nothing but a JS shell - return \`{"failed":"<short, specific
-   > reason in plain words>"}\` instead. Not being able to check is not the
-   > same as the posting being gone; say which it was.
+   > reason in plain words>"}\` instead. **That sentence is shown to the person
+   > whose application it is**, next to a row that will now stay blank until
+   > they fill it in themselves, so write it for them: say what you actually
+   > hit. Not being able to check is not the same as the posting being gone,
+   > and they need to know which it was - one means the details are gone, the
+   > other means the page is sitting there and only you couldn't have it.
 
    Do not give a subagent a token, an account, an id, or anything to POST.
    They read one page and hand back what it said; every write in this run is
@@ -587,11 +594,14 @@ Do the following, for each account in turn:
 
    **A subagent's fields go in \`filled\`; a subagent that came back with
    \`failed\` goes in \`failed\`, with its reason.** Pass the reason through as it
-   wrote it rather than summarising it - nothing displays it, and nothing
-   retries the row: reporting a posting as failed is how you say "this one is
-   done, leave it alone", and the reason is the only record of why those fields
-   stayed blank. It is what tells a posting that was genuinely gone apart from
-   this task having stopped running altogether.
+   wrote it rather than summarising it. Nothing retries the row - reporting a
+   posting as failed is how you say "this one is done, leave it alone" - and
+   **the reason is shown to the person on that row**, as the one thing this
+   whole job ever says on their page. It is what they read to decide what to do
+   about a row that is going to stay blank, so it has to be specific and true:
+   "the posting has been taken down" and "the domain blocks automated fetches"
+   ask completely different things of them. A vague reason is worse than none,
+   and a wrong one sends them looking for a page that is fine.
 
    Report every id every account gave you, in one list or the other. An id you
    report in neither comes back tomorrow night and every night after, which is
