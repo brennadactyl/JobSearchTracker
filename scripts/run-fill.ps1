@@ -243,7 +243,32 @@ Log "----- claude output -----"
 if ($output) { $output | Out-String | Out-File -Append -Encoding utf8 -FilePath $logFile }
 Log "----- end output -----"
 
+# The CLI exiting cleanly is not the same as the CLI having done anything.
+# An unauthenticated run prints "Not logged in - Please run /login" and exits
+# 0, which is what this script did on its first real invocation: job state
+# Completed, exit code 0, twenty seconds, nothing filled in. Task Scheduler
+# recorded a success.
+#
+# That matters more here than it would elsewhere, because this job deliberately
+# writes no run record (see ../server/src/prompt.js) - the evidence it stopped
+# is supposed to be a row that stayed blank, which is indistinguishable from a
+# posting nobody could read. So the one signal that exists, the task's Last Run
+# Result, has to be honest.
+#
+# Checked against the output rather than by pre-flighting the credential: the
+# token is read by the CLI in a child process, and what matters is whether that
+# process could use it, not whether this one can see it.
 $exitCode = if ($jobState -eq "Completed") { 0 } else { 1 }
+$outputText = if ($output) { ($output | Out-String).Trim() } else { "" }
+if (-not $outputText) {
+    Log "ERROR: the CLI produced no output at all - nothing was filled in"
+    $exitCode = 1
+} elseif ($outputText -match "Not logged in|Please run /login|Invalid API key|authentication_error") {
+    Log "ERROR: the CLI is not authenticated - nothing was filled in."
+    Log "       Run ``claude setup-token``, then: setx CLAUDE_CODE_OAUTH_TOKEN ""<token>"""
+    $exitCode = 1
+}
+
 $elapsed = [int]((Get-Date) - $start).TotalSeconds
 Log "finished - job state: $jobState, elapsed: ${elapsed}s, exit code: $exitCode"
 Log "===== done ====="
