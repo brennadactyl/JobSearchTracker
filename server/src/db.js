@@ -90,8 +90,12 @@
  * @property {string} dateOffer
  * @property {string} dateRejected
  * @property {string} dateWithdrawn
- * @property {string} autofill - one of AUTOFILL_STATES: '' | 'pending' | 'filled' | 'failed'
- * @property {string} autofill_note - why a 'failed' fill failed; '' otherwise
+ * @property {string} autofill - '' | 'filled' | 'failed'; whether this row's posting has
+ *   been read yet. Bookkeeping for the nightly fill and nothing else - no route takes
+ *   it from a caller and nothing displays it. See
+ *   migrations/0009_application_autofill.sql.
+ * @property {string} autofill_note - why a 'failed' read failed; '' otherwise, and
+ *   likewise never displayed
  */
 
 /**
@@ -259,38 +263,28 @@ const APPLICATION_COLS = [
   ...EXTRA_FIELDS, ...APP_STAGE_DATE_FIELDS, "autofill", "autofill_note",
 ];
 
-// The queue state of an application's overnight fill - see
-// migrations/0009_application_autofill.sql for what each one means and why
-// 'failed' is terminal. Exported because routes/applications.js validates
-// against it and the client renders from it.
-export const AUTOFILL_STATES = ["", "pending", "filled", "failed"];
-
-// What a fill is allowed to write. Everything a job posting states plainly and
+// What a read is allowed to write. Everything a job posting states plainly and
 // nothing else: the rest of an application's fields (referral, resume, source,
 // notes, the stage dates) are the person's own account of their search, which
 // no amount of reading the posting can tell you. Same three posting-stated
-// extras the search itself captures - see step 6b in prompt.js.
-export const AUTOFILL_FILL_FIELDS = ["company", "title", "location", "team", "setup", "comp"];
+// extras the search itself captures - see step 6b in prompt.js. Local to this
+// file: it is the whitelist applyAutofill applies, not a shape any caller
+// needs to know.
+const AUTOFILL_FILL_FIELDS = ["company", "title", "location", "team", "setup", "comp"];
 
-// The three columns a new application doesn't default to '': it is applied-to
-// today unless the caller says otherwise, its status is "Applied" unless the
-// caller is logging something it hasn't reached yet ("To Apply"), and it
-// joins the overnight fill queue when it was created out of a URL and nothing
-// else.
+// The two columns a new application doesn't default to '': it is applied-to
+// today unless the caller says otherwise, and its status is "Applied" unless
+// the caller is logging something it hasn't reached yet ("To Apply").
 //
-// That last one is derived here rather than asked of the caller because it is
-// not a preference - it is a description of the row. "Has a link, has no
-// company and no title" is exactly what the tracker page's paste-a-URL box
-// creates and exactly what a run can do something about; the lead-to-
-// application path copies a company and title in, so it never matches, and a
-// caller that spells out its own `autofill` (the Try again route) still wins.
+// `autofill` is deliberately not among them. Whether a row's posting still
+// wants reading is derived from the row itself at the moment a run asks (see
+// getAutofillQueue), not decided and stored when it is created - so nothing
+// has to be flagged, and nothing that creates an application has to know this
+// feature exists.
 function applicationValues(fields) {
-  const queued =
-    (fields.link || "").trim() && !(fields.company || "").trim() && !(fields.title || "").trim();
   return APPLICATION_COLS.map((f) => {
     if (f === "dateApplied") return fields.dateApplied || today();
     if (f === "status") return fields.status || "Applied";
-    if (f === "autofill") return fields.autofill || (queued ? "pending" : "");
     return fields[f] || "";
   });
 }
@@ -1372,22 +1366,29 @@ export class Db {
   // --------------------------------------------- the overnight fill --
 
   /**
-   * The fill queue: applications waiting for a run to read their link, as
-   * `{id, link}` and nothing else - the same deliberate narrowness as
-   * getDedupData, and for the same reason (this lands in a nightly run's
-   * context).
+   * Which applications tonight's run should read, as `{id, link}` and nothing
+   * else - the same deliberate narrowness as getDedupData, and for the same
+   * reason (this lands in a nightly run's context).
    *
-   * The rule is exactly "someone asked, and there is a link to read", and
-   * deliberately says nothing about which fields are still blank. An earlier
-   * version also required company and title to be empty, so that a row the
-   * person got tired of waiting for and typed in themselves would leave the
-   * queue with nothing having to write to it. That is a nice property and it
-   * was wrong: requestAutofill (the page's Fill tonight, on a row that has a
-   * company but no role) then produced a row marked pending that this query
-   * could never return - reading as "waiting for the nightly fill" forever,
-   * with nothing able to resolve it. A wasted fetch on the rare row that was
-   * hand-filled in the meantime is the cheaper mistake, and applyAutofill
-   * drops what it can't write anyway.
+   * Every row is a candidate; nothing is queued, flagged or asked for. Three
+   * conditions, each of them a fact about the row rather than a decision
+   * anyone made about it:
+   *
+   * - `link != ''` - there is something to open.
+   * - `autofill = ''` - it hasn't been looked at. This is the whole job of the
+   *   flag: one look per row, so a posting that can't be read doesn't come
+   *   back every night forever.
+   * - a blank company, role or location - there is something a posting could
+   *   actually supply. An application created from a lead carries all three,
+   *   so it is never fetched for nothing; one pasted in as a URL is missing
+   *   all three, so it is. It also means deploying this doesn't send a run at
+   *   every application already in the database - only at the ones with a gap
+   *   in them.
+   *
+   * The other posting-stated fields (team, setup, comp) are filled when a run
+   * does open a posting, but their absence is not a reason to open one: plenty
+   * of postings never state them, so "still blank" would be a permanent
+   * condition rather than a gap worth a fetch.
    *
    * @returns {Promise<{id: number, link: string}[]>}
    */
@@ -1395,7 +1396,8 @@ export class Db {
     const { results } = await this.d1
       .prepare(
         `SELECT id, link FROM applications
-          WHERE user_id = ? AND autofill = 'pending' AND link != ''
+          WHERE user_id = ? AND autofill = '' AND link != ''
+            AND (company = '' OR title = '' OR location = '')
           ORDER BY id`
       )
       .bind(this.userId)
@@ -1413,14 +1415,18 @@ export class Db {
    * the meantime; their typing is the better source and must not be
    * overwritten by a machine's reading of a page.
    *
-   * `AND autofill = 'pending'` is the other half of that: a row that has been
-   * dealt with, retried, or deleted since the queue was fetched matches
-   * nothing and comes back to the caller as unmatched rather than being
-   * silently stamped.
+   * `AND autofill = ''` is the other half of that: a row already looked at,
+   * or deleted since the queue was fetched, matches nothing and comes back to
+   * the caller as unmatched rather than being written to twice.
+   *
+   * Marks the row read even when `fields` carries nothing usable. That is a
+   * posting a run opened and got nothing out of, which is a real (if odd)
+   * outcome, and leaving it unmarked would put it back in tomorrow's queue and
+   * every queue after that - the one thing the flag exists to prevent.
    *
    * @param {number|string} id
    * @param {Partial<Application>} fields - only AUTOFILL_FILL_FIELDS are read
-   * @returns {Promise<Application|null>} null if the row is no longer pending
+   * @returns {Promise<Application|null>} null if the row was already read
    */
   async applyAutofill(id, fields) {
     const sets = ["autofill = 'filled'", "autofill_note = ''"];
@@ -1435,7 +1441,7 @@ export class Db {
     const result = await this.d1
       .prepare(
         `UPDATE applications SET ${sets.join(", ")}
-          WHERE id = ? AND user_id = ? AND autofill = 'pending'`
+          WHERE id = ? AND user_id = ? AND autofill = ''`
       )
       .bind(...values, id, this.userId)
       .run();
@@ -1444,39 +1450,21 @@ export class Db {
   }
 
   /**
-   * Records that a run opened the link and couldn't read it. Terminal until
-   * the person asks again - see the migration for why a failed fill isn't
-   * retried on its own.
+   * Records that a run opened the link and couldn't read it. Final - see the
+   * migration for why a failed read isn't retried. The note is not displayed
+   * anywhere; it is the answer to "why is this row still blank", which is
+   * otherwise indistinguishable from the nightly task having stopped running.
    * @param {number|string} id
-   * @param {string} note - short, human-readable; shown on the row
-   * @returns {Promise<Application|null>} null if the row is no longer pending
+   * @param {string} note - short, human-readable
+   * @returns {Promise<Application|null>} null if the row was already read
    */
   async failAutofill(id, note) {
     const result = await this.d1
       .prepare(
         `UPDATE applications SET autofill = 'failed', autofill_note = ?
-          WHERE id = ? AND user_id = ? AND autofill = 'pending'`
+          WHERE id = ? AND user_id = ? AND autofill = ''`
       )
       .bind(note, id, this.userId)
-      .run();
-    if (result.meta.changes === 0) return null;
-    return this.getApplication(id);
-  }
-
-  /**
-   * Puts one application (back) in the queue - the Try again button, and the
-   * way an application that was added by hand and later given a link gets
-   * filled in too.
-   * @param {number|string} id
-   * @returns {Promise<Application|null>} null if there's no such row
-   */
-  async requestAutofill(id) {
-    const result = await this.d1
-      .prepare(
-        `UPDATE applications SET autofill = 'pending', autofill_note = ''
-          WHERE id = ? AND user_id = ?`
-      )
-      .bind(id, this.userId)
       .run();
     if (result.meta.changes === 0) return null;
     return this.getApplication(id);

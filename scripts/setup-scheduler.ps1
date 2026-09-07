@@ -22,9 +22,8 @@
   nightly fill for applications logged as nothing but a URL. It reads the
   postings behind them and writes down the company, role and location, so
   adding an application is a paste rather than nine fields typed out by hand.
-  Registered whether or not that person has used it yet - the queue is empty
-  until someone pastes a URL, and a run against an empty queue stops
-  immediately.
+  Registered whether or not that person has used it yet - a run with nothing
+  to read stops after one API call.
 
   Safe to re-run: existing tasks for a still-present track are replaced in
   place; tasks left over from a track that no longer exists are unregistered.

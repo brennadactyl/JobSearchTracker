@@ -336,17 +336,6 @@ input.dh-loc-in{width:auto;max-width:calc(100% + 8px);font-size:12.5px;color:var
 .mf-open:hover{text-decoration:underline}
 .note{font-size:12.5px;color:var(--ink3);padding:14px 0 0;line-height:1.6}
 
-/* The overnight-fill notice on an application added as nothing but a URL
-   (see autofillNoticeHtml). One row, quiet by default, because on the happy
-   path it says "waiting" for a few hours and then never appears again - it
-   should not look like something has gone wrong. `.bad` is for the fill that
-   was tried and failed, which is the one state that needs answering. */
-.af{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-top:12px;
-  padding:9px 12px;border:1px solid var(--line);border-radius:8px;
-  background:var(--surface2);font-size:12.5px;color:var(--ink2);line-height:1.5}
-.af.bad{border-color:var(--crit)}
-.af .af-why{color:var(--ink3)}
-.af .btn{margin-left:auto;font-size:12.5px;padding:4px 10px}
 @media (max-width:900px){
   .wrap{padding:0 13px 60px}
 }
@@ -654,52 +643,15 @@ function safeUrl(v){
 
 // The host a link points at ("boards.greenhouse.io"), or "" if there isn't
 // one. Stands in for the company on an application that is still nothing but
-// a URL: a list of rows all reading "Untitled" can't be told apart, and this
-// is the one thing about the posting that is known without opening it. It is
-// never written into the company field - see autofillNoticeHtml for why a
-// guess doesn't get to become a fact here.
+// a URL - between pasting one in and the overnight fill reading the posting,
+// it is the only thing about the row that is known, and a list of rows all
+// reading "Untitled" can't be told apart. Displayed, never stored: a host is
+// a good enough label to find a row by and nowhere near good enough to write
+// into the company field as fact.
 function hostOf(v){
   var u=safeUrl(v);
   if(!u)return "";
   try{return new URL(u).hostname.replace(/^www\./,"");}catch(e){return "";}
-}
-
-// What an application row says about its overnight fill - the nightly run
-// that reads the posting behind a URL-only application and writes down what
-// it says (see server/src/prompt.js's buildAutofillPrompt).
-//
-// Three things to say, and silence the rest of the time: a row with no link
-// has nothing to fill, and a filled-in row that looks complete has nothing
-// left to report. What's left is the waiting, the failure, and the offer to
-// read a posting for a row that has a link but no company or role - which is
-// how an application typed in by hand, or created from a lead whose posting
-// has since changed, gets read too.
-//
-// The wait line grows a nudge after a couple of days. A fill that stops
-// running is the same silent failure a search that stops running is, and this
-// is where it surfaces: the row itself is sitting in front of the person,
-// saying how long it has been waiting. That's why this feature records no
-// run - see the prompt for the longer version.
-function autofillNoticeHtml(a){
-  var state=a.autofill||"";
-  if(!safeUrl(a.link))return "";
-  if(state==="pending"){
-    var d=daysSince(a.dateApplied);
-    var late=(d!==null&&d>=2)
-      ?' <span class="af-why">Still waiting after '+d+' days &mdash; check the nightly fill task is running.</span>'
-      :'';
-    return '<div class="af">Waiting for the nightly fill to read this posting.'+late+'</div>';
-  }
-  if(state==="failed"){
-    return '<div class="af bad">The nightly fill could not read this posting.'+
-      (a.autofill_note?' <span class="af-why">'+esc(a.autofill_note)+'</span>':'')+
-      '<button class="btn ghost" data-refill="'+a.id+'">Try again</button></div>';
-  }
-  if(!a.company||!a.title){
-    return '<div class="af">Have the nightly fill read this posting and fill in the rest?'+
-      '<button class="btn ghost" data-refill="'+a.id+'">Fill tonight</button></div>';
-  }
-  return "";
 }
 
 function factsGridHtml(item,fields,isApp){
@@ -1399,16 +1351,24 @@ function leadDetailHtml(l,key){
 function appsTab(){
   var A=state.applications.slice().sort(appComparator(ui.appSort));
   // The URL box is the whole of adding an application now: paste the posting
-  // you applied to, and the nightly fill reads the company, role and location
-  // off it overnight (see autofillNoticeHtml). Leaving it empty still adds the
-  // blank row this button always added - the way to log something that has no
-  // posting behind it, or to type it all in now rather than wait.
+  // you applied to, and a nightly run reads the company, role and location off
+  // it. Leaving it empty still adds the blank row this button always added -
+  // the way to log something with no posting behind it, or to type it all in
+  // now rather than wait.
   //
-  // The line beside it used to read "the scheduled searches never touch this
-  // tab", which stopped being true the moment a scheduled run started filling
-  // these in. It still says the part that matters - nothing arrives here that
-  // wasn't put here on purpose - because that is what makes this tab safe to
-  // treat as the record of what was actually applied to.
+  // That run is deliberately invisible: there is no per-row "waiting" or
+  // "couldn't read this" state anywhere on this tab, because there is nothing
+  // for anyone to do about either. A row either has its company and role in it
+  // or it doesn't, and typing them in is the answer to "it didn't fill in"
+  // whatever the reason was. The one sentence below is the whole of what the
+  // page says about it, and it is here to explain why pasting a bare URL is a
+  // reasonable thing to do - not to report a status.
+  //
+  // It used to read "the scheduled searches never touch this tab", which
+  // stopped being true the moment a scheduled run started filling these in. It
+  // still says the part that matters: nothing arrives here that wasn't put
+  // here on purpose, which is what makes this tab the record of what was
+  // actually applied to.
   var h='<div class="toolbar">'+
     '<div class="search"><input type="url" id="appurl" placeholder="Paste the job posting URL" aria-label="Job posting URL"></div>'+
     '<button class="btn primary" id="addapp">Add application</button>'+
@@ -1436,17 +1396,12 @@ function appsTab(){
     var d=daysSince(a.dateApplied);
     var g=geo(a.location);
     var cls="md-row"+(a.id===sel.id?" sel":"")+(g?" "+g.p:"");
-    // A row that is still just a URL has no company to show, and a list of
-    // rows all reading "Untitled" can't be told apart - so it borrows the
-    // link's host until the fill (or the person) gives it a real one, and
-    // says what it's waiting for where the role would go.
-    var waiting=a.autofill==="pending"&&!a.company&&!a.title;
     return '<div class="'+cls+'" data-select="'+a.id+'" data-scope="applications">'+
       '<div class="md-row-top"><span class="co">'+esc(a.company||hostOf(a.link)||"Untitled")+'</span>'+
         '<span class="pill '+pillFor(a.status)+'">'+esc(a.status)+'</span></div>'+
       // The dash is markup, so it can't go through esc() with the title -
       // that turned the fallback into a literal "&mdash;" on screen.
-      '<div class="md-row-ttl">'+(a.title?esc(a.title):(waiting?"Filling in overnight&hellip;":"&mdash;"))+'</div>'+
+      '<div class="md-row-ttl">'+(a.title?esc(a.title):"&mdash;")+'</div>'+
       // The same three-part line a lead row has (place, geo tier, date
       // stamp), so the two lists scan alike - and so the Location sort has
       // something visible to have sorted by. A "To Apply" row has no applied
@@ -1496,8 +1451,7 @@ function appsGridHtml(A){
       '<td><button class="btn ghost" data-del="'+a.id+'" title="Remove">&times;</button></td>'+
     '</tr>';
     if(open){
-      row+='<tr class="more-row"><td colspan="'+COLS+'">'+
-        autofillNoticeHtml(a)+factsCardsHtml(a,true,true)+'</td></tr>';
+      row+='<tr class="more-row"><td colspan="'+COLS+'">'+factsCardsHtml(a,true,true)+'</td></tr>';
     }
     return row;
   }).join("")+'</tbody></table></div>';
@@ -1556,7 +1510,6 @@ function appDetailHtml(a){
   h+='<div class="dh-status">'+selectHtml(APP_STATUS,a.status,'data-id="'+a.id+'" data-field="status" data-app="1"')+
     '<span class="dh-dates">Applied <input type="date" data-id="'+a.id+'" data-field="dateApplied" data-app="1" value="'+esc(a.dateApplied)+'">'+
       (d!==null?' &middot; '+d+' days':'')+'</span></div>';
-  h+=autofillNoticeHtml(a);
   h+=factsCardsHtml(a,true,false);
   h+='<div class="dh-notes"><div class="mf-label">Notes</div>'+
     '<textarea data-id="'+a.id+'" data-field="notes" data-app="1" rows="3">'+esc(a.notes)+'</textarea></div>';
@@ -1646,19 +1599,6 @@ document.addEventListener("click",function(e){
 
   if(e.target.id==="addapp"){addApplication();return;}
 
-  var refill=e.target.closest("[data-refill]");
-  if(refill){
-    var rid=refill.getAttribute("data-refill");
-    setSaved("Saving…",false);
-    api("/api/applications/"+rid+"/autofill",{method:"POST"}).then(function(res){
-      if(!res||!res.application)throw new Error((res&&res.error)||"failed");
-      replaceApplication(res.application);
-      render();
-      setSaved("Queued for tonight",true);
-    }).catch(function(){setSaved("Couldn't queue that — try again","bad");});
-    return;
-  }
-
   var del=e.target.closest("[data-del]");
   // Removing a posting asks for a reason rather than just confirming. The
   // reason is stored on the screened row the removal leaves behind, which is
@@ -1715,11 +1655,13 @@ document.addEventListener("input",function(e){
 
 // Adding an application: a pasted URL, or nothing at all.
 //
-// With a URL, the row is created with the link and no other content, which is
-// what puts it in the overnight fill queue - the server derives that from the
-// shape of the row rather than taking a flag from here (see db.js's
-// applicationValues), so there is no state the page could get wrong. Without
-// one, this is the blank row the button always created.
+// With a URL, the row is created with the link and no other content, and that
+// is the entire handoff - the row is a candidate for the overnight fill
+// because of what is in it (a link, and no company/role/location), not
+// because anything here said so. See db.js's getAutofillQueue. Nothing is
+// flagged, requested or tracked from this side, so there is no state the page
+// can get wrong or leave stale. Without a URL, this is the blank row the
+// button always created.
 //
 // The duplicate check is exact-match and deliberately shallow: it catches
 // pasting the same URL twice, which is the mistake a one-box form invites,
@@ -1750,14 +1692,6 @@ function addApplication(){
     render();
     setSaved(url?"Added — it fills in overnight":"Saved",true);
   }).catch(function(){setSaved("Couldn't save — try again","bad");});
-}
-
-// Swap one application in place, keeping its position in the list. The
-// fill-queue calls hand back the whole updated row.
-function replaceApplication(app){
-  state.applications=(state.applications||[]).map(function(a){
-    return String(a.id)===String(app.id)?app:a;
-  });
 }
 
 function commit(el){

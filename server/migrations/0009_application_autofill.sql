@@ -8,27 +8,38 @@
 -- tabs (see src/prompt.js's buildAutofillPrompt, and the `_applications`
 -- reserved key in src/routes/index.js).
 --
--- `autofill` is the queue state, and it is deliberately not a boolean:
+-- `autofill` is bookkeeping, not a status. Nothing on the tracker page reads
+-- it or renders anything from it: an application either has its company and
+-- role in it or it doesn't, and that is all the person needs to see. This
+-- column exists for exactly one reason - so a row is looked at once and then
+-- left alone.
 --
---   ''        nothing asked for - every existing row, and every application
---             created from a lead or filled in by hand
---   'pending' waiting for a run to read the link
---   'filled'  a run read it and wrote what it found
+--   ''        not looked at yet (also every row that never needed looking at)
+--   'filled'  a run read the posting and wrote down what it said
 --   'failed'  a run opened it and couldn't - `autofill_note` says why
 --
--- 'failed' is terminal on purpose. The failures that actually happen here are
--- the ones a retry doesn't fix - a posting already taken down, a login wall, a
--- domain that refuses automated fetches - so a row that keeps its place in the
--- queue would be fetched again every night forever, and the person would never
--- be told the machine had given up. Instead the row says what went wrong and
--- offers a Try again button (the tracker page's only writer of 'pending'
--- besides creation), which is the right shape for the case a retry does fix:
--- the site was down for an hour.
+-- Which rows a run looks at is derived rather than requested: any application
+-- with a link, still flagged '', that is missing a company, a role or a
+-- location (see db.js's getAutofillQueue). Nothing has to be queued, marked or
+-- asked for, at creation or afterwards - so there is no state the page could
+-- set wrong, and nothing to remember to do. A row created from a lead already
+-- carries all three, so it is never fetched; a row pasted in as a URL is
+-- missing all three, so it is.
 --
--- `autofill_note` is the reason, kept out of `notes` rather than appended to
+-- One look per row, either way. That is what the flag buys, and it is why
+-- 'failed' is not retried: the failures that actually happen here - a posting
+-- already taken down, a login wall, a domain that refuses automated fetches -
+-- are the ones a retry doesn't fix, and a row that kept its place in the queue
+-- would be re-fetched every night forever without anything ever saying so. A
+-- posting nobody could read leaves the fields blank, which is the same thing
+-- the person would have seen if this feature didn't exist; they type it in.
+--
+-- `autofill_note` is that reason, kept out of `notes` rather than appended to
 -- it. `notes` is the person's own field, written back wholesale by every edit
 -- on the page, so a run writing into it would race the textarea they may be
 -- typing in - and would put a machine's apology inside the one column that is
--- theirs.
+-- theirs. Nothing displays this either; it is what makes "the posting was
+-- gone" distinguishable from "the nightly task stopped running" when someone
+-- asks why a row is still blank.
 ALTER TABLE applications ADD COLUMN autofill TEXT NOT NULL DEFAULT '';
 ALTER TABLE applications ADD COLUMN autofill_note TEXT NOT NULL DEFAULT '';

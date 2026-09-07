@@ -413,16 +413,20 @@ would warn nearly all week.
 is the one thing on the page no search writes to - it's the record of what you
 actually applied to - and keeping it up to date used to mean copying nine
 fields off a posting you had open in the next tab. Paste the posting's URL
-into the box on that tab instead: the row appears immediately saying "filling
-in overnight", and one more nightly task per person (`JobSearch-<you>-Applications`,
-registered by the same `setup-scheduler.ps1`) opens the posting and writes
-down the company, role, location, work setup and any posted comp range. It
-only ever writes into fields that are still empty, so anything you type in
-yourself in the meantime wins. A posting it can't read - taken down, login
-wall, a domain that blocks fetches - says so on the row with a Try again
-button rather than being retried silently every night forever. Nothing else
-about the tab changes: it is still yours alone, and a row only ever gets there
-because you put it there.
+into the box on that tab instead and leave it: one more nightly task per
+person (`JobSearch-<you>-Applications`, registered by the same
+`setup-scheduler.ps1`) opens the posting and writes down the company, role,
+location, work setup and any posted comp range.
+
+There is nothing to watch and nothing to press. Any application with a link
+and a blank company, role or location is read once, automatically, and a flag
+nothing displays records that it has been - so a posting nobody can read
+(taken down, login wall, a domain that blocks fetches) isn't retried every
+night forever, it just leaves those fields blank for you to type, which is
+what you'd have done anyway. The run only ever writes into fields that are
+still empty, so anything you fill in yourself wins. Nothing else about the tab
+changes: it is still yours alone, and a row only ever gets there because you
+put it there.
 
 **Headless runs use a scoped tool allowlist**, not full permission bypass -
 see `scripts/run-search.ps1`. If a search prompt ever needs a new capability,

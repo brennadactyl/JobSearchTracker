@@ -23,7 +23,6 @@ import {
   handleDeleteApplication,
   handleGetAutofillQueue,
   handleReportAutofill,
-  handleRequestAutofill,
   handleSetApplicationStatus,
 } from "./applications.js";
 import { handleGetConfig, handleSetConfig } from "./config.js";
@@ -83,13 +82,14 @@ export const SESSION_ROUTES = [
   ["POST", "/api/delist", handleDelistUrls],
   ["POST", /^\/api\/leads\/(\d+)\/status$/, handleSetLeadStatus],
   ["POST", /^\/api\/applications\/(\d+)\/status$/, handleSetApplicationStatus],
-  // The overnight fill of an application added as nothing but a URL: the
-  // queue, the run's report of what it read, and one row asked for again.
-  // `pending` can't collide with the id routes above and below - an id is
-  // \d+ - so this needs no ordering care, unlike the prompt pair.
+  // The overnight fill of an application added as nothing but a URL: which
+  // postings tonight's run should read, and what it read off them. Two routes
+  // and no third - nothing re-queues a row, because a row is read once (see
+  // ../../migrations/0009_application_autofill.sql). `pending` can't collide
+  // with the numeric-id route above - an id is \d+ - so this needs no
+  // ordering care, unlike the prompt pair below.
   ["GET", "/api/applications/pending", handleGetAutofillQueue],
   ["POST", "/api/applications/autofill", handleReportAutofill],
-  ["POST", /^\/api\/applications\/(\d+)\/autofill$/, handleRequestAutofill],
   ["GET", /^\/api\/dedup\/([^/]+)$/, handleGetDedup],
   ["GET", /^\/api\/coverage\/([^/]+)$/, handleGetCoverage],
   ["POST", "/api/coverage", handleRecordSweeps],

@@ -434,10 +434,12 @@ Never add an unverified link to any output.${footer}
  * ---- Why there is no run record for this one.
  * Every search records itself to /api/runs because a search that finds nothing
  * writes nothing, so a search that quietly stopped firing looks identical to a
- * quiet night. That does not apply here: a fill that stops running leaves its
- * rows sitting on the Applications tab saying "waiting for the nightly fill",
- * with the date they were added next to them. The evidence is the queue
- * itself, and it is in front of the person who is waiting for it.
+ * quiet night. The stakes here are lower by design: this fills in fields the
+ * person can always type themselves, on rows that are already in front of them
+ * on the Applications tab, and it is deliberately invisible while it works. A
+ * run record would be a status readout for a thing with no status - the
+ * evidence that it stopped is a row that stayed blank, and the fix for that
+ * row is the same either way.
  *
  * @param {{user: {id: string, name: string}, settings: import("./db.js").Settings}} args
  * @returns {string} the full prompt text
@@ -456,6 +458,11 @@ nobody has to copy company, title and location off a page by hand. You are not
 searching for anything tonight, and you are not judging whether any of these
 are a good fit - ${name} has already applied to every one of them.
 
+None of this is visible on ${pn.poss} tracker page while it happens, and each
+posting is read once and never again. So the standard you are held to is not
+"did it look like it worked" - it is that whatever you write down is what the
+posting actually said.
+
 Do the following:
 
 1. GET THE QUEUE.
@@ -465,7 +472,10 @@ Do the following:
    \`\`\`
 
    It returns \`{"applications":[{"id":123,"link":"https://..."}]}\` - every
-   application waiting to be filled in, with the URL to read and nothing else.
+   application whose posting hasn't been read yet, with the URL to read and
+   nothing else. The tracker decides what is on this list; don't go looking for
+   other applications to fill in, and don't skip one because its URL looks
+   unpromising.
    \`TRACKER_URL\` and \`TRACKER_API_TOKEN\` are environment variables; run the
    curl as written and let the shell expand them rather than spending a step
    checking whether they're set.
@@ -511,24 +521,31 @@ Do the following:
    **\`failed\` is for a posting you opened and genuinely could not read** - it
    404s, it has been taken down or filled, it's behind a login wall, the domain
    refuses the fetch, or the page renders nothing but a JS shell. Put a short,
-   specific reason in plain words: it is shown to ${name} on the row, next to a
-   Try again button, and it is what tells ${pn.obj} whether retrying is worth
-   it or the fields are quicker typed in. A failed row is **not** retried
-   automatically on later nights, so a posting you couldn't read tonight is one
-   you have handed back, not one you have postponed.
+   specific reason in plain words. Nothing displays it, and nothing retries the
+   row: reporting a posting as failed is how you say "this one is done, leave
+   it alone", and the reason is the only record of why those fields stayed
+   blank. Say what you actually saw, so it can be told apart from this task
+   having stopped running altogether.
+
+   Report every id you were given, in one list or the other. An id you report
+   in neither comes back tomorrow night and every night after, which is the
+   one outcome this is built to avoid.
 
    Nothing here overwrites anything. The tracker only writes into fields that
    are still empty, so if ${name} filled some of them in during the day,
    ${pn.poss} version stays and yours is dropped. Send what you read and don't
-   try to work out what is already there.
+   try to work out what is already there - you were not told what is in the
+   row, and that is deliberate.
 
    The response is \`{"filled":N,"failed":N,"unmatched":[id,...]}\`. An id in
    \`unmatched\` means that row was dealt with or deleted between step 1 and
    now - ordinary, and nothing to retry or work around.
 
-4. Report in a few lines: how many postings were in the queue, what you filled
-   in for each (company and title is enough), and every one you couldn't read
-   with the reason you sent. If the queue was empty, that one line is the whole
-   report - don't pad it.
+4. Report in a few lines: how many postings you were given, what you filled in
+   for each (company and title is enough), and every one you couldn't read with
+   the reason you sent. Nobody reads this in the normal course of things - it
+   is the log someone checks when a row stayed blank - so be accurate rather
+   than reassuring. If the list was empty, that one line is the whole report;
+   don't pad it.
 `;
 }
