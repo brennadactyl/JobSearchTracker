@@ -17,7 +17,13 @@
  * version. Persistence: ../db.js. Schema: ../../migrations/.
  */
 
-import { handleGetMe, handleLogin, handleLogout, handleUpsertUser } from "./accounts.js";
+import {
+  handleChangePassword,
+  handleGetMe,
+  handleLogin,
+  handleLogout,
+  handleUpsertUser,
+} from "./accounts.js";
 import { handlePurgeSearch } from "./admin.js";
 import {
   handleDeleteApplication,
@@ -70,6 +76,10 @@ export const PUBLIC_ROUTES = [
 export const SESSION_ROUTES = [
   ["POST", "/api/logout", handleLogout],
   ["GET", "/api/me", handleGetMe],
+  // Changing your own password. A session route, not an admin one: the person
+  // it belongs to is the caller, and it takes their current password on top of
+  // their token - see the handler for why the token alone is not enough.
+  ["POST", "/api/password", handleChangePassword],
   ["GET", "/api/data", handleGetData],
   ["GET", "/api/config", handleGetConfig],
   ["POST", "/api/config", handleSetConfig],

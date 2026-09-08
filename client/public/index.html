@@ -380,6 +380,15 @@ input.dh-loc-in{width:auto;max-width:calc(100% + 8px);font-size:12.5px;color:var
 .modal-card h3{font-size:16px}
 .modal-card p{margin:0;color:var(--ink2);font-size:13px}
 .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:2px}
+.modal-card.wide{max-width:400px}
+.pw-field{display:flex;flex-direction:column;gap:5px}
+.pw-field label{font-size:12.5px;font-weight:600}
+.pw-field input{width:100%;box-sizing:border-box}
+.pw-check{display:flex;align-items:flex-start;gap:8px;font-size:12.5px;color:var(--ink2);line-height:1.45}
+.pw-check input{margin:2px 0 0}
+.pw-msg{font-size:12.5px;min-height:1em;line-height:1.45;color:var(--ink2)}
+.pw-msg.bad{color:var(--crit)}
+.pw-msg.good{color:var(--good)}
 
 .stage-hist table{width:100%;border-collapse:collapse}
 .stage-hist tr+tr td,.stage-hist tr+tr th{border-top:1px solid var(--line)}
@@ -421,6 +430,7 @@ try{
       <div class="hdr-right">
         <div class="stamp"><span class="dot" id="savedot"></span><span id="savetext">Loading</span></div>
         <span class="who" id="whoami"></span>
+        <button class="btn ghost" id="changePw" type="button" title="Change your password">Password</button>
         <button class="btn ghost" id="logout" type="button" title="Sign out of this browser">Log out</button>
         <button class="btn ghost" id="themeToggle" type="button" aria-label="Switch to dark theme" title="Switch to dark theme">🌙</button>
       </div>
@@ -438,6 +448,33 @@ try{
   moving into a stage whose history column is still blank. The title text
   is set from JS, not here - it depends on which stage, see STAGE_SCHEDULED.
 -->
+<div id="pwModal" class="modal-overlay hidden">
+  <div class="card modal-card wide">
+    <h3>Change your password</h3>
+    <div class="pw-field">
+      <label for="pwCurrent">Current password</label>
+      <input type="password" id="pwCurrent" autocomplete="current-password">
+    </div>
+    <div class="pw-field">
+      <label for="pwNew">New password</label>
+      <input type="password" id="pwNew" autocomplete="new-password" placeholder="12 characters or more">
+    </div>
+    <div class="pw-field">
+      <label for="pwConfirm">Confirm new password</label>
+      <input type="password" id="pwConfirm" autocomplete="new-password">
+    </div>
+    <label class="pw-check">
+      <input type="checkbox" id="pwSignOut" checked>
+      <span>Sign out my other browsers. This one stays signed in.</span>
+    </label>
+    <div id="pwMsg" class="pw-msg"></div>
+    <div class="modal-actions">
+      <button class="btn" id="pwCancel" type="button">Cancel</button>
+      <button class="btn primary" id="pwSave" type="button">Change it</button>
+    </div>
+  </div>
+</div>
+
 <div id="stageDateModal" class="modal-overlay hidden">
   <div class="card modal-card">
     <h3 id="stageDateTitle">When did this happen?</h3>
@@ -991,6 +1028,78 @@ function submitToken(){
     boot();
   }).catch(function(err){
     document.getElementById("gateError").textContent="Couldn't sign in: "+err.message;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Changing your own password.
+//
+// The fields are never pre-filled and are always cleared on the way out, in
+// both directions - cancel included. A password left sitting in a detached
+// DOM node is a small thing, but this is the one value in the page that is
+// worth being fussy about, and "cleared only on success" is how it ends up
+// still there after a mistyped attempt.
+function openPwModal(){
+  ["pwCurrent","pwNew","pwConfirm"].forEach(function(id){document.getElementById(id).value="";});
+  document.getElementById("pwSignOut").checked=true;
+  setPwMsg("");
+  document.getElementById("pwModal").classList.remove("hidden");
+  document.getElementById("pwCurrent").focus();
+}
+
+function closePwModal(){
+  ["pwCurrent","pwNew","pwConfirm"].forEach(function(id){document.getElementById(id).value="";});
+  setPwMsg("");
+  document.getElementById("pwModal").classList.add("hidden");
+}
+
+function setPwMsg(text,kind){
+  var el=document.getElementById("pwMsg");
+  el.className="pw-msg"+(kind?" "+kind:"");
+  el.textContent=text||"";
+}
+
+function submitPwChange(){
+  var current=document.getElementById("pwCurrent").value;
+  var next=document.getElementById("pwNew").value;
+  var confirm=document.getElementById("pwConfirm").value;
+  var signOut=document.getElementById("pwSignOut").checked;
+  var save=document.getElementById("pwSave");
+
+  // Checked here as well as on the server, so the common typos answer
+  // instantly and without sending the password anywhere.
+  if(!current){setPwMsg("Enter your current password.","bad");return;}
+  if(next.length<12){setPwMsg("Your new password needs to be at least 12 characters.","bad");return;}
+  if(next!==confirm){setPwMsg("Those two new passwords don\u2019t match.","bad");return;}
+
+  save.disabled=true;
+  setPwMsg("Changing...");
+  api("/api/password",{method:"POST",body:JSON.stringify({
+    currentPassword:current,newPassword:next,signOutOthers:signOut
+  })}).then(function(r){
+    save.disabled=false;
+    if(r&&r.error){setPwMsg(r.error,"bad");return;}
+    // Said out loud rather than just closing. A password change is a thing
+    // people want confirmed, and the count is the only evidence the checkbox
+    // did anything.
+    var note="Password changed.";
+    if(signOut){
+      note+=r.signedOut===1?" One other browser was signed out."
+           :r.signedOut>0?" "+r.signedOut+" other browsers were signed out."
+           :" No other browsers were signed in.";
+    }
+    setPwMsg(note,"good");
+    ["pwCurrent","pwNew","pwConfirm"].forEach(function(id){document.getElementById(id).value="";});
+    setTimeout(function(){
+      // Only if they haven't reopened it in the meantime.
+      if(!document.getElementById("pwModal").classList.contains("hidden"))closePwModal();
+    },2200);
+  }).catch(function(err){
+    save.disabled=false;
+    // api() has already forgotten the session and shown the gate in this case;
+    // saying anything here would be writing into a hidden dialog.
+    if(err.message==="unauthorized")return;
+    setPwMsg("Couldn\u2019t change it: "+err.message,"bad");
   });
 }
 
@@ -1640,6 +1749,12 @@ document.addEventListener("click",function(e){
   if(e.target.id==="tokenSubmit"){submitToken();return;}
   if(e.target.id==="logout"){logout();return;}
   if(e.target.closest("#themeToggle")){toggleTheme();return;}
+  if(e.target.closest("#changePw")){openPwModal();return;}
+  if(e.target.id==="pwCancel"){closePwModal();return;}
+  if(e.target.id==="pwSave"){submitPwChange();return;}
+  // The overlay itself, not the card on top of it - same dismiss-on-backdrop
+  // the date modal has.
+  if(e.target.id==="pwModal"){closePwModal();return;}
 
   var t=e.target.closest("[data-tab]");
   if(t){ui.tab=t.getAttribute("data-tab");ui.q="";ui.filter="All";
@@ -1720,6 +1835,8 @@ document.addEventListener("click",function(e){
 
 document.addEventListener("keydown",function(e){
   if((e.target.id==="nameInput"||e.target.id==="passwordInput")&&e.key==="Enter"){submitToken();}
+  if((e.target.id==="pwCurrent"||e.target.id==="pwNew"||e.target.id==="pwConfirm")&&e.key==="Enter"){submitPwChange();}
+  if(e.key==="Escape"&&!document.getElementById("pwModal").classList.contains("hidden")){closePwModal();}
   if(pendingStage&&e.key==="Escape"){closeStageDateModal(true);return;}
   if(e.target.id==="stageDateInput"&&e.key==="Enter"){confirmStageDate();}
   // Paste, Enter, done - the point of the box is that adding an application

@@ -147,6 +147,15 @@ There is no sign-up page, and deliberately so: this is a handful of people
 who know each other, not a service. Accounts are created by whoever operates
 the deployment, using the `ADMIN_TOKEN` secret.
 
+**Changing a password is not an operator job, though.** Anyone signed in can
+change their own from the tracker page (the "Password" button in the header),
+which posts `/api/password` with their current password alongside their
+session. That route is the only one that sets a password without the admin
+secret, and it is deliberately narrow - see [Changing your own
+password](#changing-your-own-password) below. The admin path stays for the two
+cases it is actually for: making an account, and resetting a password nobody
+knows any more.
+
 **Create someone (or reset their password)** - same call either way, because
 nothing else in the system can hash a password:
 
@@ -175,6 +184,37 @@ Returns `{"token": "...", "user": {...}}`. Put that token, with the worker
 URL, in `<data dir>/<their id>/tracker.json` (see
 [`../private.example/README.md`](../private.example/README.md)). The password
 itself never goes on disk.
+
+### Changing your own password
+
+Signed in, from the page. `POST /api/password` takes `currentPassword` and
+`newPassword`, and it requires both the session and the current password.
+
+**The session token alone is deliberately not enough.** A token copied off a
+shared machine already reads and writes that person's data, which is bad and
+recoverable - they can sign out everywhere. If the same token could set the
+password, it would turn that into "someone has your account and you don't",
+which is not recoverable without the operator.
+
+**Sessions survive it by default**, the same promise `POST /api/users` makes.
+The one that matters is the long-lived token a scheduled search keeps in
+`tracker.json`: a password change that revoked it would stop that person's
+nightly search silently, and a search that never fired looks exactly like one
+that found nothing, so they would find out weeks later from an empty tab.
+
+`signOutOthers: true` is the opt-in for when that isn't what you want - you
+are changing it *because* something is wrong. It revokes only sessions
+labelled `browser`, and not the one making the request. That filter is an
+allowlist of what may be revoked rather than a denylist of what must be
+spared, on purpose: written the other way round, any credential someone later
+labels something else - a second machine, a script - would die the first time
+anybody changed their password. An unrecognised label is kept, so the worst
+case is a session that should have gone and didn't, which they can see and log
+out of.
+
+This is the first thing to use `sessions.label` the way it was added to be
+used: revoking a credential by what it is rather than by guessing which opaque
+string is which.
 
 **Revoke one credential.** `label` is why sessions are worth having: a
 browser signing out kills only its own token, and you can drop a leaked
@@ -351,6 +391,7 @@ application id or track key simply doesn't resolve, and comes back as a 404.
 - `POST /api/login` - **no auth** - body `{ name, password, label? }` -> `{ token, user: { id, name } }`, or `401` for both a wrong password and an unknown name (told apart, they'd enumerate who has an account). `label` records what the token is for (`"browser"`, `"scheduled-search"`) so it can be revoked by purpose later; defaults to `"browser"`. Tokens don't expire - the shared token they replaced didn't either, and a headless search that had to re-authenticate on a schedule would be a new failure mode for no gain.
 - `POST /api/logout` - revokes **only the token that made the request**, so signing out of a browser leaves the scheduled search's credential alone.
 - `POST /api/users` - **`ADMIN_TOKEN` as the Bearer, not a session** - body `{ name, password }` -> creates an account with a fresh GUID, or sets an existing name's password (`201` vs `200`, `{id, name, created}`). Doubles as password reset because nothing else can run PBKDF2. Minimum 12 characters. See [Accounts](#accounts).
+- `POST /api/password` - body `{ currentPassword, newPassword, signOutOthers? }` -> `{ ok, signedOut }`. Changes the caller's own password. Requires the current one as well as the session - see [Changing your own password](#changing-your-own-password) for why the token alone is not enough. `403` for a wrong current password, `400` for a new one under 12 characters or identical to the old. Those are told apart in the reply, unlike `/api/login`'s deliberately ambiguous refusal: there is nothing to withhold from a caller already authenticated as this person, and the two need different corrections. Sessions survive by default; `signOutOthers: true` revokes only this person's other `browser`-labelled sessions and reports how many, never the scheduled search's. Absent, it defaults to false, so a scripted caller never gets a revocation it did not ask for.
 - `GET /api/me` -> `{ id, name }` - who this token belongs to.
 
 ### Data
