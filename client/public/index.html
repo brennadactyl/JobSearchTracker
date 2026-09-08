@@ -245,6 +245,16 @@ td textarea{font-size:13px;min-height:32px;min-width:130px}
   max-height:min(720px,calc(100vh - 260px))}
 .md-empty{padding:70px 20px;text-align:center;color:var(--ink3)}
 .dh-track{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink3)}
+/* The track line doubles as the control that moves a lead to another tab,
+   borrowing `.dh-in`'s trick below: it reads as the same label it always was
+   until you hover it. A misfiled posting used to leave only the trash can -
+   the wrong tab and "not a posting at all" got the same answer, and a real
+   lead was the thing thrown away. -7px cancels the padding so the text keeps
+   the left edge the plain label had. */
+select.dh-track-in{width:auto;max-width:100%;font-size:10px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.06em;color:var(--ink3);border:1px solid transparent;background:none;
+  padding:2px 7px;margin-left:-7px;cursor:pointer}
+select.dh-track-in:hover,select.dh-track-in:focus{border-color:var(--line);background:var(--surface)}
 .dh-head h1{font-size:21px;margin-top:6px}
 .dh-sub{font-size:14.5px;color:var(--ink2);margin-top:6px}
 .dh-meta{font-size:12.5px;color:var(--ink3);margin-top:10px}
@@ -1382,9 +1392,24 @@ function leadsGridHtml(rows,trackKey){
   return h;
 }
 
+// The track line of a lead's header. A board with one track has nowhere to
+// move a lead to, so it stays the plain label it always was; with more, it's
+// a picker over every configured tab. Options carry the track key as their
+// value rather than the label, so two tabs sharing a label still move
+// correctly and a rename doesn't break the control.
+function leadTrackHtml(l,key){
+  var keys=Object.keys(TRACKS);
+  if(keys.length<2)return '<div class="dh-track">'+esc(TRACKS[key].label)+'</div>';
+  return '<select class="dh-track-in" data-movelead="'+l.id+'" '+
+    'title="Move this posting to another tab" aria-label="Tab">'+
+    keys.map(function(k){
+      return '<option value="'+esc(k)+'"'+(k===key?" selected":"")+'>'+esc(TRACKS[k].label)+'</option>';
+    }).join("")+'</select>';
+}
+
 function leadDetailHtml(l,key){
   var g=geo(l.location);
-  var h='<div class="dh-track">'+esc(TRACKS[key].label)+'</div>'+
+  var h=leadTrackHtml(l,key)+
     '<div class="dh-head"><h1 title="'+esc(l.company)+'">'+esc(l.company)+'</h1>'+
     '<div class="dh-sub">'+esc(l.title)+'</div>'+
     '<div class="dh-meta">'+esc(l.location)+(g?' &middot; <span class="geo '+g.p+'">'+esc(g.label)+'</span>':'')+
@@ -1817,6 +1842,45 @@ function setLeadStatus(id,value){
   }).catch(function(){setSaved("Couldn't save — try again","bad");});
 }
 
+// Files a lead under a different tab (see api.js's handleUpdate, where
+// `search` is the one field that can fail on its own terms). Its own function
+// rather than a `data-field="search"` ride on commit(): the row leaves the
+// list you're looking at, so the selection has to follow it to the new tab,
+// and the two ways this call can fail are both worth reading rather than the
+// generic "couldn't save" - an unknown key, and a destination that already
+// holds this posting.
+//
+// The visible tab deliberately doesn't change. Moving a stray row is
+// something you do in the middle of triaging a tab, and jumping to wherever
+// it went would cost you your place; the confirmation names the destination
+// instead. `selectEl` is reverted on failure because the browser has already
+// repainted the <select> by the time "change" fires.
+function moveLead(id,key,selectEl){
+  var row=state.leads.filter(function(r){return String(r.id)===String(id);})[0];
+  if(!row||row.search===key)return;
+  var from=row.search;
+  setSaved("Moving…",false);
+  api("/api/update",{method:"POST",body:JSON.stringify({type:"lead",id:id,search:key})})
+    .then(function(res){
+      if(!res||!res.lead){
+        if(selectEl)selectEl.value=from;
+        setSaved((res&&res.error)||"Couldn't move it — try again","bad");
+        return;
+      }
+      replaceById(state.leads,res.lead);
+      // Leaving the old tab's selection pointed at a lead that is no longer
+      // in it renders an empty detail pane next to a list that still has rows.
+      if(String(ui.selected[from])===String(id))delete ui.selected[from];
+      ui.selected[key]=res.lead.id;
+      setSaved("Moved to "+((TRACKS[key]&&TRACKS[key].label)||key),true);
+      render();
+    })
+    .catch(function(){
+      if(selectEl)selectEl.value=from;
+      setSaved("Couldn't move it — try again","bad");
+    });
+}
+
 // See api.js's handleSetApplicationStatus - stamps the matching Stage
 // history date server-side (only if it isn't already set) in the same
 // request as the status write, then returns the full row so the newly
@@ -1884,6 +1948,11 @@ document.addEventListener("change",function(e){
     if(kind==="leads"){ui.leadSort=so.value;try{localStorage.setItem("bjs.leadSort",ui.leadSort);}catch(err){}}
     else{ui.appSort=so.value;try{localStorage.setItem("bjs.appSort",ui.appSort);}catch(err){}}
     render();
+    return;
+  }
+  var mv=e.target.closest("[data-movelead]");
+  if(mv){
+    moveLead(mv.getAttribute("data-movelead"),mv.value,mv);
     return;
   }
   // Moving an application into a pipeline stage that hasn't happened yet

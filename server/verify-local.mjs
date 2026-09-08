@@ -660,6 +660,17 @@ check("the feeding track's prompt covers both tabs",
   feedPrompt.includes("/api/dedup/LEAD") &&
   feedPrompt.includes("a role leading a team") &&
   feedPrompt.includes('`"LEAD"`'));
+// The filing step's tie-break. It used to send an ambiguous posting to the
+// feeding track, which is whichever tab happens to own the scheduled search
+// and not a general-purpose one: on the deployment this came from it was the
+// narrowest tab on the board, and a Senior SWE role at an insurance company
+// landed in Eng - Gaming citing exactly this rule while its own note said the
+// tabs it read as were the other two. So a tie has to resolve among the tabs
+// it does read as, and the feeding key has to be named as not being a default.
+check("a tie in the filing step resolves among the tabs a posting reads as, not to the feeding tab",
+  feedPrompt.includes("whichever of *those* tabs comes first in the list above") &&
+  /already ruled out is never the answer/.test(feedPrompt) &&
+  !/reads more than one way after checking, file it under `SWE`/.test(feedPrompt));
 // The fan-out is one transaction, so a run record either exists for every tab
 // the run fills or for none. The failure it replaced was a half-written
 // fan-out leaving a tab that had just been searched reading as never-run - the
