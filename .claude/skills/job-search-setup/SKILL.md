@@ -428,16 +428,31 @@ step had nowhere to put what it found, because the doc told it to write names
 into an "Expanded net" prose section that no run reads, while the rotation sat
 untouched at exactly 36.
 
+Note what did *not* cause that. The seed being 36 is the memorable detail and
+the irrelevant one: a rotation that cannot grow goes dry at 12 names and at
+120, it just takes longer to notice, and shrinking the seed would have made
+that track go quiet sooner rather than later. What failed was the write-back -
+discovery had no route into the list a run actually reads. Fix that, and seed
+size becomes an ordinary tradeoff between how fast a cycle turns and how many
+strong names are in it, with no cliff either way.
+
 So when setting a track up:
 
 - **Say the discovery step out loud in the track's doc**, including the
   non-tech verticals - `templates/tracked-postings.template.md` now carries
   both, and the rule that a discovered company is added with
   `POST /api/coverage` rather than only written down.
-- **Prefer a smaller seed.** A dozen strong names plus working discovery beats
-  forty that fill the rotation and leave no room. Roughly 12 companies are
-  covered per run, so a 36-company seed is already a three-day cycle before
-  discovery adds anything.
+- **Make sure discovery can write back, and check that it did.** This is the
+  one that matters. The doc must tell the run to register what it finds with
+  `POST /api/coverage`, not merely to note the name in prose - the route
+  appends any company handed to it, so a discovered name joins the rotation
+  without jumping the queue. A track whose `total` never moves has a broken
+  discovery step no matter how good its seed was.
+- **Seed as many strong names as you have.** There is no penalty for a long
+  list beyond a longer cycle: the nightly slice is a fixed 12 either way, and
+  every company is reached once per cycle before any is reached twice. An
+  existing track in this deployment runs 57 comfortably. Prefer a name you can
+  justify over filler, and let discovery supply the rest.
 - **Check back after a few days.** `GET /api/coverage/<key>?all=1` returns
   `total`. If that number is identical to what you seeded a week ago, discovery
   is not reaching the rotation, whatever the doc says.
