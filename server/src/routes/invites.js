@@ -2,7 +2,7 @@
  * Invites: the one-time codes that let someone create their own account.
  *
  * The signup they lead to is not here - it is in ./accounts.js, with the other
- * two handlers a password reaches, so that file stays the single place to look
+ * handlers a password reaches, so that file stays the single place to look
  * for anything that touches one. What lives here is the operator's half
  * (minting a code, seeing which ones have been used) and the one public read
  * the page makes before it draws a signup form.

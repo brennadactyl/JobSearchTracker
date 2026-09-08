@@ -33,7 +33,8 @@ tracks, leads, applications, page titles and location rules.
   it.
 - `src/routes/*.js` - one module per resource (`leads.js`, `applications.js`,
   `screened.js`, `config.js`, `coverage.js`, `runs.js`, `prompt.js`,
-  `data.js`, `accounts.js`, `admin.js`, `update.js`, `delisting.js`). Each
+  `data.js`, `accounts.js`, `invites.js`, `intake.js`, `admin.js`,
+  `update.js`, `delisting.js`). Each
   holds its endpoints' parsing, validation and response shaping, and each
   endpoint's contract is documented on its own handler. No D1 access of their
   own - every one is handed a `Db`.
@@ -42,9 +43,14 @@ tracks, leads, applications, page titles and location rules.
   construct a `Response` themselves, which is what keeps the header on the
   error replies too.
 - `src/validate.js` - the checks more than one route makes: `isoDate`, the
-  unknown-track refusals, the exclusion matcher.
-- `src/auth.js` - passwords (PBKDF2 via Web Crypto), session tokens, and
-  looking a bearer token up to a user. The only file that touches either.
+  unknown-track refusals, the exclusion matcher, and `notAdmin` - the
+  `ADMIN_TOKEN` gate seven routes now share, kept in one place so the "is the
+  secret even configured?" half can't be left off one of them.
+- `src/auth.js` - passwords (PBKDF2 via Web Crypto), session tokens, invite
+  codes, and looking a bearer token up to a user. The only file that touches
+  any of them. Invites live here because an invite is a credential like the
+  other two, and because whoever holds one has no account to scope a `Db`
+  from.
 - `src/db.js` - all D1 access for a person's own data. Every instance is
   bound to one user id at construction, so no query can forget to filter.
 - `src/prompt.js` - composes the two prompts the scheduled runs execute:
@@ -55,7 +61,9 @@ tracks, leads, applications, page titles and location rules.
   `wrangler dev`. `verify-migration.mjs` - what `0002` does to a database that
   already has data. See [Verifying](#verifying-a-change) below.
 - `migrations/` - `0001_schema.sql` creates every table; `0002_multi_user.sql`
-  adds accounts and gives every table an owner. See below.
+  adds accounts and gives every table an owner; `0010_invites.sql` and
+  `0011_intake.sql` are what let a person set themselves up without the
+  operator. See below.
 
 ## One-time setup
 
@@ -87,7 +95,8 @@ Cloudflare's own environment.
    for the client (see [`../client/README.md`](../client/README.md)) and in
    each person's `tracker.json` on whatever machine runs their searches.
 5. **Create your account** - see [Accounts](#accounts) below. A fresh database
-   has none, and there is no sign-up page.
+   has none, and yours is the one account that can't come from an invite,
+   since there is nobody yet to send you one.
 6. Now deploy the client - see [`../client/README.md`](../client/README.md).
    It's a separate one-click deploy; this worker alone has no webpage.
 
@@ -143,9 +152,52 @@ Cloudflare's own environment.
 
 ## Accounts
 
-There is no sign-up page, and deliberately so: this is a handful of people
-who know each other, not a service. Accounts are created by whoever operates
-the deployment, using the `ADMIN_TOKEN` secret.
+There is no open sign-up page, and deliberately so: this is a handful of
+people who know each other, not a service. There are two ways in, and only
+the first of them needs the operator to do anything per person.
+
+### Invites (how everyone but the first person gets an account)
+
+The operator mints a one-time code and sends the link; the person opens it and
+chooses their own name and password. Nobody else ever handles that password.
+
+```bash
+curl -s -X POST "$TRACKER_URL/api/invites" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"note":"Sam from the climbing gym"}'
+```
+
+Returns `{"code": "...", "expires_at": "..."}`. Send them
+`<your client URL>/?invite=<code>`. `../scripts/new-invite.ps1` does both
+halves and prints the finished link.
+
+**The code is returned once.** Only its SHA-256 is stored, the same treatment
+session tokens get, so there is no route that can show it again and nothing in
+a `d1 export` to leak. Lost one? Mint another.
+
+An invite is single-use (claimed by a conditional `UPDATE`, so two people
+racing the same link cannot both win) and expires in 14 days by default, 30
+maximum - a link sent in a message lives in that message forever, and one that
+never expired would be a standing way into the deployment sitting in someone's
+chat history.
+
+**It can only create an account, never touch one that exists.** `POST /api/signup`
+goes through a create-only path and refuses a name already taken; it never
+reaches the upsert below. That distinction is the whole security of the
+feature: an invite is a far weaker secret than the admin token - it travels
+through a chat app to someone with no account yet - so if signup could reach
+the reset path, anyone holding a link could type the operator's own name and
+take the deployment.
+
+`GET /api/invites` (admin) lists every invite, whether it was used, and the
+user id each signup produced. That id names the person's folder in the private
+data dir, so it is the next thing you need after they sign up.
+
+### The admin token (how the first account gets made, and how a password is reset)
+
+Accounts are also created directly by whoever operates the deployment, using
+the `ADMIN_TOKEN` secret. This is how you make your own account on a fresh
+deployment, since there is nobody yet to send an invite.
 
 **Create someone (or reset their password)** - same call either way, because
 nothing else in the system can hash a password:
@@ -155,6 +207,22 @@ curl -s -X POST "$TRACKER_URL/api/users" \
   -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
   -d '{"name":"Their Name","password":"a-long-password-they-pick"}'
 ```
+
+**Minting someone's scheduled-search token.** Self-signup means the operator
+does not know anyone else's password, which used to be how this was obtained
+("create their account with a password you chose, then log in as them once").
+So there is a route for it:
+
+```bash
+curl -s -X POST "$TRACKER_URL/api/tokens" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"user":"Their Name","label":"scheduled-search"}'
+```
+
+It grants nothing the admin token could not already reach - that secret can
+reset any password and then log in - except that using it no longer destroys
+the password the person chose. `../scripts/run-onboarding.ps1` calls it when
+it writes each new person's `tracker.json`.
 
 Returns `{"id": "<guid>", "name": "...", "created": true|false}`. The id is
 what every row of theirs is keyed by; it never changes, so a password reset
@@ -351,6 +419,11 @@ application id or track key simply doesn't resolve, and comes back as a 404.
 - `POST /api/login` - **no auth** - body `{ name, password, label? }` -> `{ token, user: { id, name } }`, or `401` for both a wrong password and an unknown name (told apart, they'd enumerate who has an account). `label` records what the token is for (`"browser"`, `"scheduled-search"`) so it can be revoked by purpose later; defaults to `"browser"`. Tokens don't expire - the shared token they replaced didn't either, and a headless search that had to re-authenticate on a schedule would be a new failure mode for no gain.
 - `POST /api/logout` - revokes **only the token that made the request**, so signing out of a browser leaves the scheduled search's credential alone.
 - `POST /api/users` - **`ADMIN_TOKEN` as the Bearer, not a session** - body `{ name, password }` -> creates an account with a fresh GUID, or sets an existing name's password (`201` vs `200`, `{id, name, created}`). Doubles as password reset because nothing else can run PBKDF2. Minimum 12 characters. See [Accounts](#accounts).
+- `POST /api/signup` - **no auth, but needs a valid invite code** - body `{ code, name, password }` -> `201 {token, user}`, the same shape login returns, so the page signs them straight in. The only route that creates an account without the admin secret, and it can only *create*: a name that already exists is a `409` and the invite is **put back**, not spent, because a name collision is the failure that actually happens and needing a fresh link over a typo is the errand this feature removes. `403` for a code that is unknown, expired, or already used, with the reason said plainly - whoever is holding the link already knows they have one, and "expired" and "already used" call for different things from them. Same 12-character minimum as `/api/users`. It never reaches the upsert path above; see [Accounts](#accounts) for why that separation is the whole security of it.
+- `GET /api/invite/:code` - **no auth** -> `{ valid: true }` or `{ valid: false, reason }`. Asked by the page as soon as an invite link is opened, so a dead link says so on arrival instead of after someone has thought up a name and typed a password twice. Returns nothing else - not the operator's note, not the account a used invite created. Safe to answer unauthenticated: the codes are 32 random bytes, so there is nothing to enumerate, and the caller is holding the link already. Singular path on purpose - `/api/invites` is the operator's listing, and one word for both would put a public route one missing gate away from an admin one.
+- `POST /api/invites` - **`ADMIN_TOKEN` as the Bearer** - body `{ note?, days? }` -> `201 {code, expires_at}`. Mints a one-time code and returns it **once**; only its hash is stored, so nothing can show it again. `days` defaults to 14 and is capped at 30. `note` is the operator's own shorthand for who it is for and is never shown to them.
+- `GET /api/invites` - **`ADMIN_TOKEN` as the Bearer** -> `{ invites: [{note, created_at, expires_at, used_at, used_by, used_by_name}] }` - every invite, newest first, and what became of it. This is where the operator gets the **user id** a signup produced, which names that person's folder in the private data dir. No codes in the response; there are none stored to return.
+- `POST /api/tokens` - **`ADMIN_TOKEN` as the Bearer** - body `{ user, label? }` -> `201 {token, user}` - mints a long-lived session for someone else's account, the credential their scheduled search keeps in `tracker.json`. Exists because self-signup took the password away from the operator, which was previously how this was obtained. Grants nothing the admin secret could not already reach (it can reset any password and log in); what changes is that doing so no longer destroys the password the person chose. `label` defaults to `"scheduled-search"`, so it shows in that account's sessions as what it is.
 - `GET /api/me` -> `{ id, name }` - who this token belongs to.
 
 ### Data
@@ -392,6 +465,13 @@ database - only at the ones with a gap. See
 - `GET /api/applications/pending` -> `{ applications: [{id, link}] }` - what tonight's run should read. Two columns, for the same reason `/api/dedup/:key` is narrow: it lands in a headless run's context every night. The server decides what belongs here rather than the caller filtering - a run asked to judge which applications look unfinished is a run that can decide a filled-in one looks unfinished enough to overwrite. An empty list is the ordinary answer and means "stop", not "something is wrong".
 - `POST /api/applications/autofill` - body `{ filled: [{id, company, title, location, team, setup, comp, note?}], failed: [{id, reason}] }` -> `{ filled, failed, unmatched: [id] }`. **A partial read is a `filled` row with a `note`, not a failure** - a board that renders its description client-side still ships the role and employer in its JSON-LD and `<title>`, and so does a closed listing that still names the role, so a run legitimately comes back with some fields and an explanation for the rest. The fields are real; the note says why the row is still short. `failed` is only for a posting that yielded nothing at all. One call for the whole night, the shape `/api/verified` and `/api/delist` take. **A fill only ever writes into a column that is still empty** - a day passes between a row being added and its posting being read, and the person's own typing must win over a machine's reading of a page. Only rows still flagged `''` move, so an id in `unmatched` means that row was deleted or already reported in between: ordinary, and nothing to retry. A `filled` entry carrying no usable field still marks the row read - refusing it would be tidier and would put that row back in every queue from then on. `failed` is final too (`autofill_note` holds the reason, which nothing displays): the failures that happen here - taken down, login wall, blocked domain - are the ones a retry doesn't fix, so a row that kept its place would be re-fetched every night forever without ever saying so. There is no route that re-queues a row, and that is the point.
 - `POST /api/applications/requeue` - body `{ ids: [...] }` -> `{ requeued }` - clears the read flag on rows the caller names, so the next run reads their postings again. **Not a retry**: a row is read once by design, nothing on the page or on a schedule calls this, and it takes explicit ids rather than offering a "re-read everything that failed" switch that would invite being wired to one. It exists for the one case the design can't cover on its own - the reader itself got better, so rows that failed under the older instructions never really had a first read. That is a judgement about a change to the code, made by whoever made the change.
+- `GET /api/intake` -> `{ intake }` or `{ intake: null }` - this person's own answers to the setup form, plus its status (`pending` / `done` / `failed`), the run's note if it failed, and what they attached. The page asks this on load: an account with no tracks *and* no intake is the one state that means "show them the setup form".
+- `POST /api/intake` - body is the answers object: `display_title`, `pronouns`, `geo_scope`, `priority_locations`, `excluded_companies`, `resume_text`, `notes`, and `tracks: [{label, role_search_line, target_companies, fit_note, feeds_from}]` -> `201 {ok, status}`. **Stores what they said, not composed config.** Turning "senior backend, ideally Seattle or remote US" into the prose `/api/config` holds is the part that needs a model, and that is the nightly run's job (`scripts/run-onboarding.ps1`); what is kept here is the input to it, so a setup that came out wrong can be re-run against what they actually said instead of re-interviewing them. Re-submitting while still pending **replaces** - between sending it and the run there is a whole evening in which someone remembers a company they meant to name. Re-submitting after it completes is a `409`: by then their config is what changes their search, and rebuilding from a form would overwrite whatever they have since edited on the page. Validated only where a run would otherwise have nothing to act on (at least one track with a label and a role line); everything else is free text and stays free text.
+- `POST /api/intake/files` - body `{ filename, contentType?, body }` with `body` base64 -> `201 {id, filename, bytes}`. The resume, on its way to a machine its owner has never touched - the one file this API moves, and only for that hop. JSON and base64 rather than multipart, because every other route here takes JSON and a second body format is a second thing to get right to save a third of the bytes on a file measured in tens of kilobytes. Capped at 700KB decoded (D1's per-value limit is 1,000,000 bytes and base64 inflates by a third) and 5 files. **The filename is rebuilt, not sanitised**: basename only, both separator kinds, allowlisted characters, and an extension a run could actually read - every other string this API takes ends up in a column, while this one ends up as a path on someone else's computer, written by an unattended overnight run. An upload of a name already present replaces it.
+- `POST /api/intake/files/delete` - body `{ id }` - removes one attachment. A `POST` because the CORS preflight advertises `GET, POST, OPTIONS` and a fourth method would have to be added for one route. The scoped `Db` is the whole access check: another person's id doesn't match.
+- `GET /api/intake/pending` - **`ADMIN_TOKEN` as the Bearer** -> `{ pending: [{user, submitted_at, status, status_note, answers, files}] }` - everyone across the deployment waiting to be set up, plus everyone whose setup failed and is worth another try, oldest first. **Admin-gated because it is inherently cross-user** - there is no caller whose rows these are - and it is the one route the nightly onboarding run needs before it holds any person's token. File bodies are not inlined; a listing carrying three base64 resumes would be megabytes to answer "is there anything to do tonight?".
+- `GET /api/intake/file/:id` - **`ADMIN_TOKEN` as the Bearer** -> `{ id, user_id, filename, content_type, bytes, body }` - one attachment's bytes, for that run to write into the person's `resumes/` folder. Fetched one at a time so the queue listing above stays small.
+- `POST /api/intake/complete` - **`ADMIN_TOKEN` as the Bearer** - body `{ user, status, note? }` where status is `done` or `failed`. `done` **deletes the uploaded documents in the same statement batch** - a resume is the most personal thing this deployment holds, it existed only for the hop from a browser to a disk, and once that machine has written it out the copy here is a second place it lives for no reason. `failed` keeps them, because the retry needs them, and its `note` is shown to the person on their own page: someone waiting on a setup that isn't coming should be told which half to fix. Names its subject in the body like `/api/purge`, and 404s a user with nothing waiting.
 - `GET /api/prompt/_applications` -> **`text/plain`** - that nightly run's prompt (`src/prompt.js`'s `buildAutofillPrompt`). A reserved key under `/api/prompt`, not a track; underscore-first so it can't collide with a track key someone actually chose, and the route sits above the track pattern in `src/routes/index.js` for the same reason. **The only route here whose body doesn't depend on who asked** - one nightly task (`scripts/run-fill.ps1`, registered as `JobSearch-Applications`) covers every account on a machine, so the prompt is written for "each account you were given" and the runner supplies the accounts as `TRACKER_TOKEN_1..N`. That keeps this feature from needing a cross-user route at all: every request is still one person's token against their own rows. The run pulls all the queues, then fans the reading out to one subagent per posting - each given a URL and nothing else, no token or id - and makes the writes itself. **It records no run**, unlike every search: this fills in fields the person can always type themselves, on rows already in front of them, and a run record would be a status readout for something with no status. The evidence it stopped is a row that stayed blank, and the fix for that row is the same either way.
 - `POST /api/delete-leads` - body `{ "ids": [...], "reason": "..." }` ->
   `{ removed, kept, unmatched, reason }`. Postings the person has decided

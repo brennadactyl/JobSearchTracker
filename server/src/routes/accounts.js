@@ -84,8 +84,13 @@ export async function handleLogout({ env, token }) {
  * `{ name, password }`.
  *
  * Creates a user, or sets an existing one's password. Gated by the ADMIN_TOKEN
- * worker secret rather than by a session: there is no self-signup here, and
- * whoever operates the deployment provisions people by hand.
+ * worker secret rather than by a session: it can overwrite any account's
+ * password, so the only credential that may reach it is the operator's own.
+ *
+ * It is no longer the only way in - handleSignup below creates accounts from
+ * an invite - but it stays the only way to *reset* a password, and the only
+ * way to make the first account on a deployment that has nobody to invite
+ * anyone yet.
  *
  * It doubles as password reset because nothing else in the system can run
  * PBKDF2 - without this, a forgotten password would mean deriving a hash

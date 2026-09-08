@@ -3,8 +3,8 @@
  * split by whether the caller is known yet.
  *
  * That split is the whole access-control story, and it is a list rather than a
- * flag on each row so it cannot be got wrong by omission. PUBLIC_ROUTES is
- * three entries long and every one of them is there for a stated reason;
+ * flag on each row so it cannot be got wrong by omission. Every entry in
+ * PUBLIC_ROUTES is there for a stated reason - see the two kinds below;
  * anything not in it is in SESSION_ROUTES, where ../index.js has already
  * resolved the bearer token to a person and built the `Db` scoped to them. A
  * route added later inherits that by default rather than by remembering to.

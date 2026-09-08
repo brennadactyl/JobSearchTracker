@@ -14,6 +14,25 @@ resumes, the per-track notes doc the search edits as it runs, and logs (see
 `../../../private.example/README.md`). This skill is what fills those in
 conversationally, instead of hand-authoring JSON.
 
+**There is now an unattended path, and it uses this file.** A person who opens
+an invite link creates their own account, describes the search they want and
+attaches their resume on the tracker page; `scripts/run-onboarding.ps1` then
+follows *these instructions* nightly, reading their form answers wherever the
+steps below say to ask the installer something. So it is the same procedure
+either way, which is the point - this file is the one description of how a
+search gets set up, and the unattended run is told only what differs (steps 1
+and 2's provisioning is already done, step 7 is handled by the script, and
+where a step says to confirm with the installer there is nobody to confirm
+with). Two consequences worth keeping in mind when editing this file: a step
+written as "ask them" needs a form answer that can carry it, and a change here
+changes what the nightly run does.
+
+Running it yourself, in conversation, is still right when you are sitting with
+the person anyway, when their search needs a discussion the form can't have,
+or when adding a track to someone already set up - the form is refused once
+their search exists, deliberately, because by then their config is what
+changes it.
+
 One deployment holds any number of people. Run this the same way for the
 first person, for a second person joining an existing deployment, and for
 adding one more track to someone who already has some - check what's already
@@ -58,8 +77,12 @@ user id. So the first question is *whose* search this is.
   `GET /api/config` with their token - the tracks it returns are what they
   already have, so this is an "add a track" run for whatever's missing.
 - **New person?** They need an account before anything else can be stored
-  against them. That takes the deployment's `ADMIN_TOKEN` (a worker secret -
-  whoever runs the Cloudflare account has it):
+  against them. Prefer sending them an invite link
+  (`scripts/new-invite.ps1`) and letting them create it themselves - it is one
+  message, they choose their own password, and nobody has to transmit one. Do
+  it directly only when they are not going to be at a browser, which takes the
+  deployment's `ADMIN_TOKEN` (a worker secret - whoever runs the Cloudflare
+  account has it):
 
   ```
   curl -s -X POST "$TRACKER_URL/api/users" \

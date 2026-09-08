@@ -26,8 +26,10 @@
  *   ../migrations/      the schema
  *
  * Nothing here talks to `env.DB` directly, and neither does any route module -
- * it goes through `Db` (or, for the three routes with no session to scope one
- * from, a `Db` they construct themselves).
+ * it goes through `Db` (or, for the routes with no session to scope one from -
+ * the public ones and the operator ones - either a `Db` they construct
+ * themselves for a named subject, or Db's two static reads, which are the only
+ * queries in the codebase that deliberately span users).
  *
  * ---- Auth, in one place. Every route outside PUBLIC_ROUTES resolves its
  * bearer token to a person first, and the handlers are handed a `Db` already

@@ -7,10 +7,16 @@ credential - lives in a separate folder that is **not** part of this git repo
 the search config itself live in the Cloudflare D1 database once `../server/`
 is deployed, keyed by their user id - not in this folder.
 
-**Recommended: let Claude fill this folder in.** Point it at
-`../.claude/skills/job-search-setup/` with a resume in hand - it provisions the
-account, creates the folder, and generates everything below. The rest of this
-doc describes the result, for reference or for authoring it by hand instead.
+**Most of this folder builds itself.** A person who signs up with an invite
+link and fills in the setup form on the tracker page gets their whole subtree
+below created for them by the nightly `run-onboarding.ps1` - folder,
+credential, resumes and notes doc - with nobody authoring anything by hand. See
+the root README's "Adding another person".
+
+Doing it deliberately instead: point Claude at
+`../.claude/skills/job-search-setup/` with a resume in hand and it provisions
+the account, creates the folder and generates everything below. The rest of
+this doc describes the result, for reference or for authoring it by hand.
 
 Point the scripts at this folder via `-DataDir`, or set it once as an
 environment variable:
@@ -32,6 +38,19 @@ anything about anyone else's:
 
 ```
 private/
+  deployment.json               {"url": "...", "clientUrl": "...", "adminToken": "..."}
+                                the deployment itself, rather than any one person: the API
+                                URL, the tracker page's URL, and the ADMIN_TOKEN worker
+                                secret. Only two things read it - new-invite.ps1, to mint
+                                invite links, and run-onboarding.ps1, to read the setup
+                                queue - and both need the admin secret because that queue
+                                spans every account and so belongs to none of them.
+                                Optional: without it those two are the only things that
+                                stop working, and both say exactly what is missing.
+                                Keep the URL and the token in this one file rather than
+                                splitting them across the environment - an admin secret
+                                paired with a URL from somewhere else is an operator
+                                credential pointed at the wrong deployment.
   <user-id>/
     tracker.json                  {"url": "...", "token": "..."} - their own API URL and session token
     docs/
@@ -45,13 +64,16 @@ private/
     logs/                         created automatically by run-search.ps1
   <another-user-id>/
     ...
-  logs/                           created automatically by run-fill.ps1 -
-                                  applications.log, the nightly application
-                                  fill. One file for the machine, not one per
-                                  person, because that run isn't any one
-                                  person's: it covers every account above in a
-                                  single pass. Sits beside the user folders,
-                                  not inside one.
+  logs/                           created automatically by the two machine-wide
+                                  runs - applications.log from run-fill.ps1
+                                  (the nightly application fill) and
+                                  onboarding.log from run-onboarding.ps1 (the
+                                  nightly build of searches people asked for on
+                                  the page). One file each for the machine, not
+                                  one per person, because neither run is any one
+                                  person's: both cover every account above in a
+                                  single pass. Sits beside the user folders, not
+                                  inside one.
 ```
 
 `<key>` is a lowercase-hyphenated slug per track (e.g. `engineering`,

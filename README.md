@@ -55,6 +55,8 @@ docs/
 scripts/
   run-search.ps1              runs one track for one person (fetches its prompt from the API)
   run-fill.ps1                 reads the postings behind URL-only applications - every account, one run
+  new-invite.ps1               makes an invite link to send someone, and lists what became of the ones sent
+  run-onboarding.ps1           builds a whole search for anyone who signed up and filled in the setup form
   setup-scheduler.ps1          registers every person's tracks as daily Windows Scheduled Tasks
   seed-demo-user.ps1           creates the demo account and fills it with invented postings
   demo-user.json               that invented data - the only fabricated content in this repo
@@ -120,7 +122,8 @@ note after each step if you'd rather do it the traditional way instead.
    **Settings → Variables and Secrets**, add a secret named `ADMIN_TOKEN`
    with any long random value you pick (no CLI needed to set it). This isn't
    a login - it's the operator credential that creates accounts, since there
-   is no sign-up page. Then create your own account with it:
+   is no open sign-up page, and your own account is the one that can't come
+   from an invite - there is nobody yet to send you one. So:
    ```bash
    curl -s -X POST "https://job-search-tracker.<your-subdomain>.workers.dev/api/users" \
      -H "Authorization: Bearer <the ADMIN_TOKEN you just set>" \
@@ -129,6 +132,11 @@ note after each step if you'd rather do it the traditional way instead.
    ```
    Keep the `id` it returns - that's your user id, and step 4 puts your
    search data under it.
+
+   That call is how *your own* account gets made, because at this point there
+   is nothing else to make it with. Everyone after you gets an invite link
+   instead - see [Adding another person](#adding-another-person) - and never
+   needs you to choose or send them a password.
 
    Then the client:
 
@@ -227,20 +235,68 @@ curl -s "$TRACKER_URL/api/prompt/<track key>" -H "Authorization: Bearer <their t
 ## Adding another person
 
 One deployment holds any number of job searches, each with its own tracks,
-leads, page title and location rules, and its own sign-in. To add someone:
+leads, page title and location rules, and its own sign-in.
 
-1. Create their account with the `ADMIN_TOKEN` (same `POST /api/users` call
-   as step 3 of Setup above). It returns their user id.
-2. Run the [job-search-setup](.claude/skills/job-search-setup/) skill for
-   them - it makes `private\<their id>\`, mints the token their scheduled
-   runs use, reads their resume, asks about their tracks and locations,
-   posts their config, and registers their scheduled tasks without touching
-   anyone else's.
+**Send them a link. That's the whole of your part.**
 
-They sign in on the same tracker URL with their own name and password.
-Their searches run on whichever machine holds their folder, under that
-machine's Claude account - so stagger everyone's `schedule_time`, since each
-run takes several minutes and they share one CLI.
+```powershell
+.\scripts\new-invite.ps1 -Note "Sam from the climbing gym"
+```
+
+It prints a one-time link. Paste it into a message and you are finished. They
+open it, pick their own name and password, describe the roles they want and
+attach their resume - all on the tracker page, in their own time, without you
+in the conversation. The nightly `JobSearch-Onboarding` task (05:00) reads
+their answers, reads their resume, writes their notes doc, works out their
+target companies and location tiers, posts their config, seeds their company
+rotation and registers their scheduled tasks. Their tracker is there the next
+morning, and their first search runs the same day.
+
+To see who has taken theirs up:
+
+```powershell
+.\scripts\new-invite.ps1 -List
+```
+
+That is also where you get the **user id** a signup produced, which is the
+name of their folder under `private\`.
+
+An invite is single-use and expires in 14 days. It can only *create* an
+account - a name that already exists is refused - so it is safe to send
+through a chat app: the worst anyone who intercepts it can do is take the one
+account it was going to make. Only its hash is stored, so a lost code is
+re-minted rather than looked up.
+
+**What has to be true for the nightly build to work**, once:
+
+- `private\deployment.json` holds the deployment's URL and its `ADMIN_TOKEN`
+  (the setup queue spans every account, so nothing but that secret can read
+  it) - see [private.example/README.md](private.example/README.md).
+- `scripts\setup-scheduler.ps1` has been run since, so the task exists. It
+  says plainly when it skips the task for a missing admin token.
+
+Watch it work, or run it now rather than waiting for 05:00:
+
+```powershell
+.\scripts\run-onboarding.ps1 -WhatIfOnly
+.\scripts\run-onboarding.ps1
+```
+
+It logs to `private\logs\onboarding.log`. Anyone it can't finish is told so
+on their own page, with the reason - a resume file nothing could read, say -
+and is tried again the next night.
+
+**Doing it by hand instead** is still there and unchanged: create their account
+with `POST /api/users`, then run the
+[job-search-setup](.claude/skills/job-search-setup/) skill for them. Worth it
+when you're sitting with the person anyway, or when their search needs a
+conversation the form can't have.
+
+Either way they sign in on the same tracker URL with their own name and
+password. Their searches run on whichever machine holds their folder, under
+that machine's Claude account - which is why the nightly build picks each new
+track's `schedule_time` from what is already registered there, 30 minutes
+after the last one: each run takes several minutes and they all share one CLI.
 
 Note what this does and doesn't protect: the API keeps each person's data
 strictly separate, but whoever administers the Cloudflare account can read
