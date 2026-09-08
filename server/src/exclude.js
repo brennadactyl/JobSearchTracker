@@ -52,8 +52,15 @@
 /** Below this length an alternative has to be the entire company name. */
 const WHOLE_NAME_MAX = 2;
 
-/** Lowercased, punctuation collapsed to single spaces, trimmed. */
-function normalize(name) {
+/**
+ * Lowercased, punctuation collapsed to single spaces, trimmed.
+ *
+ * Exported because company_fetch keys its rows on this (see
+ * migrations/0010_company_fetch.sql). Two matchers for company names would
+ * drift, and the drift would be invisible: an exclusion that matches and a
+ * shared-intel lookup that doesn't, for the same string.
+ */
+export function normalize(name) {
   return String(name == null ? "" : name)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")

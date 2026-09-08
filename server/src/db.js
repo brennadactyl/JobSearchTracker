@@ -168,6 +168,7 @@
  * @property {string} pronouns
  */
 
+import { normalize as normalizeCompany } from "./exclude.js";
 import { canonicalUrl } from "./url.js";
 
 // Same field lists the route modules validate/whitelist against - re-exported
@@ -422,6 +423,104 @@ export class Db {
    * @param {string} search
    * @returns {Promise<Array<{company: string, last_swept: string, board: string, note: string, position: number}>>}
    */
+  /**
+   * Shared fetch facts for a set of company names, keyed by normalize().
+   *
+   * Not user-scoped, and that is the point - see
+   * migrations/0010_company_fetch.sql for the boundary this sits on. Nothing
+   * here is derived from any user's rows: the caller supplies names and gets
+   * back facts about websites.
+   *
+   * A retracted row comes back with its fields blanked and only the retraction
+   * visible. Blanking here rather than at the caller means a reader cannot
+   * accidentally use a fact that has been withdrawn by forgetting to check one
+   * more field - the fact is simply not in the response.
+   *
+   * @param {string[]} names @returns {Promise<Map<string, Object>>} by company_key
+   */
+  async getCompanyFetch(names) {
+    const keys = [...new Set(names.map(normalizeCompany).filter(Boolean))];
+    if (keys.length === 0) return new Map();
+    const rows = await this.d1
+      .prepare(
+        `SELECT * FROM company_fetch WHERE company_key IN (${keys.map(() => "?").join(",")})`
+      )
+      .bind(...keys)
+      .all();
+    const out = new Map();
+    for (const r of rows.results) {
+      out.set(
+        r.company_key,
+        r.retracted_on
+          ? { retracted_on: r.retracted_on, retracted_note: r.retracted_note || "" }
+          : {
+              board: r.board || "",
+              endpoint: r.endpoint || "",
+              url_shape: r.url_shape || "",
+              dead_signal: r.dead_signal || "",
+              note: r.note || "",
+              verified_on: r.verified_on || "",
+            }
+      );
+    }
+    return out;
+  }
+
+  /**
+   * Record what a run learned about reaching a company.
+   *
+   * Non-empty-wins, field by field, the same rule recordSweeps already uses for
+   * `board`: a run that confirmed an endpoint but has nothing new to say about
+   * the dead signal must not wipe what an earlier run established. The failure
+   * this avoids is a shared table that degrades every time a run is terse.
+   *
+   * A row already retracted is left alone. Re-asserting a withdrawn fact is a
+   * decision a person makes (by clearing the retraction), not something a run
+   * should be able to do by rediscovering the same wrong thing.
+   *
+   * @param {Array<{company: string, board?: string, endpoint?: string,
+   *   url_shape?: string, dead_signal?: string, note?: string}>} rows
+   * @param {string} on YYYY-MM-DD
+   */
+  async upsertCompanyFetch(rows, on) {
+    const useful = rows.filter(
+      (r) =>
+        normalizeCompany(r.company) &&
+        (r.board || r.endpoint || r.url_shape || r.dead_signal || r.note)
+    );
+    if (useful.length === 0) return { written: 0 };
+
+    const stmt = this.d1.prepare(
+      `INSERT INTO company_fetch
+         (company_key, display_name, board, endpoint, url_shape, dead_signal, note, verified_on)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(company_key) DO UPDATE SET
+         display_name = CASE WHEN company_fetch.display_name = '' THEN excluded.display_name ELSE company_fetch.display_name END,
+         board       = CASE WHEN excluded.board <> ''       THEN excluded.board       ELSE company_fetch.board END,
+         endpoint    = CASE WHEN excluded.endpoint <> ''    THEN excluded.endpoint    ELSE company_fetch.endpoint END,
+         url_shape   = CASE WHEN excluded.url_shape <> ''   THEN excluded.url_shape   ELSE company_fetch.url_shape END,
+         dead_signal = CASE WHEN excluded.dead_signal <> '' THEN excluded.dead_signal ELSE company_fetch.dead_signal END,
+         note        = CASE WHEN excluded.note <> ''        THEN excluded.note        ELSE company_fetch.note END,
+         verified_on = excluded.verified_on
+       WHERE company_fetch.retracted_on = ''`
+    );
+    const res = await this.d1.batch(
+      useful.map((r) =>
+        stmt.bind(
+          normalizeCompany(r.company),
+          String(r.company).trim(),
+          r.board || "",
+          r.endpoint || "",
+          r.url_shape || "",
+          r.dead_signal || "",
+          r.note || "",
+          on || today()
+        )
+      )
+    );
+    return { written: res.reduce((n, x) => n + (x.meta.changes || 0), 0) };
+  }
+
   async getCoverage(search) {
     const rows = await this.d1
       .prepare(

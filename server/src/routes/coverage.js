@@ -7,6 +7,7 @@
  * time, least-recently-swept first.
  */
 
+import { normalize } from "../exclude.js";
 import { json, readJson } from "../http.js";
 import { excluderFor, isoDate, today, unknownTrack } from "../validate.js";
 
@@ -87,8 +88,21 @@ export async function handleGetCoverage({ db, params, url }) {
     .concat(eligible.filter((c) => c.position < cursor))
     .slice(0, take);
 
+  // What is already known about reaching each of these, pooled across the
+  // whole deployment (migrations/0010_company_fetch.sql). Attached to the
+  // companies a run is already being handed rather than served from a route of
+  // its own: a run that has to remember a second call is a run that will skip
+  // it on a busy night, and this is exactly the knowledge whose absence made
+  // three separate searches independently conclude that a live domain was
+  // walled. Per company, so nothing about anyone's rotation travels with it.
+  const intel = await db.getCompanyFetch(companies.map((c) => c.company));
+  const withIntel = companies.map((c) => {
+    const known = intel.get(normalize(c.company));
+    return known ? { ...c, known } : c;
+  });
+
   return json({
-    companies,
+    companies: withIntel,
     total: eligible.length,
     batch: take,
     // Where this search has read up to, as a position rather than an index.
@@ -180,6 +194,37 @@ export async function handleRecordSweeps({ request, db }) {
   );
   const recorded = await db.recordSweeps(key, positioned, on);
 
+  // The same report, pooled. A run reporting `board` for its own rotation is
+  // reporting a fact about a website, so it may as well say it once and have
+  // every search on the deployment benefit - which is the whole reason this
+  // table exists (migrations/0010_company_fetch.sql).
+  //
+  // Deliberately not gated behind a flag or a separate call: sharing has to be
+  // the default path or it is the path nobody takes. What keeps the boundary
+  // intact is *which fields travel*, not whether the run opted in - only the
+  // website-describing ones below. `last_swept`, position, cursor and the
+  // company list itself stay in company_sweeps, where they are user-scoped.
+  //
+  // Seeding (`on: ""`) writes nothing here. A seed is a list somebody typed,
+  // not something a run confirmed, and a shared fact nobody verified is the
+  // kind this table can least afford.
+  const shared = on
+    ? await db.upsertCompanyFetch(
+        allowed.map((i) => ({
+          company: i.company,
+          board: typeof i.board === "string" ? i.board : "",
+          endpoint: typeof i.endpoint === "string" ? i.endpoint : "",
+          url_shape: typeof i.url_shape === "string" ? i.url_shape : "",
+          dead_signal: typeof i.dead_signal === "string" ? i.dead_signal : "",
+          // `note` stays out. It is the one field a run writes in prose, and
+          // prose is where a search's own reasoning leaks ("skipped, nothing
+          // at Brenna's level here"). A shared note needs its own field a run
+          // fills deliberately, not a repurposed private one.
+        })),
+        on
+      )
+    : { written: 0 };
+
   // Advance the cursor past the furthest company actually reported, so the
   // next read starts after it - including within the same run, which is what
   // lets a run come back for replacements without a date filter.
@@ -202,5 +247,5 @@ export async function handleRecordSweeps({ request, db }) {
     if (positions.length) cursor = await db.setSweepCursor(key, Math.max(...positions) + 1);
   }
 
-  return json({ recorded, excluded, on, cursor });
+  return json({ recorded, excluded, on, cursor, shared: shared.written });
 }

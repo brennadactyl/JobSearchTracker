@@ -1161,5 +1161,47 @@ check("and the posting can go back on the board",
   ((await req("POST", "/api/leads", { token: F_TOK, body: { leads: [
     { search: "ENG-SENIOR", url: fedUrl, company: "Example", title: "Principal Engineer" } ] } })).json.added || 0) === 1);
 
+console.log("\n== shared company fetch intel ==");
+// The one table with no user_id (migrations/0010_company_fetch.sql). These
+// checks are the boundary: website facts pool, search facts do not.
+const ciA = await req("POST", "/api/coverage", { token: A2, body: { search: "DATA",
+  on: "2026-09-08", swept: [
+    { company: "F5 Networks", board: "workday cxs", endpoint: "ffive.wd5/f5jobs",
+      note: "private note that must not travel" } ] } });
+check("recording a sweep also writes a shared row", ciA.json.shared === 1, JSON.stringify(ciA.json));
+
+// B is a different user with a different track. It should receive A's website
+// facts and none of A's search facts.
+await req("POST", "/api/coverage", { token: B_TOK, body: { search: "SWE",
+  on: "", swept: [{ company: "f5 networks" }] } });
+const bSees = await req("GET", "/api/coverage/SWE", { token: B_TOK });
+const bF5 = bSees.json.companies.find((c) => c.company.toLowerCase() === "f5 networks");
+check("another user's rotation receives the shared endpoint",
+  bF5 && bF5.known && bF5.known.endpoint === "ffive.wd5/f5jobs", JSON.stringify(bF5));
+check("company name matching is normalize()d, not exact",
+  bF5 && bF5.known.board === "workday cxs");
+check("the private note does NOT travel between users",
+  bF5 && !JSON.stringify(bF5.known).includes("must not travel"), JSON.stringify(bF5.known));
+check("no contributor identity is exposed",
+  bF5 && !("verified_by" in bF5.known) && !JSON.stringify(bF5.known).includes("Ada"));
+check("B's own sweep dates stay B's",
+  bF5 && bF5.last_swept === "", JSON.stringify(bF5));
+
+// Non-empty-wins: a terse later report must not blank what an earlier one knew.
+await req("POST", "/api/coverage", { token: B_TOK, body: { search: "SWE",
+  on: "2026-09-09", swept: [{ company: "F5 Networks" }] } });
+const stillThere = (await req("GET", "/api/coverage/SWE", { token: B_TOK }))
+  .json.companies.find((c) => c.company.toLowerCase() === "f5 networks");
+check("a terse later sweep does not blank an established endpoint",
+  stillThere.known && stillThere.known.endpoint === "ffive.wd5/f5jobs",
+  JSON.stringify(stillThere.known));
+
+// Seeding is not evidence.
+await req("POST", "/api/coverage", { token: A2, body: { search: "DATA",
+  on: "", swept: [{ company: "Seeded Co", board: "greenhouse" }] } });
+const seedRow = (await req("GET", "/api/coverage/DATA", { token: A2 }))
+  .json.companies.find((c) => c.company === "Seeded Co");
+check("seeding (on: \"\") writes no shared fact", seedRow && !seedRow.known, JSON.stringify(seedRow));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
