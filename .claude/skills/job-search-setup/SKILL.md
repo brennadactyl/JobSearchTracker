@@ -249,6 +249,17 @@ seen" means, and the doc is the thing the run reads first. Add to that step
 which tabs this search fills, and that a posting tracked under *either* key is
 not new whichever tab today's run would file it under.
 
+**Write the distinction between the tabs, not a fallback tab.** The composed
+prompt already breaks a genuine tie, among the tabs the posting actually reads
+as, taking whichever comes first in tab order. A doc line naming one tab as
+where ambiguous postings go reads tidier and is worse: the only tab a doc has
+to name is the feeder, and the feeder is whichever tab happens to own the
+scheduled search rather than a general-purpose one - so ambiguity lands in a
+tab the posting was never a candidate for. That is not hypothetical; it is how
+a Senior Software Engineer, Insurance role reached an Eng - Gaming tab. If the
+split needs a finer rule, write the question that separates the tabs ("ask
+what the company sells"), never a destination.
+
 Then draft the track's config fields for step 6. Most of them are **prose
 the prompt uses verbatim**, not keywords the worker expands - write them as
 the finished sentence you want the search to read:

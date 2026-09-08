@@ -186,10 +186,22 @@ export function buildSearchPrompt({ user, track, settings, feeds, coverage }) {
     : "";
   // Slots in after the sorting step, because it only applies to what sorting
   // has already decided is a finding - a screened-out posting needs no tab.
+  //
+  // The tie-break used to be "file it under `key`", the feeding track. That
+  // reads as a reasonable default right up until you notice `key` is whichever
+  // tab happens to own the scheduled search, not a general-purpose one - here
+  // it's the narrowest tab on the board. A run filed a Senior SWE role at an
+  // insurance company under Eng - Gaming and said so in its own note: it read
+  // as swe-tech-or-swe-industry, and the rule turned a tab it had already
+  // ruled out into the answer. Breaking the tie *among the tabs it does read
+  // as* keeps everything the rule was for - one deterministic answer, no
+  // second verification pass - and drops the part that put an insurer in the
+  // games tab. First-in-the-list is the deterministic part: `[track, ...fed]`
+  // is sort_order, which is the tab order on the page.
   const filingStep = multi
     ? `7b. FILE EACH FINDING UNDER THE RIGHT TAB. This one search fills ${allKeys.length} tabs, and every finding from step 7 belongs to exactly one of them:\n${[track, ...fed]
         .map((t) => `   - \`${t.key}\` (${t.label}): ${branchOf(t)}`)
-        .join("\n")}\n   Decide from what the posting and the company actually are, reading the tab descriptions above as written - not from a job title alone, which means different things at different companies. \`${doc}\` is where any finer rule for this particular split lives; follow it. If a posting genuinely reads more than one way after checking, file it under \`${key}\` and name those ones in your report. Don't spend a second verification pass on the question: the posting is already verified, this only decides which tab shows it. The answer is the \`"search"\` value in step 9.\n`
+        .join("\n")}\n   Decide from what the posting and the company actually are, reading the tab descriptions above as written - not from a job title alone, which means different things at different companies. \`${doc}\` is where any finer rule for this particular split lives; follow it. If a posting genuinely reads more than one way after checking, file it under whichever of *those* tabs comes first in the list above, and name those ones in your report. The tie is only ever between the tabs it actually reads as: a tab you have already ruled out is never the answer, and that includes \`${key}\` - that's the tab that happens to own this search, which is not a reason for a posting to show up in it. Don't spend a second verification pass on the question: the posting is already verified, this only decides which tab shows it. The answer is the \`"search"\` value in step 9.\n`
     : "";
   const searchValueRule = multi
     ? `is the key step 7b filed that posting under - ${allKeys
