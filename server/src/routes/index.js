@@ -39,7 +39,7 @@ import { handleDelistUrls, handleMarkVerified } from "./delisting.js";
 import { handleAddLeads, handleDeleteLeads, handleSetLeadStatus } from "./leads.js";
 import { handleGetAutofillPrompt, handleGetPrompt } from "./prompt.js";
 import { handleRecordRun } from "./runs.js";
-import { handleAddScreened, handleGetDedup } from "./screened.js";
+import { handleAddScreened, handleGetDedup, handleUnscreen } from "./screened.js";
 import { handleUpdate } from "./update.js";
 
 /**
@@ -91,6 +91,10 @@ export const SESSION_ROUTES = [
   // tracks: which are still live, and which have come down.
   ["POST", "/api/verified", handleMarkVerified],
   ["POST", "/api/delist", handleDelistUrls],
+  // The way back from a wrong delist or a wrong screening - the only route
+  // that makes a posting rediscoverable again. Not in any prompt: see
+  // handleUnscreen.
+  ["POST", "/api/unscreen", handleUnscreen],
   ["POST", /^\/api\/leads\/(\d+)\/status$/, handleSetLeadStatus],
   ["POST", /^\/api\/applications\/(\d+)\/status$/, handleSetApplicationStatus],
   // The overnight fill of an application added as nothing but a URL: which

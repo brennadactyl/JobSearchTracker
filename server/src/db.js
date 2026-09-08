@@ -1261,6 +1261,89 @@ export class Db {
     return { added: results.reduce((n, r) => n + (r.meta.changes || 0), 0), duplicates };
   }
 
+  /**
+   * Forget that a posting was ever screened, so it can be found again.
+   *
+   * The counterpart to a mistake. A screened row is a permanent instruction to
+   * every future run to skip a url, and `dropKnownUrls` honours it for leads
+   * too - so a lead wrongly delisted is not merely removed from the board, it
+   * is removed from what any later run is able to rediscover. That is the
+   * right default (it is what stops a rejected posting coming back nightly)
+   * and it is exactly wrong when the row should never have existed.
+   *
+   * It happened, 2026-09-08: a run derived a "confirmed-dead signal" for one
+   * ATS from a sample it had just built, found that the signal split that
+   * sample cleanly, wrote it into the search's doc as reliable, and delisted
+   * ten live postings on it. The strings it keyed on were boilerplate present
+   * in every response from that host, dead or alive. Nothing in the API could
+   * undo it: /api/delist is one-way by design, and the screened rows it wrote
+   * made the same ten postings permanently invisible to rediscovery.
+   *
+   * So the row goes away entirely rather than being flagged. A "screened but
+   * ignore that" state would need every reader to honour it, and the readers
+   * are the thing being protected from a bad row in the first place. Removal
+   * restores the status quo ante exactly: the next run rediscovers the posting
+   * on its merits, and if it really is dead it gets screened again with a real
+   * reason.
+   *
+   * Matched on canonical url (see ./url.js), not the stored string, because
+   * the caller is working from a report or a webpage and the url that comes
+   * back rarely carries the same tracking params it was stored with.
+   *
+   * Scoped to the whole feed group, not one key, and that is load-bearing
+   * rather than tidy. The two writers disagree about which key a screened row
+   * belongs to: handleAddScreened rewrites a fed tab's key to its feeder, so
+   * a run's rejections all land under the feeder - but delistLead writes the
+   * row under the *lead's* own search, and a lead lives in the tab it was
+   * filed into. So a delisted Principal-tab lead leaves a row under the fed
+   * key, which is exactly the row this route exists to remove. Resolving the
+   * caller's key through `fed_by` and deleting from that one search reaches
+   * the first kind and silently misses the second - found the hard way,
+   * recovering 4 of 10 rows and wondering where the rest went.
+   *
+   * Matching the group is also what makes this agree with dropKnownUrls,
+   * which reads screened rows across `groupKeys` when deciding what is
+   * already known. A row it can see is a row this must be able to remove,
+   * or the undo is only sometimes an undo.
+   *
+   * @param {string[]} searches every key in the feed group
+   * @param {string[]} urls
+   * @returns {Promise<{removed: number, urls: string[], unmatched: string[]}>}
+   */
+  async unscreenUrls(searches, urls) {
+    const keys = Array.isArray(searches) ? searches : [searches];
+    if (keys.length === 0) return { removed: 0, urls: [], unmatched: urls.slice() };
+    const wanted = new Map(urls.map((u) => [canonicalUrl(u), u]));
+    const inKeys = keys.map(() => "?").join(",");
+    const rows = await this.d1
+      .prepare(`SELECT url FROM screened WHERE user_id = ? AND search IN (${inKeys})`)
+      .bind(this.userId, ...keys)
+      .all();
+
+    const hits = [];
+    for (const row of rows.results) {
+      const key = canonicalUrl(row.url);
+      if (wanted.has(key)) {
+        hits.push(row.url);
+        wanted.delete(key);
+      }
+    }
+    // Whatever is left in `wanted` matched no screened row. Reported rather
+    // than swallowed: the usual cause is a url that was never screened under
+    // this search, and a silent 0 there looks identical to a successful undo.
+    const unmatched = [...wanted.values()];
+    if (hits.length === 0) return { removed: 0, urls: [], unmatched };
+
+    const placeholders = hits.map(() => "?").join(",");
+    const res = await this.d1
+      .prepare(
+        `DELETE FROM screened WHERE user_id = ? AND search IN (${inKeys}) AND url IN (${placeholders})`
+      )
+      .bind(this.userId, ...keys, ...hits)
+      .run();
+    return { removed: res.meta.changes || 0, urls: hits, unmatched };
+  }
+
   // ----------------------------------------------------- applications --
 
   /** @param {number|string} id @returns {Promise<Application|null>} */

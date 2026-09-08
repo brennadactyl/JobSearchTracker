@@ -660,6 +660,17 @@ check("the feeding track's prompt covers both tabs",
   feedPrompt.includes("/api/dedup/LEAD") &&
   feedPrompt.includes("a role leading a team") &&
   feedPrompt.includes('`"LEAD"`'));
+// The filing step's tie-break. It used to send an ambiguous posting to the
+// feeding track, which is whichever tab happens to own the scheduled search
+// and not a general-purpose one: on the deployment this came from it was the
+// narrowest tab on the board, and a Senior SWE role at an insurance company
+// landed in Eng - Gaming citing exactly this rule while its own note said the
+// tabs it read as were the other two. So a tie has to resolve among the tabs
+// it does read as, and the feeding key has to be named as not being a default.
+check("a tie in the filing step resolves among the tabs a posting reads as, not to the feeding tab",
+  feedPrompt.includes("whichever of *those* tabs comes first in the list above") &&
+  /already ruled out is never the answer/.test(feedPrompt) &&
+  !/reads more than one way after checking, file it under `SWE`/.test(feedPrompt));
 // The fan-out is one transaction, so a run record either exists for every tab
 // the run fills or for none. The failure it replaced was a half-written
 // fan-out leaving a tab that had just been searched reading as never-run - the
@@ -1151,6 +1162,94 @@ check("a live session belonging to someone else cannot change this person's pass
   (await req("POST", "/api/password", { token: pwStranger, body: { currentPassword: "pip-third-password", newPassword: "stolen-password-x" } })).status === 403);
 check("and Pip's password is untouched by that attempt",
   (await req("POST", "/api/login", { body: { name: pwName, password: "pip-third-password" } })).status === 200);
+
+console.log("\n== unscreening: the way back from a wrong delist ==");
+// Runs last, and against B, whose SWE track the purge section just proved is
+// untouched. A screened row is a standing instruction to skip a url forever -
+// dropKnownUrls honours it for leads too - so a lead delisted by mistake is
+// not merely off the board, it is unrediscoverable. This is the undo.
+const unUrl = `https://apply.example.com/careers/job/${Date.now()}?utm_source=x`;
+const unBare = unUrl.split("?")[0];
+await req("POST", "/api/screened", { token: B_TOK, body: { on: "2026-09-08", screened: [
+  { search: "SWE", url: unUrl, company: "Example", reason: "posting taken down" } ] } });
+const beforeUn = await req("GET", "/api/dedup/SWE", { token: B_TOK });
+check("the screened row is there to begin with",
+  beforeUn.json.screened.some((u) => u.startsWith(unBare)));
+const blocked = await req("POST", "/api/leads", { token: B_TOK, body: { leads: [
+  { search: "SWE", url: unUrl, company: "Example", title: "Senior Engineer" } ] } });
+check("a screened url cannot be re-added as a lead - the trap being undone",
+  (blocked.json.added || 0) === 0, JSON.stringify(blocked.json));
+
+check("unscreen without a search is 400",
+  (await req("POST", "/api/unscreen", { token: B_TOK, body: { urls: [unUrl] } })).status === 400);
+check("unscreen without urls is 400",
+  (await req("POST", "/api/unscreen", { token: B_TOK, body: { search: "SWE" } })).status === 400);
+check("unscreen on an unknown track is 404, not a silent no-op",
+  (await req("POST", "/api/unscreen", { token: B_TOK, body: { search: "nope", urls: [unUrl] } })).status === 404);
+check("unscreen with no token is 401",
+  (await req("POST", "/api/unscreen", { body: { search: "SWE", urls: [unUrl] } })).status === 401);
+
+// Matched on canonical url: a caller working from a report rarely has the
+// tracking params the row was stored with.
+const undone = await req("POST", "/api/unscreen", { token: B_TOK, body: {
+  search: "SWE", urls: [unBare, "https://example.com/never-screened"] } });
+check("removes the row despite differing tracking params",
+  undone.json.removed === 1, JSON.stringify(undone.json));
+check("reports a url that matched nothing rather than swallowing it",
+  undone.json.unmatched.length === 1, JSON.stringify(undone.json));
+const afterUn = await req("GET", "/api/dedup/SWE", { token: B_TOK });
+check("the screened row is gone",
+  !afterUn.json.screened.some((u) => u.startsWith(unBare)));
+const readd = await req("POST", "/api/leads", { token: B_TOK, body: { leads: [
+  { search: "SWE", url: unUrl, company: "Example", title: "Senior Engineer" } ] } });
+check("the posting is addable again - the recovery actually recovers",
+  (readd.json.added || 0) === 1, JSON.stringify(readd.json));
+
+// The guard that matters most: this route deletes rows, so it must be as
+// user-scoped as every other one.
+const aScreenUrl = `https://apply.example.com/careers/job/${Date.now()}9`;
+await req("POST", "/api/screened", { token: A2, body: { on: "2026-09-08", screened: [
+  { search: "DATA", url: aScreenUrl, company: "Example", reason: "no" } ] } });
+const crossUn = await req("POST", "/api/unscreen", { token: B_TOK, body: {
+  search: "SWE", urls: [aScreenUrl] } });
+check("one user cannot unscreen another user's row",
+  crossUn.json.removed === 0, JSON.stringify(crossUn.json));
+check("the other user's row is still there afterwards",
+  (await req("GET", "/api/dedup/DATA", { token: A2 })).json.screened.includes(aScreenUrl));
+
+// The case that a fed_by rewrite alone misses. Screened rows reach the table
+// by two writers that disagree about the key: a run's rejections are rewritten
+// to the feeder, but a delisted lead's row is written under the tab the lead
+// lived in. Unscreening has to span the group or it silently recovers half.
+// Its own user, because by this point Ada's fed pair has been retired above.
+const fedPw = "fed-undo-long-password";
+await req("POST", "/api/users", { admin: true, body: { name: "FedUndo", password: fedPw } });
+const F_TOK = (await req("POST", "/api/login", { body: { name: "FedUndo", password: fedPw } })).json.token;
+await req("POST", "/api/config", { token: F_TOK, body: { tracks: [
+  { key: "ENG", label: "Eng", full_description: "the feeder", sort_order: 0 },
+  { key: "ENG-SENIOR", label: "Senior", full_description: "the fed tab", sort_order: 1, fed_by: "ENG" } ] } });
+
+const fedUrl = `https://boards.example.com/jobs/${Date.now()}fed`;
+await req("POST", "/api/leads", { token: F_TOK, body: { leads: [
+  { search: "ENG-SENIOR", url: fedUrl, company: "Example", title: "Principal Engineer" } ] } });
+check("a lead can be filed onto the fed tab",
+  (await req("GET", "/api/data", { token: F_TOK })).json.leads.some((l) => l.url === fedUrl));
+// Delisted by the feeder's name, the way a branched run reports - the row
+// still lands under the fed tab, because delistLead writes it under the
+// lead's own search.
+await req("POST", "/api/delist", { token: F_TOK, body: {
+  search: "ENG", on: "2026-09-08", urls: [fedUrl] } });
+check("delisting it leaves a screened row behind",
+  (await req("GET", "/api/dedup/ENG-SENIOR", { token: F_TOK })).json.screened.includes(fedUrl));
+// Asked by the FEEDER's name, while the row sits under the fed key. Resolving
+// through fed_by would look under ENG only and report 0.
+const undoFed = await req("POST", "/api/unscreen", { token: F_TOK, body: {
+  search: "ENG", urls: [fedUrl] } });
+check("a delisted fed-tab row is reachable when asking by the feeder's name",
+  undoFed.json.removed === 1, JSON.stringify(undoFed.json));
+check("and the posting can go back on the board",
+  ((await req("POST", "/api/leads", { token: F_TOK, body: { leads: [
+    { search: "ENG-SENIOR", url: fedUrl, company: "Example", title: "Principal Engineer" } ] } })).json.added || 0) === 1);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

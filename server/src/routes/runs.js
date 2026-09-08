@@ -40,8 +40,17 @@ import { isoDate, unknownTrack } from "../validate.js";
  * four correctly-split records is precisely what didn't work. One POST in, one
  * row per tab out, each counted from its own rows.
  *
- * The retired count fields are still accepted and ignored, so a run mid-flight
- * on a prompt fetched before this deployed still records correctly.
+ * The retired count fields are accepted and ignored - and that is the settled
+ * behaviour, not a migration shim left over from the change. (It began as one:
+ * a run mid-flight on a prompt fetched before this deployed still had to
+ * record correctly. That window was one run long and closed the same day.)
+ *
+ * Keep it. The prompt tells runs not to send counts, but the thing to protect
+ * against is a run that sends them anyway, and rejecting the call over an
+ * extra key would drop the run record entirely - which is the exact state
+ * this table exists to make impossible, since a missing record reads as a
+ * search that stopped firing rather than a quiet day. A wrong count would be
+ * cosmetic; no record at all is not. So: never read them, never refuse them.
  *
  * One honest caveat: counting by date means a lead the *user* adds by hand
  * today lands in today's run count for that tab. Rare, and still truer than a

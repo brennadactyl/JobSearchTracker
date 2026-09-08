@@ -115,3 +115,54 @@ export async function handleAddScreened({ request, db }) {
   const { added, duplicates } = await db.addScreened(filed, on);
   return json({ added, duplicates, excluded });
 }
+
+/**
+ * POST /api/unscreen - requires a Bearer token.
+ *
+ * Body `{ "search": "product", "urls": ["https://...", ...] }` ->
+ * `{ removed, urls, unmatched }`.
+ *
+ * Undoes a screening. This is the only route that makes a posting findable
+ * again, and it exists because until 2026-09-08 nothing did: a delisted lead
+ * leaves a screened row behind, `dropKnownUrls` treats that row as "this run
+ * has met this posting before", and so a lead removed by mistake was not just
+ * off the board but permanently unrediscoverable. See db.unscreenUrls for the
+ * incident that made the gap concrete - ten live postings delisted on a
+ * heuristic a run invented, with no way back.
+ *
+ * Deliberately not authenticated any differently, and deliberately not
+ * available to a run: it is on the same token as everything else, but the
+ * prompt never mentions it. Rediscovering a posting is the *next run's* job
+ * once the row is gone; a run that could clear its own screened rows could
+ * also undo yesterday's correct rejections and re-add them nightly, which is
+ * the loop the screened table exists to break.
+ *
+ * `search` is the track that owns the screening, resolved through `fed_by`
+ * the same way handleAddScreened files them, so a caller working from a fed
+ * tab's name gets the rows that tab's search actually wrote.
+ */
+export async function handleUnscreen({ request, db }) {
+  const body = await readJson(request);
+  if (body instanceof Response) return body;
+
+  const key = typeof body.search === "string" ? body.search.trim() : "";
+  if (!key) return json({ error: "missing search (track key)" }, 400);
+  if (!(await db.trackExists(key))) return unknownTrack(key);
+
+  const urls = Array.isArray(body.urls) ? body.urls.filter((u) => typeof u === "string" && u) : [];
+  if (urls.length === 0) return json({ error: "missing urls" }, 400);
+
+  // The whole feed group, not the key as given and not its feeder either.
+  // Screened rows for one search sit under two different keys depending on who
+  // wrote them - a run's rejections under the feeder (handleAddScreened
+  // rewrites them), a delisted lead's under the tab it was filed in
+  // (delistLead doesn't). Naming either one alone misses the other half. See
+  // db.unscreenUrls.
+  const { tracks } = await db.getTracksAndSettings();
+  const rootOf = new Map(tracks.map((t) => [t.key, t.fed_by || t.key]));
+  const root = rootOf.get(key) || key;
+  const group = [root, ...tracks.filter((t) => t.fed_by === root).map((t) => t.key)];
+
+  const result = await db.unscreenUrls(group, urls);
+  return json(result);
+}
