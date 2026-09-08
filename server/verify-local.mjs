@@ -1073,5 +1073,59 @@ const twice = await req("POST", "/api/purge", { admin: true, body: { user: "Ada"
 check("purging again is a no-op, not an error",
   twice.status === 200 && twice.json.purged.leads === 0, twice.text.slice(0, 120));
 
+console.log("\n== unscreening: the way back from a wrong delist ==");
+// Runs last, and against B, whose SWE track the purge section just proved is
+// untouched. A screened row is a standing instruction to skip a url forever -
+// dropKnownUrls honours it for leads too - so a lead delisted by mistake is
+// not merely off the board, it is unrediscoverable. This is the undo.
+const unUrl = `https://apply.example.com/careers/job/${Date.now()}?utm_source=x`;
+const unBare = unUrl.split("?")[0];
+await req("POST", "/api/screened", { token: B_TOK, body: { on: "2026-09-08", screened: [
+  { search: "SWE", url: unUrl, company: "Example", reason: "posting taken down" } ] } });
+const beforeUn = await req("GET", "/api/dedup/SWE", { token: B_TOK });
+check("the screened row is there to begin with",
+  beforeUn.json.screened.some((u) => u.startsWith(unBare)));
+const blocked = await req("POST", "/api/leads", { token: B_TOK, body: { leads: [
+  { search: "SWE", url: unUrl, company: "Example", title: "Senior Engineer" } ] } });
+check("a screened url cannot be re-added as a lead - the trap being undone",
+  (blocked.json.added || 0) === 0, JSON.stringify(blocked.json));
+
+check("unscreen without a search is 400",
+  (await req("POST", "/api/unscreen", { token: B_TOK, body: { urls: [unUrl] } })).status === 400);
+check("unscreen without urls is 400",
+  (await req("POST", "/api/unscreen", { token: B_TOK, body: { search: "SWE" } })).status === 400);
+check("unscreen on an unknown track is 404, not a silent no-op",
+  (await req("POST", "/api/unscreen", { token: B_TOK, body: { search: "nope", urls: [unUrl] } })).status === 404);
+check("unscreen with no token is 401",
+  (await req("POST", "/api/unscreen", { body: { search: "SWE", urls: [unUrl] } })).status === 401);
+
+// Matched on canonical url: a caller working from a report rarely has the
+// tracking params the row was stored with.
+const undone = await req("POST", "/api/unscreen", { token: B_TOK, body: {
+  search: "SWE", urls: [unBare, "https://example.com/never-screened"] } });
+check("removes the row despite differing tracking params",
+  undone.json.removed === 1, JSON.stringify(undone.json));
+check("reports a url that matched nothing rather than swallowing it",
+  undone.json.unmatched.length === 1, JSON.stringify(undone.json));
+const afterUn = await req("GET", "/api/dedup/SWE", { token: B_TOK });
+check("the screened row is gone",
+  !afterUn.json.screened.some((u) => u.startsWith(unBare)));
+const readd = await req("POST", "/api/leads", { token: B_TOK, body: { leads: [
+  { search: "SWE", url: unUrl, company: "Example", title: "Senior Engineer" } ] } });
+check("the posting is addable again - the recovery actually recovers",
+  (readd.json.added || 0) === 1, JSON.stringify(readd.json));
+
+// The guard that matters most: this route deletes rows, so it must be as
+// user-scoped as every other one.
+const aScreenUrl = `https://apply.example.com/careers/job/${Date.now()}9`;
+await req("POST", "/api/screened", { token: A2, body: { on: "2026-09-08", screened: [
+  { search: "DATA", url: aScreenUrl, company: "Example", reason: "no" } ] } });
+const crossUn = await req("POST", "/api/unscreen", { token: B_TOK, body: {
+  search: "SWE", urls: [aScreenUrl] } });
+check("one user cannot unscreen another user's row",
+  crossUn.json.removed === 0, JSON.stringify(crossUn.json));
+check("the other user's row is still there afterwards",
+  (await req("GET", "/api/dedup/DATA", { token: A2 })).json.screened.includes(aScreenUrl));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
