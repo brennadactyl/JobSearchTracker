@@ -88,12 +88,24 @@ user id. So the first question is *whose* search this is.
 
 - Ask the installer to place their resume file(s) in `<data dir>/<user id>/resumes/`
   if they haven't already (any format - `.docx`, `.pdf`, `.txt`).
-- Read it. Plain text/Markdown: read directly. PDF: use the Read tool
-  (supports PDF). `.docx`: use the `docx` skill to extract text, or ask the
-  installer for a plain-text copy if that's not available in this
-  environment. If nothing readable is present, ask the installer to paste
-  their key experience/skills directly in chat instead of blocking on a
-  file.
+- Read it. Plain text/Markdown: read directly. PDF: try the Read tool, but
+  don't assume it works - it renders pages via `pdftoppm` (poppler-utils),
+  which is missing on plenty of machines, and fails outright when it is.
+  `py -m pip install pypdf` then `pypdf.PdfReader(path).extract_text()` is
+  the fallback that doesn't need it. `.docx`: use the `docx` skill to extract
+  text, or ask the installer for a plain-text copy. If nothing readable is
+  present, ask the installer to paste their key experience/skills directly in
+  chat instead of blocking on a file.
+- **Write a `.txt` copy of any resume that isn't already plain text, into
+  `resumes/` beside the original, and point `resume_line` (step 4) at the
+  `.txt`.** Whether *you* can read the PDF here is not the question: the
+  nightly run is headless on the same machine and gets no interactive
+  fallback, so a resume stored only as `.pdf` or `.docx` is one the search
+  reads *nothing* from, every night, forever. That failure is silent in the
+  worst way - the run still completes, still posts leads, and still reports
+  success, having screened every posting against an empty candidate profile.
+  Keep the `.txt` filename stable (`<Name>_Resume.txt`) so a later resume
+  version is a content swap rather than a config edit.
 - From it, draft a **candidate profile paragraph** (experience level, most
   recent roles in brief, core skills, location) and a **best-fit roles
   sentence**. Show both to the installer and revise from their feedback
@@ -203,10 +215,13 @@ the finished sentence you want the search to read:
   of these are industry-only searches, surface any matching role at them"
   goes.
 - `resume_line` - the whole "read the resume" instruction: which file, any
-  fallback file (**say so explicitly if the primary is a `.docx`** - a
-  headless run often can't read those), and how this track frames that
-  resume. Each track frames the same resume differently; that framing lives
-  here, not in a shared setting.
+  fallback file, and how this track frames that resume. **Name the `.txt`
+  from step 2 as the file to read, and say plainly that the binary original
+  beside it is not readable headless** - that goes for `.pdf` every bit as
+  much as `.docx`, and PDF is what most people hand you. A line that names
+  only the PDF is a search that reads no resume at all and never says so.
+  Each track frames the same resume differently; that framing lives here, not
+  in a shared setting.
 - `fit_clause` / `fit_disqualifier` - a short requirement and its mirror in
   the disqualified list ("a real fit (...)" / "poor fit"). Both empty when
   the track has no fit filter beyond the role line.
@@ -391,9 +406,44 @@ silently on the next plugin update; one registered against the stable copy
 in the data dir doesn't.
 
 **If this repo was `git clone`d instead** (`$env:CLAUDE_PLUGIN_ROOT` is
-unset), just run `scripts/setup-scheduler.ps1` from the repo root (or with
+unset), run `scripts/setup-scheduler.ps1` from the repo root (or with
 `-DataDir` pointing at a non-default data dir) - no copy needed, the clone
 itself is already a stable location.
+
+**Unless you are in a git worktree, which is not.** Check before running it:
+
+```powershell
+git rev-parse --git-common-dir   # ".git" = main checkout; a path = worktree
+```
+
+A worktree is a temporary checkout that gets removed when the work is done,
+and agents run in one routinely - so this is the ordinary case, not an exotic
+one. The task records an absolute path to `run-search.ps1`, so registering
+from `<repo>/.claude/worktrees/<name>/scripts` produces a task that works
+today, breaks the moment the worktree is cleaned up, and fails from then on
+by running nothing at all. Exactly the `CLAUDE_PLUGIN_ROOT` hazard above,
+reached a different way.
+
+So register from the **main checkout**, by absolute path, without `cd`-ing
+there:
+
+```powershell
+& "C:\path\to\main\checkout\scripts\setup-scheduler.ps1" -DataDir "<data dir>" -User <user id>
+```
+
+Diff the two copies first (`diff scripts/setup-scheduler.ps1
+<main>/scripts/setup-scheduler.ps1`) - if your branch changed the script,
+the main checkout's version is the one that will actually run tonight.
+
+Whichever path you take, **verify what got registered rather than trusting
+the summary**, since a wrong path fails silently months later:
+
+```powershell
+Get-ScheduledTask -TaskName "JobSearch-*" | ForEach-Object {
+  [PSCustomObject]@{ Name = $_.TaskName
+                     Path = ($_.Actions[0].Arguments -split '-File ')[1] } } |
+  Format-Table -AutoSize
+```
 
 Either way, `setup-scheduler.ps1` discovers people by their
 `<data dir>\<user id>\tracker.json` and asks each one's account what tracks
@@ -429,15 +479,36 @@ Suggest running one new track immediately rather than waiting for its
 scheduled time:
 
 ```powershell
+$env:CLAUDE_CODE_OAUTH_TOKEN = [Environment]::GetEnvironmentVariable('CLAUDE_CODE_OAUTH_TOKEN','User')
 scripts\run-search.ps1 -Task <key> -User <user id>
 ```
+
+**That first line is not optional for a manual test.** `setup-scheduler.ps1`
+checks the token at *User scope* (the registry) and reports "is set";
+`run-search.ps1` reads it from the *process* environment. Any shell started
+before the variable was set - which includes an agent session that has been
+open a while - has the first and not the second, so setup says it is fine and
+the run then dies on `Not logged in - Please run /login`. Task Scheduler
+spawns a fresh process at the scheduled time and picks it up from User scope,
+so this gap only ever bites the manual test, which is exactly when someone is
+deciding whether the whole setup works.
+
+**Exit code 0 does not mean the run worked.** `run-search.ps1` returns 0 when
+the CLI underneath it failed - it captures the CLI's output into the log
+rather than propagating its status. A run that authenticated nowhere and did
+nothing takes about 20 seconds and reports success. So judge it by the log
+and the elapsed time, never by the exit code: a real run takes minutes.
 
 Then check `<data dir>\<user id>\logs\<key>.log` for what happened, and confirm on the
 tracker webpage that the new track's tab shows up *and* now reports when it
 last ran. A tab still reading "No run recorded yet" after a completed run
 means the prompt's step 9c (`POST /api/runs`) didn't land - worth chasing,
 since that record is the only thing that will later distinguish a quiet day
-from a search that stopped firing.
+from a search that stopped firing. (It is also the backstop for the exit-code
+problem above: a run that died early never reaches 9c, so the stale tab is
+what surfaces it.) For a search with a `fed_by` tab, expect a run recorded
+against **both** keys - a fed tab with no run of its own reads as stale
+forever.
 
 If this was a brand-new install, this is also the point where the page stops
 being empty: it had no tracks at all until step 6 posted the config.
