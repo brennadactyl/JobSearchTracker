@@ -1127,5 +1127,39 @@ check("one user cannot unscreen another user's row",
 check("the other user's row is still there afterwards",
   (await req("GET", "/api/dedup/DATA", { token: A2 })).json.screened.includes(aScreenUrl));
 
+// The case that a fed_by rewrite alone misses. Screened rows reach the table
+// by two writers that disagree about the key: a run's rejections are rewritten
+// to the feeder, but a delisted lead's row is written under the tab the lead
+// lived in. Unscreening has to span the group or it silently recovers half.
+// Its own user, because by this point Ada's fed pair has been retired above.
+const fedPw = "fed-undo-long-password";
+await req("POST", "/api/users", { admin: true, body: { name: "FedUndo", password: fedPw } });
+const F_TOK = (await req("POST", "/api/login", { body: { name: "FedUndo", password: fedPw } })).json.token;
+await req("POST", "/api/config", { token: F_TOK, body: { tracks: [
+  { key: "ENG", label: "Eng", full_description: "the feeder", sort_order: 0 },
+  { key: "ENG-SENIOR", label: "Senior", full_description: "the fed tab", sort_order: 1, fed_by: "ENG" } ] } });
+
+const fedUrl = `https://boards.example.com/jobs/${Date.now()}fed`;
+await req("POST", "/api/leads", { token: F_TOK, body: { leads: [
+  { search: "ENG-SENIOR", url: fedUrl, company: "Example", title: "Principal Engineer" } ] } });
+check("a lead can be filed onto the fed tab",
+  (await req("GET", "/api/data", { token: F_TOK })).json.leads.some((l) => l.url === fedUrl));
+// Delisted by the feeder's name, the way a branched run reports - the row
+// still lands under the fed tab, because delistLead writes it under the
+// lead's own search.
+await req("POST", "/api/delist", { token: F_TOK, body: {
+  search: "ENG", on: "2026-09-08", urls: [fedUrl] } });
+check("delisting it leaves a screened row behind",
+  (await req("GET", "/api/dedup/ENG-SENIOR", { token: F_TOK })).json.screened.includes(fedUrl));
+// Asked by the FEEDER's name, while the row sits under the fed key. Resolving
+// through fed_by would look under ENG only and report 0.
+const undoFed = await req("POST", "/api/unscreen", { token: F_TOK, body: {
+  search: "ENG", urls: [fedUrl] } });
+check("a delisted fed-tab row is reachable when asking by the feeder's name",
+  undoFed.json.removed === 1, JSON.stringify(undoFed.json));
+check("and the posting can go back on the board",
+  ((await req("POST", "/api/leads", { token: F_TOK, body: { leads: [
+    { search: "ENG-SENIOR", url: fedUrl, company: "Example", title: "Principal Engineer" } ] } })).json.added || 0) === 1);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

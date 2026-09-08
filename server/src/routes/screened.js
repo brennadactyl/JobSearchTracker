@@ -152,10 +152,17 @@ export async function handleUnscreen({ request, db }) {
   const urls = Array.isArray(body.urls) ? body.urls.filter((u) => typeof u === "string" && u) : [];
   if (urls.length === 0) return json({ error: "missing urls" }, 400);
 
+  // The whole feed group, not the key as given and not its feeder either.
+  // Screened rows for one search sit under two different keys depending on who
+  // wrote them - a run's rejections under the feeder (handleAddScreened
+  // rewrites them), a delisted lead's under the tab it was filed in
+  // (delistLead doesn't). Naming either one alone misses the other half. See
+  // db.unscreenUrls.
   const { tracks } = await db.getTracksAndSettings();
-  const fedBy = new Map(tracks.map((t) => [t.key, t.fed_by || ""]));
-  const search = fedBy.get(key) || key;
+  const rootOf = new Map(tracks.map((t) => [t.key, t.fed_by || t.key]));
+  const root = rootOf.get(key) || key;
+  const group = [root, ...tracks.filter((t) => t.fed_by === root).map((t) => t.key)];
 
-  const result = await db.unscreenUrls(search, urls);
+  const result = await db.unscreenUrls(group, urls);
   return json(result);
 }

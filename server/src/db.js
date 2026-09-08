@@ -1290,14 +1290,34 @@ export class Db {
    * the caller is working from a report or a webpage and the url that comes
    * back rarely carries the same tracking params it was stored with.
    *
-   * @param {string} search @param {string[]} urls
+   * Scoped to the whole feed group, not one key, and that is load-bearing
+   * rather than tidy. The two writers disagree about which key a screened row
+   * belongs to: handleAddScreened rewrites a fed tab's key to its feeder, so
+   * a run's rejections all land under the feeder - but delistLead writes the
+   * row under the *lead's* own search, and a lead lives in the tab it was
+   * filed into. So a delisted Principal-tab lead leaves a row under the fed
+   * key, which is exactly the row this route exists to remove. Resolving the
+   * caller's key through `fed_by` and deleting from that one search reaches
+   * the first kind and silently misses the second - found the hard way,
+   * recovering 4 of 10 rows and wondering where the rest went.
+   *
+   * Matching the group is also what makes this agree with dropKnownUrls,
+   * which reads screened rows across `groupKeys` when deciding what is
+   * already known. A row it can see is a row this must be able to remove,
+   * or the undo is only sometimes an undo.
+   *
+   * @param {string[]} searches every key in the feed group
+   * @param {string[]} urls
    * @returns {Promise<{removed: number, urls: string[], unmatched: string[]}>}
    */
-  async unscreenUrls(search, urls) {
+  async unscreenUrls(searches, urls) {
+    const keys = Array.isArray(searches) ? searches : [searches];
+    if (keys.length === 0) return { removed: 0, urls: [], unmatched: urls.slice() };
     const wanted = new Map(urls.map((u) => [canonicalUrl(u), u]));
+    const inKeys = keys.map(() => "?").join(",");
     const rows = await this.d1
-      .prepare("SELECT url FROM screened WHERE user_id = ? AND search = ?")
-      .bind(this.userId, search)
+      .prepare(`SELECT url FROM screened WHERE user_id = ? AND search IN (${inKeys})`)
+      .bind(this.userId, ...keys)
       .all();
 
     const hits = [];
@@ -1316,8 +1336,10 @@ export class Db {
 
     const placeholders = hits.map(() => "?").join(",");
     const res = await this.d1
-      .prepare(`DELETE FROM screened WHERE user_id = ? AND search = ? AND url IN (${placeholders})`)
-      .bind(this.userId, search, ...hits)
+      .prepare(
+        `DELETE FROM screened WHERE user_id = ? AND search IN (${inKeys}) AND url IN (${placeholders})`
+      )
+      .bind(this.userId, ...keys, ...hits)
       .run();
     return { removed: res.meta.changes || 0, urls: hits, unmatched };
   }
