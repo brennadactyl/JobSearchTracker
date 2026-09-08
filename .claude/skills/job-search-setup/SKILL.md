@@ -64,7 +64,7 @@ user id. So the first question is *whose* search this is.
   ```
   curl -s -X POST "$TRACKER_URL/api/users" \
     -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
-    -d '{"name":"Their Name","password":"<a long password they choose>"}'
+    -d '{"name":"Their Name","password":"<a long random password - see below>"}'
   ```
 
   It returns their `id`. Create `<data dir>/<id>/` with `docs/`, `resumes/`,
@@ -73,12 +73,36 @@ user id. So the first question is *whose* search this is.
 
   ```
   curl -s -X POST "$TRACKER_URL/api/login" -H "Content-Type: application/json" \
-    -d '{"name":"Their Name","password":"<the password>","label":"scheduled-search"}'
+    -d '{"name":"Their Name","password":"<the same password>","label":"scheduled-search"}'
   ```
 
   Write `{"url": "<tracker url>", "token": "<the token it returned>"}` to
   `<data dir>/<id>/tracker.json`. Never put the password in that file, or
   anywhere else on disk - it's only ever typed into the webpage's sign-in.
+
+  **Don't ask for, invent, or type their real password here.** Those two
+  commands need *a* password, not *their* password, and whatever goes on that
+  command line lands in shell history and in the transcript of whoever ran it.
+  So generate a long random one **in the same process that sends both
+  requests**, never printing it - a short script that POSTs `/api/users`, then
+  `/api/login`, then writes `tracker.json`, and emits only the user id. That
+  leaves an account whose password nobody knows, which is fine and is the
+  point: the scheduled searches authenticate with the token, and a reset needs
+  the admin token rather than the old password.
+
+  Then have **them** set a real one, at a prompt, in their own terminal:
+
+  ```powershell
+  scripts\set-password.ps1 -Name "Their Name"
+  ```
+
+  It reads the password with `Read-Host -AsSecureString`, confirms it, zeroes
+  the plaintext afterwards, and warns if the reply says `created: true` -
+  which means the name didn't match and a second, empty account now exists.
+  (`users.name` is `UNIQUE COLLATE NOCASE`, so case is safe and spelling is
+  not.) Resetting only rewrites `password_hash`; sessions are a separate
+  table, so the scheduled-search token keeps working and step 7 does not need
+  redoing.
 - If you don't have `TRACKER_URL`, or the deployment doesn't exist yet, keep
   going (steps 2-5 don't need it) but tell the installer they'll need
   `../../../server/README.md`'s setup done and step 6 re-run before the
@@ -163,6 +187,19 @@ Once per setup (applies to every track, new and existing):
   doesn't match the configured tiers is exactly the bug this skill exists to
   avoid.
 - **Display title** for the tracker page (e.g. "Jordan's Job Search").
+- **Pronouns** - the `pronouns` setting, which the composed prompt uses when
+  it writes about them ("his board", "they would rather see it"). Ask; don't
+  infer it from their name or their resume. Left empty the prompt stays
+  generic, which is a fine answer if they'd rather not say - but it has to be
+  their answer rather than your guess.
+- **Any hard compensation floor**, if they have one. There is no salary field:
+  it goes in `fit_clause` / `fit_disqualifier` (step 4), and how you word it
+  decides whether it helps. Screen on a *stated* range only, and keep a
+  posting that publishes none - "a range topping out below $X" disqualifies,
+  "no published range" does not. A literal floor throws away most postings
+  from states without pay-transparency laws, which is the majority of a
+  remote search, and it does it invisibly. Say in the doc's Candidate Profile
+  what the floor is and that an unstated range is not a reason to screen.
 
 ### 4. Write the per-track doc, and draft the track's config
 
@@ -185,7 +222,7 @@ step 6 - plus one real file:
   |---|---|
   | `{{TRACK_TITLE}}` | The track's title for the doc heading - "Software Engineering", "Engineering Management". |
   | `{{SEARCH_GOAL_SENTENCE}}` | One sentence naming what this search looks for, quoted in the intro line. |
-  | `{{SIBLING_DOCS_NOTE}}` | A sentence pointing at this person's other track docs, or empty for their first. Say "do not merge them" - a run that reads a sibling doc as its own searches the wrong thing. |
+  | `{{SIBLING_DOCS_NOTE}}` | A sentence pointing at this person's other track docs, or empty for their first. Say "do not merge them" - a run that reads a sibling doc as its own searches the wrong thing. For a `fed_by` tab, see the note below instead: that tab shares this doc rather than getting one. |
   | `{{TRACK_KEY}}` | The track key slug. It appears in the API paths the doc quotes, so a wrong one sends every run at another tab's data. |
   | `{{ROLE_SEARCH_LINE}}` | Same text as the track's `role_search_line` config, so the doc and the prompt agree. |
   | `{{GEO_SCOPE_PARAGRAPH}}` | Same text as the `geo_scope_line` setting, worked examples and all. |
@@ -198,7 +235,19 @@ step 6 - plus one real file:
 - `{{LOCATION_TIER_ROWS}}`: one Markdown table row per priority tier, e.g.
   `| Top | Seattle, Bellevue, ... - or remote within scope | teal stripe +
   "Seattle area" / "Remote US" tag, sorted to the top of its tab |`. Keep
-  these in step with the `priority_locations` you'll post in step 6.
+  these in step with the `priority_locations` you'll post in step 6. The
+  client ranks by a rule's *position* in that list and ignores its `tier`
+  string, so the order you post them in is the order they rank in.
+
+**If this search fills a `fed_by` tab, say so in the doc.** One search, one
+doc - the fed tab shares the feeder's. The template is written as though the
+track were the only tab, so two of its lines are then wrong in a way that
+matters: step 1 tells the run to dedup against `/api/dedup/<key>` alone, when
+the composed prompt correctly fetches every tab's key and merges them. Left
+as the template has it, the doc and the prompt disagree about what "already
+seen" means, and the doc is the thing the run reads first. Add to that step
+which tabs this search fills, and that a posting tracked under *either* key is
+not new whichever tab today's run would file it under.
 
 Then draft the track's config fields for step 6. Most of them are **prose
 the prompt uses verbatim**, not keywords the worker expands - write them as
@@ -265,7 +314,18 @@ curl -s "$TRACKER_URL/api/prompt/<key>" -H "Authorization: Bearer $USER_TOKEN"
 This is the actual text their search will run every morning, assembled from
 what you just posted. It's the fastest way to catch a `resume_line` naming a
 file that isn't there, a fit filter that reads harsher than intended, or a
-geo scope that says nothing.
+geo scope that says nothing. Read the whole of a step before judging it -
+several are long, and the qualifying clause tends to be at the end (step 1b's
+multi-tab dedup instruction is the last sentence of a paragraph, and looks
+missing if you skim the first half).
+
+**Scripting any of these calls? Send a `User-Agent`.** Every example here is
+curl, and curl sets one. Cloudflare's browser-integrity check rejects some
+default agents - Python's `urllib` among them - with **HTTP 403 and a body of
+`error code: 1010`**, before the request reaches the Worker. It is
+indistinguishable from a rejected `ADMIN_TOKEN` unless you read the response
+body, so it reads as "the deployment's credentials have been rotated" when
+nothing is wrong. Any ordinary UA string fixes it.
 
 ### 6. Push config to the tracker API
 
@@ -381,6 +441,16 @@ So when setting a track up:
 - **Check back after a few days.** `GET /api/coverage/<key>?all=1` returns
   `total`. If that number is identical to what you seeded a week ago, discovery
   is not reaching the rotation, whatever the doc says.
+
+  Read `total` there and ignore `batch`: the `?all=1` branch returns the whole
+  table and reports `batch` as its length, so a 57-company list prints
+  `batch: 57`. The real per-run slice is `COVERAGE_BATCH` in
+  `server/src/routes/coverage.js` - a hard constant of 12, applied as
+  `Math.min(COVERAGE_BATCH, eligible.length)`. Drop `?all=1` to see the
+  actual number. This is worth knowing before sizing a seed list, because
+  reading `batch: 57` naturally suggests the slice grows with the list and it
+  does not: adding companies lengthens the *cycle* (57 at 12 a night is about
+  five nights), it does not widen the nightly batch.
 
 If there's no deployment to post to yet, skip this step and tell the
 installer to come back to it (re-running this skill is fine, or they can run
