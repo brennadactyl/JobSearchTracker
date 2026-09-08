@@ -142,9 +142,18 @@ it in ${deployFile}:
 
 $headers = @{ Authorization = "Bearer $AdminToken" }
 
+# Cloudflare's browser-integrity check refuses some default agents with a 403
+# whose body is `error code: 1010`, before the request ever reaches the Worker.
+# Read as a status alone it is indistinguishable from a rejected ADMIN_TOKEN,
+# so it reads as "the operator credential has been rotated" when nothing is
+# wrong. Any ordinary string fixes it; see scripts/set-password.ps1, which
+# sends the same one.
+$API_USER_AGENT = "curl/8.0"
+
 if ($List) {
     try {
-        $invites = (Invoke-RestMethod -Uri "$TrackerUrl/api/invites" -Headers $headers -ErrorAction Stop).invites
+        $invites = (Invoke-RestMethod -Uri "$TrackerUrl/api/invites" -Headers $headers `
+            -UserAgent $API_USER_AGENT -ErrorAction Stop).invites
     } catch {
         $status = $_.Exception.Response.StatusCode.value__
         if ($status -eq 401) { Write-Error "The admin token was refused - check it matches the ADMIN_TOKEN secret on the worker." }
@@ -174,7 +183,7 @@ if ($List) {
 
 try {
     $invite = Invoke-RestMethod -Uri "$TrackerUrl/api/invites" -Method POST -Headers $headers `
-        -ContentType "application/json; charset=utf-8" `
+        -ContentType "application/json; charset=utf-8" -UserAgent $API_USER_AGENT `
         -Body (@{ note = $Note; days = $Days } | ConvertTo-Json -Compress) -ErrorAction Stop
 } catch {
     $status = $_.Exception.Response.StatusCode.value__

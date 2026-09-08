@@ -207,8 +207,16 @@ Log "tracker:          $TrackerUrl"
 
 $adminHeaders = @{ Authorization = "Bearer $AdminToken" }
 
+# See scripts/set-password.ps1 and the skill's API section: Cloudflare answers
+# a rejected default agent with a 403 whose body is `error code: 1010`, which
+# looks exactly like a refused ADMIN_TOKEN from the status alone. This run is
+# unattended, so a failure it misdiagnoses is one nobody is watching to
+# correct.
+$API_USER_AGENT = "curl/8.0"
+
 function Api($method, $path, $body) {
-    $req = @{ Uri = "$TrackerUrl$path"; Method = $method; Headers = $adminHeaders; ErrorAction = "Stop" }
+    $req = @{ Uri = "$TrackerUrl$path"; Method = $method; Headers = $adminHeaders
+              UserAgent = $API_USER_AGENT; ErrorAction = "Stop" }
     if ($body) {
         $req.Body = ($body | ConvertTo-Json -Depth 8 -Compress)
         $req.ContentType = "application/json; charset=utf-8"
@@ -253,7 +261,9 @@ Log "waiting:          $($queue.Count) ($(($queue | ForEach-Object { $_.user.nam
 $taken = @()
 foreach ($acct in $existing) {
     try {
-        $cfg = Invoke-RestMethod -Uri "$TrackerUrl/api/config" -Headers @{ Authorization = "Bearer $($acct.Token)" } -ErrorAction Stop
+        $cfg = Invoke-RestMethod -Uri "$TrackerUrl/api/config" `
+            -Headers @{ Authorization = "Bearer $($acct.Token)" } `
+            -UserAgent $API_USER_AGENT -ErrorAction Stop
         foreach ($tr in $cfg.tracks) { if ($tr.schedule_time) { $taken += $tr.schedule_time } }
     } catch {
         Log "WARNING: couldn't read $($acct.Id)'s config for schedule times - $($_.Exception.Message)"

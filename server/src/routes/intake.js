@@ -52,11 +52,18 @@ const MAX_FILE_BYTES = 700000;
 // were relevant. Not a document store.
 const MAX_FILES = 5;
 
-// What a run will actually be able to read on the other end. `.docx` is
-// accepted and deliberately last in the list: a headless run often cannot
-// extract text from one, which is why the form asks for pasted text as well
-// and why the setup skill's `resume_line` is told to name a fallback.
-const ALLOWED_EXTENSIONS = ["pdf", "txt", "md", "rtf", "doc", "docx"];
+// What a run might be able to read on the other end - "might" doing real work
+// in that sentence. Only the plain-text kinds are dependable: the run that
+// reads these is headless, where opening a PDF needs tooling that is not
+// installed everywhere and a .docx needs more than that. A resume nobody can
+// read does not fail loudly; the search is built anyway and screens postings
+// against an empty profile, reporting success the whole time.
+//
+// So the binary formats stay accepted - they are what people have, and the
+// setup instructions tell the run to extract a .txt beside the original and
+// point `resume_line` at that - but the form asks for pasted text as the
+// reliable path, and this list is ordered plainest-first to say so.
+const ALLOWED_EXTENSIONS = ["txt", "md", "rtf", "pdf", "doc", "docx"];
 
 /**
  * A filename safe to write to disk on somebody else's machine.

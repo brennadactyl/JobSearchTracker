@@ -467,12 +467,15 @@ try{
 
         <div class="setup-sec">
           <h2>Your resume</h2>
-          <p>Attach a file, paste the text, or both. PDF and plain text read most reliably;
-            a .docx often can't be read on the machine that runs your search, so if that's all
-            you have, paste the text as well.</p>
+          <p>Attach a file, paste the text, or both &mdash; but <strong>pasting the text is the
+            one that always works</strong>. The machine that builds your search runs headless,
+            where a PDF or Word file often can't be opened at all, and a search built from a
+            resume nobody could read still runs perfectly well against nothing. Plain text
+            (.txt, .md) attaches fine. If a PDF or .docx is all you have, attach it
+            <em>and</em> paste the text.</p>
         </div>
         <div class="setup-field">
-          <input id="fFiles" type="file" multiple accept=".pdf,.txt,.md,.rtf,.doc,.docx">
+          <input id="fFiles" type="file" multiple accept=".txt,.md,.rtf,.pdf,.doc,.docx">
           <div id="setupFiles" class="setup-files"></div>
         </div>
         <div class="setup-field">

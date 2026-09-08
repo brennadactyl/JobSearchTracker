@@ -92,11 +92,13 @@ user id. So the first question is *whose* search this is.
 
   It returns their `id`. Create `<data dir>/<id>/` with `docs/`, `resumes/`,
   `reference/` subfolders, then mint the long-lived token their scheduled
-  searches will use and write it alongside:
+  searches will use and write it alongside. The admin token mints it directly,
+  so nothing has to know or hold their password to get one:
 
   ```
-  curl -s -X POST "$TRACKER_URL/api/login" -H "Content-Type: application/json" \
-    -d '{"name":"Their Name","password":"<the same password>","label":"scheduled-search"}'
+  curl -s -X POST "$TRACKER_URL/api/tokens" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+    -d '{"user":"Their Name","label":"scheduled-search"}'
   ```
 
   Write `{"url": "<tracker url>", "token": "<the token it returned>"}` to
