@@ -56,7 +56,24 @@ export async function handleGetCoverage({ db, params, url }) {
   const isExcluded = await excluderFor(db);
   const eligible = log.filter((c) => !isExcluded(c.company));
   if (all) {
-    return json({ companies: eligible, total: eligible.length, batch: eligible.length, cursor });
+    // Intel here too. This branch is what a person reads when they want to see
+    // the table, and a view that silently omits the shared facts is one that
+    // makes them look absent - which is how someone concludes the pooling
+    // isn't working and goes back to writing endpoints into a doc.
+    const allIntel = await db.getCompanyFetch(eligible.map((c) => c.company));
+    return json({
+      companies: eligible.map((c) => {
+        const known = allIntel.get(normalize(c.company));
+        return known ? { ...c, known } : c;
+      }),
+      total: eligible.length,
+      // Reports the whole table, because that is what this branch returns. Not
+      // the per-run cap - COVERAGE_BATCH is still a hard 12 (see below), and
+      // reading `batch` from this branch as the nightly slice is a mistake
+      // that has already been made.
+      batch: eligible.length,
+      cursor,
+    });
   }
 
   // Read forward from the cursor, wrapping at the end - the whole selection

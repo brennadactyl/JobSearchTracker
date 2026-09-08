@@ -1164,18 +1164,33 @@ check("and the posting can go back on the board",
 console.log("\n== shared company fetch intel ==");
 // The one table with no user_id (migrations/0010_company_fetch.sql). These
 // checks are the boundary: website facts pool, search facts do not.
-const ciA = await req("POST", "/api/coverage", { token: A2, body: { search: "DATA",
+//
+// Two throwaway users, deliberately. Ada and Bo carry controls other sections
+// depend on - Bo's SWE track is the "no coverage rows" case a check above
+// relies on - and coverage rows outlive a DELETE FROM users, so seeding Bo
+// here passes today and breaks that check on the NEXT run against the same
+// database. Which is exactly how it broke the first time; see the comment
+// there.
+const ciPw = "company-intel-long-password";
+const ciTok = {};
+for (const n of ["IntelOne", "IntelTwo"]) {
+  await req("POST", "/api/users", { admin: true, body: { name: n, password: ciPw } });
+  ciTok[n] = (await req("POST", "/api/login", { body: { name: n, password: ciPw } })).json.token;
+  await req("POST", "/api/config", { token: ciTok[n], body: { tracks: [
+    { key: "ENG", label: "Eng", full_description: "x", sort_order: 0 } ] } });
+}
+const T1 = ciTok.IntelOne, T2 = ciTok.IntelTwo;
+
+const ciA = await req("POST", "/api/coverage", { token: T1, body: { search: "ENG",
   on: "2026-09-08", swept: [
     { company: "F5 Networks", board: "workday cxs", endpoint: "ffive.wd5/f5jobs",
       note: "private note that must not travel" } ] } });
 check("recording a sweep also writes a shared row", ciA.json.shared === 1, JSON.stringify(ciA.json));
 
-// B is a different user with a different track. It should receive A's website
-// facts and none of A's search facts.
-await req("POST", "/api/coverage", { token: B_TOK, body: { search: "SWE",
+await req("POST", "/api/coverage", { token: T2, body: { search: "ENG",
   on: "", swept: [{ company: "f5 networks" }] } });
-const bSees = await req("GET", "/api/coverage/SWE", { token: B_TOK });
-const bF5 = bSees.json.companies.find((c) => c.company.toLowerCase() === "f5 networks");
+const bF5 = (await req("GET", "/api/coverage/ENG", { token: T2 }))
+  .json.companies.find((c) => c.company.toLowerCase() === "f5 networks");
 check("another user's rotation receives the shared endpoint",
   bF5 && bF5.known && bF5.known.endpoint === "ffive.wd5/f5jobs", JSON.stringify(bF5));
 check("company name matching is normalize()d, not exact",
@@ -1183,25 +1198,25 @@ check("company name matching is normalize()d, not exact",
 check("the private note does NOT travel between users",
   bF5 && !JSON.stringify(bF5.known).includes("must not travel"), JSON.stringify(bF5.known));
 check("no contributor identity is exposed",
-  bF5 && !("verified_by" in bF5.known) && !JSON.stringify(bF5.known).includes("Ada"));
-check("B's own sweep dates stay B's",
+  bF5 && !("verified_by" in bF5.known) && !JSON.stringify(bF5.known).includes("IntelOne"));
+check("the other user's own sweep dates stay their own",
   bF5 && bF5.last_swept === "", JSON.stringify(bF5));
 
-// Non-empty-wins: a terse later report must not blank what an earlier one knew.
-await req("POST", "/api/coverage", { token: B_TOK, body: { search: "SWE",
+await req("POST", "/api/coverage", { token: T2, body: { search: "ENG",
   on: "2026-09-09", swept: [{ company: "F5 Networks" }] } });
-const stillThere = (await req("GET", "/api/coverage/SWE", { token: B_TOK }))
+const stillThere = (await req("GET", "/api/coverage/ENG", { token: T2 }))
   .json.companies.find((c) => c.company.toLowerCase() === "f5 networks");
 check("a terse later sweep does not blank an established endpoint",
   stillThere.known && stillThere.known.endpoint === "ffive.wd5/f5jobs",
   JSON.stringify(stillThere.known));
 
-// Seeding is not evidence.
-await req("POST", "/api/coverage", { token: A2, body: { search: "DATA",
+await req("POST", "/api/coverage", { token: T1, body: { search: "ENG",
   on: "", swept: [{ company: "Seeded Co", board: "greenhouse" }] } });
-const seedRow = (await req("GET", "/api/coverage/DATA", { token: A2 }))
-  .json.companies.find((c) => c.company === "Seeded Co");
-check("seeding (on: \"\") writes no shared fact", seedRow && !seedRow.known, JSON.stringify(seedRow));
+const allView = (await req("GET", "/api/coverage/ENG?all=1", { token: T1 })).json.companies;
+check("seeding (on: \"\") writes no shared fact",
+  !allView.find((c) => c.company === "Seeded Co").known);
+check("the ?all=1 view carries intel too",
+  allView.find((c) => c.company === "F5 Networks").known.board === "workday cxs");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
