@@ -54,10 +54,26 @@ in on the same browser doesn't land on someone else's tab. It leaves that
 person's other sessions alone - notably the long-lived one their scheduled
 searches use, which keeps running.
 
-Accounts are created by whoever operates the deployment; there's no sign-up
-here. See [`../server/README.md`](../server/README.md)'s Accounts section.
-One deployment can serve several people - each sees only their own tracks,
-leads, applications, page title and location rules.
+**Signing up.** Opening the page with `?invite=<code>` on the URL turns the
+same gate into a signup: a name, a password, and a confirm field. The code is
+checked before the form is drawn, so a spent or expired link says so on
+arrival rather than after someone has thought up a name and typed a password
+twice, and it is stripped from the address bar once spent so a refresh doesn't
+re-run it. An invite link beats a remembered session - someone opening one is
+being handed an account of their own.
+
+There is no open sign-up: an account needs a link, minted by whoever operates
+the deployment (see [`../server/README.md`](../server/README.md)'s Accounts
+section). One deployment can serve several people - each sees only their own
+tracks, leads, applications, page title and location rules.
+
+**Setting a search up.** A signed-in account with no tracks at all sees a setup
+form instead of an empty tracker: what to call the page, the roles wanted, the
+companies to watch, where they'll work, and their resume (attached, pasted, or
+both). That goes into a queue, and the nightly `JobSearch-Onboarding` run
+builds the search from it - see the root [README](../README.md)'s "Adding
+another person". Until it does, the page says so; if it can't finish, the page
+says why. An account that already has tracks never sees any of this.
 
 ## One-time setup
 
@@ -89,13 +105,14 @@ Cloudflare's own environment.
 5. Open the client and sign in with the name and password of the account you
    created in [`../server/README.md`](../server/README.md)'s setup - it's
    remembered in this browser for next time.
-6. **Expect an empty page here.** A newly created database has no tracks,
-   title or location rules of its own - the schema seeds nothing - so you'll
-   see only the Overview and Applications tabs until the
-   [job-search-setup](../.claude/skills/job-search-setup/) skill posts your
-   config to `/api/config` (see the root [README](../README.md)'s setup step
-   4). Track tabs appear as soon as it does, reading "No run recorded yet"
-   until their first scheduled search reports in.
+6. **Expect the setup form here, not the tracker.** A newly created database
+   has no tracks, title or location rules of its own - the schema seeds
+   nothing - so an account with none is offered the setup form described
+   above. Fill it in and the nightly run builds your search; or run the
+   [job-search-setup](../.claude/skills/job-search-setup/) skill yourself and
+   skip the wait (see the root [README](../README.md)'s setup step 4). Track
+   tabs appear as soon as a config is posted either way, reading "No run
+   recorded yet" until their first scheduled search reports in.
 
 ### Manual setup
 

@@ -38,6 +38,10 @@ Decisions made during planning:
 - **Identity**: GUID user ids, never the name as a key. Real login - a password
   hashed with PBKDF2, a `sessions` table, and `/api/login` + `/api/logout`, so
   a credential can actually be revoked. No self-signup: users are provisioned
+  (**superseded** - invites and `POST /api/signup` were added later, so people
+  now create their own accounts from a one-time link. This document is the
+  record of the multi-user migration as it was planned, not current behaviour;
+  see `../server/README.md`'s Accounts section for what is true now.)
   through an admin-gated route.
 - **Config home**: track search config moves into D1 keyed by user id. The
   worker composes the daily prompt and serves it; `run-search.ps1` fetches it

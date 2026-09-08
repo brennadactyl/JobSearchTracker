@@ -8,9 +8,10 @@
  * Nothing here queries d1 directly; the scoping rule is unchanged.
  */
 
-import { bearer, getUserByName } from "../auth.js";
+import { getUserByName } from "../auth.js";
 import { Db } from "../db.js";
-import { json, readJson, unauthorized } from "../http.js";
+import { json, readJson } from "../http.js";
+import { notAdmin } from "../validate.js";
 
 /**
  * POST /api/purge - requires the ADMIN_TOKEN secret as Bearer. Body
@@ -51,8 +52,8 @@ import { json, readJson, unauthorized } from "../http.js";
  * cleared rather than being deleted - see db.purgeSearch for why those survive.
  */
 export async function handlePurgeSearch({ request, env }) {
-  const admin = env.ADMIN_TOKEN;
-  if (!admin || bearer(request) !== admin) return unauthorized();
+  const denied = notAdmin(request, env);
+  if (denied) return denied;
 
   const body = await readJson(request);
   if (body instanceof Response) return body;

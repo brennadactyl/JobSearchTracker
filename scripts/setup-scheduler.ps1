@@ -18,8 +18,22 @@
   second, near-identical search of the same job boards, which is the thing the
   arrangement exists to avoid.
 
-  One further task is registered that isn't a search and isn't per person:
-  "JobSearch-Applications", the nightly fill for applications logged as nothing
+  Two further tasks are registered that aren't searches and aren't per person.
+
+  "JobSearch-Onboarding" runs run-onboarding.ps1 at 05:00 daily: it builds a
+  whole search - folder, credential, notes doc, config, company rotation and
+  scheduled tasks - for anyone who has signed up on the tracker page with an
+  invite link and filled in the setup form. It is the only task here registered
+  even when nobody is set up yet, because that is precisely when it is needed:
+  on a fresh machine it is what turns the first person into the first search.
+  It runs before both the fill and the earliest search, so somebody who signs
+  up during the day has their first results the next morning rather than the
+  morning after. Registered only if the deployment's ADMIN_TOKEN can be found
+  (the setup queue spans every account, so nothing else can read it); without
+  one this says so and skips it, rather than leaving a task that fails every
+  night. Logs to <DataDir>\logs\onboarding.log.
+
+  "JobSearch-Applications" is the nightly fill for applications logged as nothing
   but a URL. It runs run-fill.ps1 once for the whole machine - every account
   under DataDir in a single CLI turn, fanning the posting-reading out to
   subagents - so adding an application is a paste rather than nine fields typed
@@ -71,6 +85,7 @@ param(
 $ErrorActionPreference = "Stop"
 $runScript = Join-Path $PSScriptRoot "run-search.ps1"
 $fillScript = Join-Path $PSScriptRoot "run-fill.ps1"
+$onboardScript = Join-Path $PSScriptRoot "run-onboarding.ps1"
 
 # Turns a track key like "technical-pm" into a Windows Task Scheduler name
 # suffix like "TechnicalPm" - not meant to reproduce any particular past
@@ -215,6 +230,12 @@ $auto = [datetime]"08:00"
 # off the stagger the searches use so it doesn't drift as tracks are added.
 $FILL_TIME = "06:30"
 
+# Before both the fill and the earliest search, because what it produces is the
+# thing they read: someone who signs up during the day gets their folder,
+# config and scheduled tasks built at this hour, and their first search runs
+# the same morning rather than a day later.
+$ONBOARD_TIME = "05:00"
+
 foreach ($person in $people) {
     $label = if ($person.Id) { $person.Id } else { "single-user" }
     try {
@@ -299,6 +320,46 @@ if ($people.Count -gt 0) {
         Write-Host "  $fillName - daily at $FILL_TIME (every account under $DataDir, applications added by URL)"
         $registered += $fillName
     }
+}
+
+# The second machine-wide task, and the only one here that is registered even
+# when nobody is set up yet - which is exactly the case it exists for. It
+# builds a search for anyone who has signed up on the tracker page and filled
+# in the setup form (see run-onboarding.ps1), so on a fresh machine it is the
+# task that turns the first person into the first search.
+#
+# Gated on the admin token being findable, though, and not registered
+# otherwise. The queue it reads spans every account, so it needs the
+# deployment's ADMIN_TOKEN; without one the run exits 1, and a task that fails
+# every single night is worse than no task - it trains you to ignore a red
+# Last Run Result, which is the one signal the other tasks rely on being
+# honest.
+$deployFile = Join-Path $DataDir "deployment.json"
+$haveAdmin = $false
+if ($env:TRACKER_ADMIN_TOKEN) { $haveAdmin = $true }
+elseif (Test-Path $deployFile) {
+    try {
+        $d = Get-Content -Raw -Path $deployFile | ConvertFrom-Json
+        foreach ($n in @("adminToken", "admin_token", "ADMIN_TOKEN")) {
+            if ($d.PSObject.Properties[$n] -and $d.PSObject.Properties[$n].Value) { $haveAdmin = $true }
+        }
+    } catch { }
+}
+
+Write-Host "`n== Registering the nightly setup run (one task, whole machine) ==" -ForegroundColor Cyan
+if ($haveAdmin) {
+    $onboardName = "JobSearch-Onboarding"
+    if (Register-JobSearchTask -Name $onboardName -Script $onboardScript -Arguments "-DataDir `"$DataDir`"" -Time $ONBOARD_TIME) {
+        Write-Host "  $onboardName - daily at $ONBOARD_TIME (builds a search for anyone who signed up and filled in the setup form)"
+        $registered += $onboardName
+    }
+} else {
+    Write-Host "  skipped - no ADMIN_TOKEN found, so nothing could read the setup queue." -ForegroundColor Yellow
+    Write-Host "  Without it, people can sign up and describe their search but nothing builds it."
+    Write-Host "  To turn it on, put the deployment's ADMIN_TOKEN worker secret in:"
+    Write-Host "    $deployFile"
+    Write-Host '    { "url": "<your API worker URL>", "clientUrl": "<your tracker page URL>", "adminToken": "<the secret>" }'
+    Write-Host "  then re-run this script."
 }
 
 if ($ownedPrefixes.Count -gt 0) {

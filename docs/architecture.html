@@ -128,7 +128,7 @@
   <header>
     <p class="eyebrow">System architecture</p>
     <h1>Job Search Tracker</h1>
-    <p>Headless searches run daily on a schedule, one per track you've configured, verify postings against real career pages, and sync new results to a small hosted webpage — with no AI-specific tooling anywhere past the search step itself. One further daily task belongs to the machine rather than to any track: it reads the postings behind applications logged as nothing but a URL, and fills in what they say.</p>
+    <p>Headless searches run daily on a schedule, one per track you've configured, verify postings against real career pages, and sync new results to a small hosted webpage — with no AI-specific tooling anywhere past the search step itself. Two further daily tasks belong to the machine rather than to any track: one reads the postings behind applications logged as nothing but a URL and fills in what they say, and one builds a whole search &mdash; folder, config, schedule and all &mdash; for anyone who has signed up on the tracker page and described what they want.</p>
   </header>
 
   <figure>
@@ -273,7 +273,7 @@
       <div class="card">
         <p class="k">02 · Live page</p>
         <p>The tracker page (<code class="mono">client/</code>) is a separate static-assets Worker deployment from the API Worker (<code class="mono">server/</code>) - it calls the API cross-origin over <code class="mono">fetch</code>, CORS-enabled on the API side. Every edit - a status change, a note - is one D1 row update, so a browser edit and a headless sync landing at the same moment can't silently overwrite each other. Either half redeploys independently of the other.</p>
-        <p>Signing in takes a name and password, exchanged once at <code class="mono">/api/login</code> for a session token; that token gates every other route, and the browser stores it in <code class="mono">localStorage</code>. The API's URL is not a runtime value - it's baked into the client deployment via <code class="mono">local-config.js</code>. One deployment serves several people: every row carries a <code class="mono">user_id</code>, and each request is scoped to whoever's token made it, so two people share a worker and a database while seeing entirely separate tracks, leads and settings.</p>
+        <p>Signing in takes a name and password, exchanged once at <code class="mono">/api/login</code> for a session token; that token gates every other route, and the browser stores it in <code class="mono">localStorage</code>. Accounts start with an invite link the operator sends: opening one turns the same gate into a signup, and the person picks their own name and password &mdash; nobody else ever handles it. There is still no open sign-up page, deliberately; an invite is single-use, expires, and can only <em>create</em> an account, never reset an existing one's password. The API's URL is not a runtime value - it's baked into the client deployment via <code class="mono">local-config.js</code>. One deployment serves several people: every row carries a <code class="mono">user_id</code>, and each request is scoped to whoever's token made it, so two people share a worker and a database while seeing entirely separate tracks, leads and settings.</p>
       </div>
       <div class="card private">
         <p class="k">03 · Data boundary</p>
@@ -291,11 +291,13 @@
           <tr><th>Track</th><th>Trigger</th><th>Baseline doc</th></tr>
         </thead>
         <tbody>
-          <tr><td>&lt;your track key&gt;</td><td class="mono">staggered daily</td><td class="mono">private/docs/tracked_&lt;key&gt;_postings.md</td></tr>
+          <tr><td>&lt;your track key&gt;</td><td class="mono">staggered daily</td><td class="mono">private/&lt;user id&gt;/docs/tracked_&lt;key&gt;_postings.md</td></tr>
+          <tr><td class="mono">JobSearch-Onboarding</td><td class="mono">daily 05:00</td><td>&mdash; builds the searches people asked for on the page</td></tr>
+          <tr><td class="mono">JobSearch-Applications</td><td class="mono">daily 06:30</td><td>&mdash; reads the postings behind URL-only applications</td></tr>
         </tbody>
       </table>
     </div>
-    <p style="color:var(--ink3);font-size:13px;margin-top:10px">One row per track you've set up — <code class="mono">scripts/setup-scheduler.ps1</code> registers them, staggered 30 minutes apart by default. This project's own deployment currently runs three: <code class="mono">engineering</code> (08:00), <code class="mono">technical-pm</code> (08:30), <code class="mono">product</code> (09:00) — an example, not a fixed set.</p>
+    <p style="color:var(--ink3);font-size:13px;margin-top:10px">One row per track you've set up — <code class="mono">scripts/setup-scheduler.ps1</code> registers them, staggered 30 minutes apart by default — plus the two machine-wide tasks above, which belong to no one person and carry no user id in their names. The setup run goes first on purpose: someone who signs up during the day gets their tracks registered at 05:00 and their first search the same morning. This project's own deployment currently runs three searches: <code class="mono">engineering</code> (08:00), <code class="mono">technical-pm</code> (08:30), <code class="mono">product</code> (09:00) — an example, not a fixed set.</p>
   </section>
 
   <section>
@@ -308,7 +310,11 @@
           <tr><td class="mono">/</td><td class="mono">GET</td><td>tracker webpage — served by the separate <code class="mono">client/</code> deployment, not this API</td></tr>
           <tr><td class="mono">/api/login</td><td class="mono">POST</td><td>name + password &rarr; a session token; the only route that takes a password, and the only one without a token</td></tr>
           <tr><td class="mono">/api/logout</td><td class="mono">POST</td><td>revoke just the token that made the request, leaving that person's other sessions (the scheduled search's) alone</td></tr>
-          <tr><td class="mono">/api/users</td><td class="mono">POST</td><td>create an account or reset its password &mdash; gated by the <code class="mono">ADMIN_TOKEN</code> secret, not a session; there is no sign-up page</td></tr>
+          <tr><td class="mono">/api/users</td><td class="mono">POST</td><td>create an account or reset its password &mdash; gated by the <code class="mono">ADMIN_TOKEN</code> secret, not a session; the operator's own way in, and the one that doubles as password reset</td></tr>
+          <tr><td class="mono">/api/signup</td><td class="mono">POST</td><td>spend a one-time invite code to create an account, choosing your own name and password &mdash; the only route that creates an account without the admin secret, and it can only <em>create</em>: a name that already exists is refused rather than having its password reset</td></tr>
+          <tr><td class="mono">/api/invite/&lt;code&gt;</td><td class="mono">GET</td><td>is this invite link still good? asked before the signup form is drawn, so a spent or expired link says so on arrival</td></tr>
+          <tr><td class="mono">/api/invites</td><td class="mono">GET/POST</td><td>mint an invite link, and see what became of the ones already sent &mdash; admin-gated; the listing is where the operator gets the user id a signup produced, which names that person's data folder</td></tr>
+          <tr><td class="mono">/api/tokens</td><td class="mono">POST</td><td>mint someone's long-lived scheduled-search token &mdash; admin-gated. Needed because self-signup means the operator no longer knows anyone's password, which used to be how this was obtained; it grants nothing the admin secret could not already reach</td></tr>
           <tr><td class="mono">/api/me</td><td class="mono">GET</td><td>who this token belongs to</td></tr>
           <tr><td class="mono">/api/data</td><td class="mono">GET</td><td>current leads + applications + screened postings + track/display config, for whoever the token belongs to</td></tr>
           <tr><td class="mono">/api/leads</td><td class="mono">POST</td><td>add new postings, deduped on (user, search, url)</td></tr>
@@ -322,6 +328,11 @@
           <tr><td class="mono">/api/applications/pending</td><td class="mono">GET</td><td>applications with a link and a gap in them, whose posting hasn't been read yet &mdash; two columns, for the same reason <code class="mono">/api/dedup</code> is small</td></tr>
           <tr><td class="mono">/api/applications/autofill</td><td class="mono">POST</td><td>what the nightly fill read off those postings, in whole or in part, and the ones it couldn't read at all; only ever writes into fields still empty, so what you typed yourself wins, and either way the row is flagged read so it isn't opened again</td></tr>
           <tr><td class="mono">/api/applications/requeue</td><td class="mono">POST</td><td>clears the read flag on named rows so the fill looks at them again &mdash; not a retry and nothing calls it on a schedule; it is for when the reader itself improves and rows that failed under the old one never really had a first read</td></tr>
+          <tr><td class="mono">/api/intake</td><td class="mono">GET/POST</td><td>your own answers to the setup form &mdash; what you want searched for, in your words, not composed config. Replaceable while it is still pending; refused once a run has built your search, since by then your config is what changes it</td></tr>
+          <tr><td class="mono">/api/intake/files</td><td class="mono">POST</td><td>attach a resume, base64 &mdash; the one file this API moves, and only for the hop from a browser to the machine that will run the search</td></tr>
+          <tr><td class="mono">/api/intake/pending</td><td class="mono">GET</td><td>everyone across the deployment waiting to be set up &mdash; admin-gated, because a queue that spans every account is nobody's own data; what the nightly onboarding run reads before it holds anyone's token</td></tr>
+          <tr><td class="mono">/api/intake/file/&lt;id&gt;</td><td class="mono">GET</td><td>one attached document's bytes, for that run to write into the person's <code class="mono">resumes/</code> folder &mdash; admin-gated, fetched one at a time so the queue listing stays small</td></tr>
+          <tr><td class="mono">/api/intake/complete</td><td class="mono">POST</td><td>close a setup out &mdash; admin-gated. <code class="mono">done</code> deletes the uploaded documents in the same batch, since the copy in the database existed only for that hop; <code class="mono">failed</code> keeps them for the retry and carries a note the person reads on their own page</td></tr>
           <tr><td class="mono">/api/prompt/_applications</td><td class="mono">GET</td><td>the nightly fill's own prompt &mdash; a reserved key, not a track, and the one route whose body is the same for everybody: a single task covers every account, so the prompt takes the accounts from its runner rather than from who asked</td></tr>
         </tbody>
       </table>

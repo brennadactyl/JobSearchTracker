@@ -363,6 +363,38 @@ input.dh-loc-in{width:auto;max-width:calc(100% + 8px);font-size:12.5px;color:var
 #gate p{margin:0;color:var(--ink2);font-size:13px}
 #gate .err{color:var(--crit);font-size:12.5px;min-height:1em}
 .hidden{display:none!important}
+/* ---- Setup: the screen a brand-new account sees instead of an empty
+   tracker. Deliberately narrow and stacked rather than laid out like the
+   tracker - it is a form someone fills in once, not a workspace, and the
+   measure is set for reading questions rather than scanning rows. */
+#setup{min-height:100vh;background:var(--ground)}
+#setup .wrap{max-width:680px;padding-top:26px}
+.setup-top{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:14px}
+.setup-card{padding:26px 28px 30px}
+#setup h1{font-size:23px;margin:0 0 8px}
+.setup-lede{color:var(--ink2);font-size:14px;line-height:1.55;margin:0 0 20px}
+.setup-field{margin-bottom:18px;display:flex;flex-direction:column;gap:6px}
+.setup-field label{font-weight:600;font-size:13.5px}
+.setup-field .why{color:var(--ink2);font-size:12.5px;line-height:1.5;margin:0}
+.setup-field input[type=text],.setup-field textarea{width:100%;box-sizing:border-box}
+.setup-sec{margin:26px 0 14px;padding-top:20px;border-top:1px solid var(--line)}
+.setup-sec h2{font-size:15px;margin:0 0 4px}
+.setup-sec p{color:var(--ink2);font-size:12.5px;line-height:1.5;margin:0}
+.setup-track{border:1px solid var(--line);border-radius:10px;padding:16px 16px 2px;margin-bottom:14px;
+  background:var(--surface2)}
+.setup-track .setup-field input[type=text],.setup-track .setup-field textarea{background:var(--surface)}
+.setup-track-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+.setup-track-top strong{font-size:13px;color:var(--ink2)}
+.setup-files{display:flex;flex-direction:column;gap:6px;margin-top:2px}
+.setup-file{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink2)}
+.setup-file .rm{border:0;background:none;color:var(--crit);cursor:pointer;font:inherit;padding:0 2px}
+.setup-actions{display:flex;align-items:center;gap:12px;margin-top:24px;flex-wrap:wrap}
+.setup-note{font-size:13px;color:var(--ink2);min-height:1em;line-height:1.5}
+.setup-note.bad{color:var(--crit)}
+.setup-status{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;
+  background:var(--surface2);padding:13px 15px;margin-bottom:20px;font-size:13.5px;line-height:1.55}
+.setup-status.bad{border-left-color:var(--crit)}
+.setup-status strong{display:block;margin-bottom:3px}
 
 .modal-overlay{position:fixed;inset:0;background:rgba(10,11,18,.55);display:flex;
   align-items:center;justify-content:center;padding:20px;z-index:60}
@@ -392,12 +424,108 @@ try{
 
 <div id="gate">
   <div class="card">
-    <h1>Job search access</h1>
+    <h1 id="gateTitle">Job search access</h1>
     <p id="gateHint">Sign in to continue.</p>
     <input id="nameInput" type="text" placeholder="Name" autocomplete="username">
     <input id="passwordInput" type="password" placeholder="Password" autocomplete="current-password">
+    <!-- Signup only. A confirm field earns its place here in a way it doesn't
+         on most forms: there is no password reset anyone can reach on their
+         own, so a typo made once would mean going back to whoever runs the
+         deployment - which is the errand this whole screen exists to remove. -->
+    <input id="password2Input" class="hidden" type="password" placeholder="Confirm password" autocomplete="new-password">
     <button class="btn primary" id="tokenSubmit">Sign in</button>
     <div id="gateError" class="err"></div>
+  </div>
+</div>
+
+<div id="setup" class="hidden">
+  <div class="wrap">
+    <div class="setup-top">
+      <div class="sub" id="setupWho"></div>
+      <button class="btn ghost" id="setupLogout">Sign out</button>
+    </div>
+    <div class="card setup-card">
+      <h1>Set up your job search</h1>
+      <p class="setup-lede">Tell it what you're looking for and attach your resume. Overnight it
+        reads your resume, works out which companies to watch and how to describe the roles you
+        want, and builds your tracker. It'll be here in the morning, and it updates itself every
+        day after that.</p>
+
+      <div id="setupStatus" class="setup-status hidden"></div>
+
+      <form id="setupForm" autocomplete="off">
+        <div class="setup-field">
+          <label for="fTitle">What should this page be called?</label>
+          <input id="fTitle" type="text" placeholder="Your Job Search">
+        </div>
+
+        <div class="setup-field">
+          <label for="fPronouns">Your pronouns <span class="why">(optional)</span></label>
+          <input id="fPronouns" type="text" placeholder="she/her">
+          <p class="why">Used when the search writes about you, so it doesn't have to guess.</p>
+        </div>
+
+        <div class="setup-sec">
+          <h2>Your resume</h2>
+          <p>Attach a file, paste the text, or both &mdash; but <strong>pasting the text is the
+            one that always works</strong>. The machine that builds your search runs headless,
+            where a PDF or Word file often can't be opened at all, and a search built from a
+            resume nobody could read still runs perfectly well against nothing. Plain text
+            (.txt, .md) attaches fine. If a PDF or .docx is all you have, attach it
+            <em>and</em> paste the text.</p>
+        </div>
+        <div class="setup-field">
+          <input id="fFiles" type="file" multiple accept=".txt,.md,.rtf,.pdf,.doc,.docx">
+          <div id="setupFiles" class="setup-files"></div>
+        </div>
+        <div class="setup-field">
+          <label for="fResumeText">Or paste it here</label>
+          <textarea id="fResumeText" rows="5" placeholder="Paste the text of your resume"></textarea>
+        </div>
+
+        <div class="setup-sec">
+          <h2>Where you'll work</h2>
+          <p>Two different questions: what's off the table entirely, and what you'd most like.</p>
+        </div>
+        <div class="setup-field">
+          <label for="fGeo">Anywhere you can't take a job?</label>
+          <textarea id="fGeo" rows="2" placeholder="US only - I can't take a role that requires being in another country, and I don't have work authorisation outside the US."></textarea>
+          <p class="why">Say it the way you'd say it to a person. Leave it empty if nowhere is ruled out.</p>
+        </div>
+        <div class="setup-field">
+          <label for="fLocations">Which locations should come first?</label>
+          <textarea id="fLocations" rows="2" placeholder="Seattle, Bellevue, or remote in the US first. Portland second."></textarea>
+          <p class="why">These sort to the top of every list. Everywhere else still shows up, just lower.</p>
+        </div>
+
+        <div class="setup-sec">
+          <h2>What to look for</h2>
+          <p>One block per kind of role. Most people want one; add another if you're running two
+            genuinely different searches, like engineering and product.</p>
+        </div>
+        <div id="setupTracks"></div>
+        <button type="button" class="btn" id="addTrack">Add another kind of role</button>
+
+        <div class="setup-sec">
+          <h2>Anything else</h2>
+        </div>
+        <div class="setup-field">
+          <label for="fExcluded">Companies you'd never work for</label>
+          <input id="fExcluded" type="text" placeholder="Initech, Globex">
+          <p class="why">These are never searched and never shown, at all.</p>
+        </div>
+        <div class="setup-field">
+          <label for="fNotes">Anything the search should know</label>
+          <textarea id="fNotes" rows="3" placeholder="I'd rather avoid on-call heavy roles. I'm open to a pay cut for the right team."></textarea>
+        </div>
+
+        <div class="setup-actions">
+          <button type="submit" class="btn primary" id="setupSubmit">Send it</button>
+          <button type="button" class="btn ghost hidden" id="setupSkip">Go to the tracker</button>
+          <span id="setupNote" class="setup-note"></span>
+        </div>
+      </form>
+    </div>
   </div>
 </div>
 
@@ -951,6 +1079,9 @@ function setSaved(msg,ok){
 // remembered (it isn't a secret) so returning to a signed-out browser only
 // means typing the password.
 function submitToken(){
+  // The gate is shared rather than duplicated: holding an invite, this same
+  // button creates an account instead of signing in to one.
+  if(SIGNUP_CODE){submitSignup();return;}
   if(!API_BASE){
     document.getElementById("gateError").textContent="This deployment has no API URL configured - see public/local-config.example.js.";
     return;
@@ -1046,6 +1177,380 @@ function api(path,opts){
   });
 }
 
+// ---------------------------------------------------------------------------
+// Invited signup.
+//
+// There is no sign-up page here and there still isn't one: an account can only
+// be created by someone holding a one-time invite link, which whoever runs the
+// deployment sent them. What this replaces is the operator choosing a password
+// on that person's behalf and sending it to them over chat, where it stays
+// legible in two devices' scrollback forever. The password below is typed once,
+// by the person it belongs to, and is never seen by anyone else.
+//
+// The gate is reused rather than duplicated - same two fields, same submit
+// path - so there is one sign-in form to keep working, with a third field and
+// different words on it.
+var SIGNUP_CODE = "";
+
+function inviteFromUrl(){
+  var m = /[?&]invite=([^&#]+)/.exec(location.search || "");
+  return m ? decodeURIComponent(m[1]) : "";
+}
+
+// Drops the code out of the address bar. Worth doing the moment it has been
+// spent: otherwise a refresh, a bookmark, or a shared "here's the tracker"
+// link re-runs a signup that can only fail now, and the person sees an error
+// about an invite they already used successfully.
+function forgetInviteInUrl(){
+  SIGNUP_CODE = "";
+  try{ history.replaceState(null, "", location.pathname + location.hash); }catch(e){}
+}
+
+function setGateMode(signup){
+  document.getElementById("gateTitle").textContent = signup ? "Create your account" : "Job search access";
+  document.getElementById("gateHint").textContent = signup
+    ? "Pick a name and a password. Nobody else ever sees the password - not even whoever invited you."
+    : "Sign in to continue.";
+  document.getElementById("tokenSubmit").textContent = signup ? "Create account" : "Sign in";
+  document.getElementById("password2Input").classList.toggle("hidden", !signup);
+  document.getElementById("passwordInput").setAttribute("autocomplete", signup ? "new-password" : "current-password");
+  document.getElementById("passwordInput").placeholder = signup ? "Password (12 characters or more)" : "Password";
+  document.getElementById("gate").classList.remove("hidden");
+}
+
+// Asked before the form is drawn, so a link that has expired or already been
+// used says so on arrival rather than after someone has thought up a name and
+// typed a password twice.
+function startSignup(code){
+  fetch(API_BASE + "/api/invite/" + encodeURIComponent(code)).then(function(res){
+    return res.json();
+  }).then(function(r){
+    if(!r.valid){
+      forgetInviteInUrl();
+      setGateMode(false);
+      document.getElementById("gateError").textContent =
+        (r.reason || "that invite link isn't valid") + " - ask for a new link, or sign in if you already have an account.";
+      return;
+    }
+    SIGNUP_CODE = code;
+    setGateMode(true);
+    document.getElementById("nameInput").value = "";
+    document.getElementById("nameInput").focus();
+  }).catch(function(err){
+    setGateMode(false);
+    document.getElementById("gateError").textContent = "Couldn't reach the server: " + err.message;
+  });
+}
+
+function submitSignup(){
+  var name = document.getElementById("nameInput").value.trim();
+  var password = document.getElementById("passwordInput").value;
+  var confirm = document.getElementById("password2Input").value;
+  var err = document.getElementById("gateError");
+  if(!name){ err.textContent = "Pick a name - it's what you'll sign in with."; return; }
+  if(password.length < 12){ err.textContent = "Passwords here have to be at least 12 characters."; return; }
+  if(password !== confirm){ err.textContent = "Those two passwords don't match."; return; }
+
+  err.textContent = "Creating your account...";
+  fetch(API_BASE + "/api/signup", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({code: SIGNUP_CODE, name: name, password: password})
+  }).then(function(res){
+    return res.json().then(function(body){ return {status: res.status, body: body}; });
+  }).then(function(r){
+    if(r.status !== 201 || !r.body.token){
+      // The server's wording, not a generic failure: "that name is taken" and
+      // "this invite has expired" need different things from the person, and
+      // only one of them is worth re-typing a password over.
+      err.textContent = r.body.error || "Couldn't create that account.";
+      return;
+    }
+    TOKEN = r.body.token;
+    NAME = r.body.user && r.body.user.name || name;
+    try{ localStorage.setItem("tracker_token", TOKEN); localStorage.setItem("tracker_name", NAME); }catch(e){}
+    document.getElementById("passwordInput").value = "";
+    document.getElementById("password2Input").value = "";
+    err.textContent = "";
+    forgetInviteInUrl();
+    setGateMode(false);
+    boot();
+  }).catch(function(e){
+    err.textContent = "Couldn't create that account: " + e.message;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Setup: what a new account sees instead of an empty tracker.
+//
+// The answers here are not config. What /api/config stores is finished prose
+// the daily prompt reads word for word, and none of it is a thing to ask a
+// person for directly - "senior backend, ideally Seattle or remote US" is what
+// someone can tell you, and turning that into the rest is the overnight run's
+// job. So this form collects the first and hands it over.
+
+// Files are uploaded after the answers, not as they're picked, so an attachment
+// can never exist in the database without an intake row to belong to - an
+// abandoned half-filled form leaves nothing behind.
+var setupPicked = [];
+var setupStored = [];
+var setupTrackCount = 0;
+
+function trackBlockHtml(n, t){
+  t = t || {};
+  return '<div class="setup-track" data-track="' + n + '">' +
+    '<div class="setup-track-top"><strong>Role ' + (n + 1) + '</strong>' +
+    (n > 0 ? '<button type="button" class="btn ghost rm-track" data-rm="' + n + '">Remove</button>' : '') +
+    '</div>' +
+    '<div class="setup-field"><label>Call it</label>' +
+    '<input type="text" class="t-label" placeholder="Engineering" value="' + esc(t.label || "") + '">' +
+    '<p class="why">This is the name on its tab.</p></div>' +
+    '<div class="setup-field"><label>What roles?</label>' +
+    '<textarea rows="2" class="t-role" placeholder="Senior or Staff backend engineer - Go, Python, distributed systems. Not frontend.">' +
+    esc(t.role_search_line || "") + '</textarea>' +
+    '<p class="why">Titles and seniority, in your own words. Say what you don\'t want too.</p></div>' +
+    '<div class="setup-field"><label>Companies to watch</label>' +
+    '<textarea rows="2" class="t-cos" placeholder="Stripe, Cloudflare, Fastly, Vercel">' + esc(t.target_companies || "") + '</textarea>' +
+    '<p class="why">A dozen or so is plenty - it finds more on its own as it goes. Leave it empty if you have no particular list.</p></div>' +
+    '<div class="setup-field"><label>Anything that rules a job out <span class="why">(optional)</span></label>' +
+    '<input type="text" class="t-fit" placeholder="No mobile roles - I\'ve never shipped iOS or Android." value="' + esc(t.fit_note || "") + '">' +
+    '<p class="why">Only real mismatches - something you genuinely don\'t have or won\'t do. Anything vaguer here quietly hides jobs you\'d have wanted.</p></div>' +
+    '</div>';
+}
+
+function renderSetupTracks(tracks){
+  var host = document.getElementById("setupTracks");
+  var list = (tracks && tracks.length) ? tracks : [{}];
+  setupTrackCount = list.length;
+  host.innerHTML = list.map(function(t, i){ return trackBlockHtml(i, t); }).join("");
+}
+
+function renderSetupFiles(){
+  var host = document.getElementById("setupFiles");
+  var rows = setupStored.map(function(f){
+    return '<div class="setup-file"><span>' + esc(f.filename) + '</span>' +
+      '<button type="button" class="rm" data-rmfile="' + f.id + '">remove</button></div>';
+  }).concat(setupPicked.map(function(f, i){
+    return '<div class="setup-file"><span>' + esc(f.name) + ' <em>(not sent yet)</em></span>' +
+      '<button type="button" class="rm" data-rmpick="' + i + '">remove</button></div>';
+  }));
+  host.innerHTML = rows.join("");
+}
+
+function showSetupStatus(intake){
+  var box = document.getElementById("setupStatus");
+  var skip = document.getElementById("setupSkip");
+  if(!intake || intake.status === "done"){ box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  skip.classList.remove("hidden");
+  if(intake.status === "failed"){
+    box.className = "setup-status bad";
+    // Someone waiting on a setup that isn't coming should be told which half
+    // to fix. The note is the run's own words about what stopped it.
+    box.innerHTML = "<strong>Setup couldn't finish</strong>" +
+      esc(intake.status_note || "Something went wrong building your search.") +
+      " Change whatever's needed below and send it again - it'll be picked up on the next run.";
+  } else {
+    box.className = "setup-status";
+    box.innerHTML = "<strong>You're all set - it's building tonight</strong>" +
+      "Your tracker will be ready in the morning. You can keep changing anything below until then; " +
+      "the last version you send is the one it uses.";
+  }
+}
+
+function openSetup(intake){
+  document.getElementById("app").classList.add("hidden");
+  document.getElementById("gate").classList.add("hidden");
+  document.getElementById("setup").classList.remove("hidden");
+  document.getElementById("setupWho").textContent = NAME ? "Signed in as " + NAME : "";
+
+  var a = (intake && intake.answers) || {};
+  document.getElementById("fTitle").value = a.display_title || (NAME ? NAME + "'s Job Search" : "");
+  document.getElementById("fPronouns").value = a.pronouns || "";
+  document.getElementById("fResumeText").value = a.resume_text || "";
+  document.getElementById("fGeo").value = a.geo_scope || "";
+  document.getElementById("fLocations").value = a.priority_locations || "";
+  document.getElementById("fExcluded").value = a.excluded_companies || "";
+  document.getElementById("fNotes").value = a.notes || "";
+  renderSetupTracks(a.tracks);
+  setupStored = (intake && intake.files) || [];
+  setupPicked = [];
+  renderSetupFiles();
+  showSetupStatus(intake);
+}
+
+function collectSetupAnswers(){
+  var tracks = [];
+  var blocks = document.querySelectorAll("#setupTracks .setup-track");
+  for(var i = 0; i < blocks.length; i++){
+    var b = blocks[i];
+    tracks.push({
+      label: b.querySelector(".t-label").value.trim(),
+      role_search_line: b.querySelector(".t-role").value.trim(),
+      target_companies: b.querySelector(".t-cos").value.trim(),
+      fit_note: b.querySelector(".t-fit").value.trim()
+    });
+  }
+  return {
+    display_title: document.getElementById("fTitle").value.trim(),
+    pronouns: document.getElementById("fPronouns").value.trim(),
+    resume_text: document.getElementById("fResumeText").value.trim(),
+    geo_scope: document.getElementById("fGeo").value.trim(),
+    priority_locations: document.getElementById("fLocations").value.trim(),
+    excluded_companies: document.getElementById("fExcluded").value.trim(),
+    notes: document.getElementById("fNotes").value.trim(),
+    tracks: tracks
+  };
+}
+
+function readAsBase64(file){
+  return new Promise(function(resolve, reject){
+    var r = new FileReader();
+    r.onload = function(){
+      // readAsDataURL gives "data:<type>;base64,<payload>". The server strips
+      // the prefix too, but sending the payload alone keeps the request the
+      // size of the file rather than the size of the file plus a MIME header.
+      var out = String(r.result || "");
+      var comma = out.indexOf(",");
+      resolve(comma >= 0 ? out.slice(comma + 1) : out);
+    };
+    r.onerror = function(){ reject(new Error("couldn't read " + file.name)); };
+    r.readAsDataURL(file);
+  });
+}
+
+function uploadPickedFiles(){
+  // One at a time rather than in parallel: these are the only requests in this
+  // page big enough to be worth not firing five of at once, and a failure part
+  // way through should stop rather than race four others.
+  var queue = setupPicked.slice();
+  function next(){
+    if(!queue.length) return Promise.resolve();
+    var file = queue.shift();
+    return readAsBase64(file).then(function(b64){
+      return api("/api/intake/files", {
+        method: "POST",
+        body: JSON.stringify({filename: file.name, contentType: file.type || "", body: b64})
+      });
+    }).then(function(r){
+      if(r && r.error) throw new Error(r.error);
+      return next();
+    });
+  }
+  return next();
+}
+
+function submitSetup(){
+  var note = document.getElementById("setupNote");
+  var btn = document.getElementById("setupSubmit");
+  var answers = collectSetupAnswers();
+  var usable = answers.tracks.filter(function(t){ return t.label && t.role_search_line; });
+  note.className = "setup-note";
+
+  if(!usable.length){
+    note.className = "setup-note bad";
+    note.textContent = "Fill in at least one role - both what to call it and what to look for.";
+    return;
+  }
+  if(!answers.resume_text && !setupPicked.length && !setupStored.length){
+    note.className = "setup-note bad";
+    note.textContent = "Attach your resume or paste the text - the search is built from it.";
+    return;
+  }
+
+  btn.disabled = true;
+  note.textContent = "Sending...";
+  api("/api/intake", {method: "POST", body: JSON.stringify(answers)}).then(function(r){
+    if(r && r.error) throw new Error(r.error);
+    return uploadPickedFiles();
+  }).then(function(){
+    setupPicked = [];
+    return api("/api/intake");
+  }).then(function(r){
+    btn.disabled = false;
+    note.textContent = "";
+    openSetup(r.intake);
+    window.scrollTo(0, 0);
+  }).catch(function(err){
+    btn.disabled = false;
+    if(err.message === "unauthorized") return;
+    note.className = "setup-note bad";
+    note.textContent = "Couldn't send that: " + err.message;
+  });
+}
+
+function showTracker(){
+  document.getElementById("setup").classList.add("hidden");
+  document.getElementById("app").classList.remove("hidden");
+  setSaved("Saved", true);
+  render();
+}
+
+// Reached only from boot(), and only when this account has no tracks at all.
+// That state means one of two things - they haven't said what they want
+// searched for, or they have and tonight's run hasn't built it - and the setup
+// screen answers both. Anyone with tracks never gets here, so an established
+// account pays nothing for this.
+function maybeShowSetup(){
+  api("/api/intake").then(function(r){
+    if(r.intake && r.intake.status === "done"){ showTracker(); return; }
+    openSetup(r.intake);
+  }).catch(function(err){
+    // An older deployment, or a server that's briefly unhappy. Falling through
+    // to the tracker is the safe direction: an empty tracker is a page they
+    // can still use, while a setup form served on a guess is not.
+    if(err.message !== "unauthorized") showTracker();
+  });
+}
+
+document.addEventListener("click", function(e){
+  if(e.target.id === "addTrack"){
+    var have = collectSetupAnswers().tracks;
+    have.push({});
+    renderSetupTracks(have);
+    return;
+  }
+  if(e.target.getAttribute && e.target.getAttribute("data-rm") !== null){
+    var keep = collectSetupAnswers().tracks;
+    keep.splice(Number(e.target.getAttribute("data-rm")), 1);
+    renderSetupTracks(keep);
+    return;
+  }
+  if(e.target.getAttribute && e.target.getAttribute("data-rmpick") !== null){
+    setupPicked.splice(Number(e.target.getAttribute("data-rmpick")), 1);
+    renderSetupFiles();
+    return;
+  }
+  if(e.target.getAttribute && e.target.getAttribute("data-rmfile") !== null){
+    var id = Number(e.target.getAttribute("data-rmfile"));
+    api("/api/intake/files/delete", {method: "POST", body: JSON.stringify({id: id})}).then(function(){
+      setupStored = setupStored.filter(function(f){ return f.id !== id; });
+      renderSetupFiles();
+    }).catch(function(){});
+    return;
+  }
+  if(e.target.id === "setupSubmit"){ e.preventDefault(); submitSetup(); return; }
+  if(e.target.id === "setupSkip"){ showTracker(); return; }
+  if(e.target.id === "setupLogout"){
+    document.getElementById("setup").classList.add("hidden");
+    logout();
+    return;
+  }
+});
+
+document.addEventListener("submit", function(e){
+  if(e.target.id === "setupForm"){ e.preventDefault(); submitSetup(); }
+});
+
+document.addEventListener("change", function(e){
+  if(e.target.id === "fFiles"){
+    for(var i = 0; i < e.target.files.length; i++) setupPicked.push(e.target.files[i]);
+    // Cleared so picking the same file twice in a row still fires a change.
+    e.target.value = "";
+    renderSetupFiles();
+  }
+});
+
 function boot(){
   setSaved("Loading",false);
   api("/api/data").then(function(data){
@@ -1063,6 +1568,12 @@ function boot(){
     }
     document.getElementById("whoami").textContent=NAME?"Signed in as "+NAME:"";
     document.getElementById("gate").classList.add("hidden");
+    // A config with no tracks in it is the one result that might not mean
+    // "draw the tracker". It means this person has not told the search what to
+    // look for yet, or has and tonight's run hasn't built it - and the setup
+    // screen answers both. An account with tracks never takes this branch, so
+    // it costs an established page nothing but the check.
+    if(!state.tracks.length){maybeShowSetup();return;}
     document.getElementById("app").classList.remove("hidden");
     setSaved("Saved",true);
     render();
@@ -1694,7 +2205,7 @@ document.addEventListener("click",function(e){
 });
 
 document.addEventListener("keydown",function(e){
-  if((e.target.id==="nameInput"||e.target.id==="passwordInput")&&e.key==="Enter"){submitToken();}
+  if((e.target.id==="nameInput"||e.target.id==="passwordInput"||e.target.id==="password2Input")&&e.key==="Enter"){submitToken();}
   if(pendingStage&&e.key==="Escape"){closeStageDateModal(true);return;}
   if(e.target.id==="stageDateInput"&&e.key==="Enter"){confirmStageDate();}
   // Paste, Enter, done - the point of the box is that adding an application
@@ -1919,7 +2430,13 @@ if(!API_BASE){
   document.getElementById("tokenSubmit").classList.add("hidden");
 }
 if(NAME)document.getElementById("nameInput").value=NAME;
-if(TOKEN&&API_BASE)boot(); else document.getElementById("gate").classList.remove("hidden");
+// An invite link wins over whatever session this browser remembers. Someone
+// opening one is being handed an account of their own; signing them in as
+// whoever last used this browser would be both wrong and baffling.
+var INVITE=inviteFromUrl();
+if(INVITE&&API_BASE)startSignup(INVITE);
+else if(TOKEN&&API_BASE)boot();
+else document.getElementById("gate").classList.remove("hidden");
 })();
 </script>
 </body>

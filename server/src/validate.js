@@ -8,7 +8,8 @@
  * excluderFor takes the caller's already-scoped `Db` (see ./db.js).
  */
 
-import { json } from "./http.js";
+import { bearer } from "./auth.js";
+import { json, unauthorized } from "./http.js";
 import { excludedCompanyMatcher } from "./exclude.js";
 
 export function today() {
@@ -75,4 +76,24 @@ export function unknownTrackResponse(tracks, rows) {
 export async function excluderFor(db) {
   const { settings } = await db.getTracksAndSettings();
   return excludedCompanyMatcher(settings.excluded_companies);
+}
+
+// The operator gate, which five routes now make identically: minting and
+// listing invites, reading the intake queue, closing an intake out, issuing a
+// user's long-lived token, and the purge. Written out once each, it is one
+// missing `!admin` check away from a deployment that never set the secret
+// accepting an empty Bearer as the operator - so the "is it even
+// configured?" half lives here with the comparison rather than beside it.
+//
+// This is not a session check and never falls back to one: ADMIN_TOKEN is a
+// worker secret held by whoever runs the deployment, and no browser or
+// scheduled search is ever given it (see routes/admin.js).
+//
+// @param {Request} request
+// @param {Object} env
+// @returns {Response|null} the 401 to hand back, or null if the caller is the operator
+export function notAdmin(request, env) {
+  const admin = env.ADMIN_TOKEN;
+  if (!admin || bearer(request) !== admin) return unauthorized();
+  return null;
 }
