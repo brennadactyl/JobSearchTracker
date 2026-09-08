@@ -217,3 +217,81 @@ export async function upsertUser(d1, name, password) {
     .run();
   return { id, name, created: true };
 }
+
+/**
+ * The user row behind a session, by id.
+ *
+ * getUserByName exists for login, where a name is all there is to go on. This
+ * is for the routes that already know who is calling and need the stored
+ * credential itself - verifying a password before changing it, so far. By id
+ * rather than by the session's name, because a name is a display value that a
+ * later feature could let someone edit, and re-looking-up by it would then be
+ * a lookup that can miss.
+ *
+ * @param {D1Database} d1
+ * @param {string} id
+ * @returns {Promise<User|null>}
+ */
+export async function getUserById(d1, id) {
+  const row = await d1.prepare("SELECT * FROM users WHERE id = ?").bind(id).first();
+  return row || null;
+}
+
+/**
+ * Sets a password for an account that already exists, by id.
+ *
+ * Deliberately not upsertUser. That one takes a *name* and creates the account
+ * if the name doesn't match, which is right for the admin route it serves and
+ * badly wrong here: this is called by someone who is already signed in, and
+ * "your password change quietly created a second empty account" is exactly the
+ * failure set-password.ps1 has to warn about at length. By id, there is no
+ * such branch to take - the row either exists or the caller has no session.
+ *
+ * Rewrites the credential columns and nothing else, so sessions survive. That
+ * is the same promise POST /api/users makes, and it is what keeps a password
+ * change from silently killing the long-lived token a scheduled search holds
+ * on disk.
+ *
+ * @param {D1Database} d1
+ * @param {string} userId
+ * @param {string} password
+ */
+export async function setUserPassword(d1, userId, password) {
+  const { hash, salt, iterations } = await hashPassword(password);
+  await d1
+    .prepare("UPDATE users SET password_hash = ?, password_salt = ?, iterations = ? WHERE id = ?")
+    .bind(hash, salt, iterations, userId)
+    .run();
+}
+
+/**
+ * Signs this person's *other browsers* out, leaving the caller's own session
+ * and every non-browser credential alone.
+ *
+ * The filter is `label = 'browser'` - an allowlist of what may be revoked,
+ * not a denylist of what must be spared - and the direction matters. A
+ * scheduled search holds a token labelled 'scheduled-search' and its failure
+ * mode is the worst one this system has: nothing errors, the nightly run just
+ * stops, and a search that never fired looks exactly like a search that found
+ * nothing. Written as "delete everything except 'scheduled-search'", any
+ * credential someone later labels something else - a second machine, a
+ * script, a phone - dies the first time anybody changes their password. This
+ * way an unrecognised label is kept, and the worst case is a session that
+ * should have gone and didn't, which the person can see and log out of.
+ *
+ * `label` was added to sessions so a credential could be revoked by what it is
+ * rather than by guessing which opaque string is which. This is the first
+ * thing to actually use it that way.
+ *
+ * @param {D1Database} d1
+ * @param {string} userId
+ * @param {string} keepToken the raw token of the session doing the revoking
+ * @returns {Promise<number>} how many were signed out
+ */
+export async function deleteOtherBrowserSessions(d1, userId, keepToken) {
+  const result = await d1
+    .prepare("DELETE FROM sessions WHERE user_id = ? AND label = 'browser' AND id != ?")
+    .bind(userId, await hashToken(keepToken))
+    .run();
+  return result.meta.changes || 0;
+}

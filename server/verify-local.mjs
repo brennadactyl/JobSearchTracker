@@ -1073,5 +1073,84 @@ const twice = await req("POST", "/api/purge", { admin: true, body: { user: "Ada"
 check("purging again is a no-op, not an error",
   twice.status === 200 && twice.json.purged.leads === 0, twice.text.slice(0, 120));
 
+
+// ---------------------------------------------------------------------------
+// Changing your own password.
+//
+// Two properties carry this, and both fail quietly if they break.
+//
+// The current password has to be required. A session token that could set the
+// password would turn "someone copied your token" into "someone owns your
+// account", and nothing about the code would look wrong.
+//
+// And the scheduled search's credential has to survive. Its failure mode is
+// the worst one here: the nightly run just stops, and a search that never
+// fired is indistinguishable from one that found nothing, so the person finds
+// out weeks later from an empty tab.
+console.log("\n== changing your own password ==");
+const PW_RUN = Date.now().toString(36);
+const pwName = `Pip ${PW_RUN}`;
+await req("POST", "/api/users", { admin: true, body: { name: pwName, password: "pip-first-password" } });
+
+// Three sessions: the browser doing the change, another browser, and the
+// long-lived one a scheduled search would hold.
+const pwHere = (await req("POST", "/api/login", { body: { name: pwName, password: "pip-first-password", label: "browser" } })).json.token;
+const pwOther = (await req("POST", "/api/login", { body: { name: pwName, password: "pip-first-password", label: "browser" } })).json.token;
+const pwSearch = (await req("POST", "/api/login", { body: { name: pwName, password: "pip-first-password", label: "scheduled-search" } })).json.token;
+
+check("changing a password needs a session at all",
+  (await req("POST", "/api/password", { body: { currentPassword: "pip-first-password", newPassword: "pip-second-password" } })).status === 401);
+check("the current password is required, not just the token",
+  (await req("POST", "/api/password", { token: pwHere, body: { newPassword: "pip-second-password" } })).status === 400);
+check("a wrong current password is refused",
+  (await req("POST", "/api/password", { token: pwHere, body: { currentPassword: "not-my-password", newPassword: "pip-second-password" } })).status === 403);
+check("and that refusal does not change anything",
+  (await req("POST", "/api/login", { body: { name: pwName, password: "pip-first-password" } })).status === 200);
+check("a new password under 12 characters is refused",
+  (await req("POST", "/api/password", { token: pwHere, body: { currentPassword: "pip-first-password", newPassword: "short" } })).status === 400);
+check("the length rule is checked before the current password, so the two answers can't be confused",
+  (await req("POST", "/api/password", { token: pwHere, body: { currentPassword: "wrong-entirely", newPassword: "short" } })).status === 400);
+check("re-setting the same password is refused rather than silently doing nothing",
+  (await req("POST", "/api/password", { token: pwHere, body: { currentPassword: "pip-first-password", newPassword: "pip-first-password" } })).status === 400);
+
+// The default: no revocation at all, matching what POST /api/users does.
+const pwPlain = await req("POST", "/api/password", {
+  token: pwHere, body: { currentPassword: "pip-first-password", newPassword: "pip-second-password" } });
+check("a valid change succeeds", pwPlain.status === 200 && pwPlain.json.ok === true, pwPlain.text.slice(0, 120));
+check("and signs nobody out unless asked", pwPlain.json.signedOut === 0);
+check("the new password works", (await req("POST", "/api/login", { body: { name: pwName, password: "pip-second-password" } })).status === 200);
+check("the old one doesn't", (await req("POST", "/api/login", { body: { name: pwName, password: "pip-first-password" } })).status === 401);
+check("every existing session still works - a change is not a logout",
+  (await req("GET", "/api/me", { token: pwHere })).status === 200 &&
+  (await req("GET", "/api/me", { token: pwOther })).status === 200 &&
+  (await req("GET", "/api/me", { token: pwSearch })).status === 200);
+
+// Opting in. The one that must not take the search's token with it.
+const pwSwept = await req("POST", "/api/password", {
+  token: pwHere, body: { currentPassword: "pip-second-password", newPassword: "pip-third-password", signOutOthers: true } });
+// Not asserted as an exact number. Several checks above prove a password by
+// logging in with it, and every one of those mints a real `browser` session -
+// so the honest count here is "the one opened as pwOther, plus however many
+// assertions logged in". What actually matters is checked on its own three
+// lines below.
+check("signing out other browsers reports how many",
+  pwSwept.status === 200 && typeof pwSwept.json.signedOut === "number" && pwSwept.json.signedOut >= 1,
+  pwSwept.text.slice(0, 120));
+check("the other browser is signed out", (await req("GET", "/api/me", { token: pwOther })).status === 401);
+check("the browser that made the change is not", (await req("GET", "/api/me", { token: pwHere })).status === 200);
+check("**the scheduled search's token survives**", (await req("GET", "/api/me", { token: pwSearch })).status === 200);
+check("and it is still that person's", (await req("GET", "/api/me", { token: pwSearch })).json.name === pwName);
+
+// A fixture of its own rather than Ada's token: by this point in the file Ada
+// has been logged out and re-logged-in several times, and a revoked token
+// would answer 401 at the routing layer - passing this check for entirely the
+// wrong reason, and never exercising the handler at all.
+await req("POST", "/api/users", { admin: true, body: { name: `Quill ${PW_RUN}`, password: "quill-long-password" } });
+const pwStranger = (await req("POST", "/api/login", { body: { name: `Quill ${PW_RUN}`, password: "quill-long-password" } })).json.token;
+check("a live session belonging to someone else cannot change this person's password",
+  (await req("POST", "/api/password", { token: pwStranger, body: { currentPassword: "pip-third-password", newPassword: "stolen-password-x" } })).status === 403);
+check("and Pip's password is untouched by that attempt",
+  (await req("POST", "/api/login", { body: { name: pwName, password: "pip-third-password" } })).status === 200);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

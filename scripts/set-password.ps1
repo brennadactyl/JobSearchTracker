@@ -16,6 +16,20 @@
   be created with a random one nobody ever sees (see the job-search-setup
   skill, step 1) and given a real password here afterwards.
 
+  ---- This is the reset path, not the change path.
+
+  Someone who knows their current password and simply wants a different one
+  does it themselves on the tracker page (the "Password" button; POST
+  /api/password). That needs no admin secret, no terminal and no repo, which
+  is why it is the right route for the ordinary case - handing out a
+  credential that can rewrite any account's password, to someone who only
+  wanted to change their own, is not.
+
+  What is left here is what that route cannot do by design: it requires the
+  current password, so it is no help to an account whose password nobody
+  knows. That is this script - a new account created with a random one, or a
+  genuinely forgotten password.
+
 .PARAMETER Name
   The account name, exactly as stored. users.name is UNIQUE COLLATE NOCASE, so
   case does not matter but spelling does: a name that does not match an

@@ -48,6 +48,13 @@ token lives in `localStorage` (`tracker_token`, alongside `tracker_name` for
 prefilling the gate next time) - per-browser, never sent anywhere but to
 `LOCAL_API_BASE` - so each device signs in once.
 
+**Password** (in the header) changes your own password without needing the
+operator or the admin secret. It asks for the current one as well - the
+session alone is not enough, deliberately - and offers to sign out your other
+browsers, which leaves this one and never touches the credential your
+scheduled search holds. See
+[`../server/README.md`](../server/README.md)'s "Changing your own password".
+
 **Log out** (in the header) revokes that token on the server, not just
 locally, and clears the view preferences with it, so the next person to sign
 in on the same browser doesn't land on someone else's tab. It leaves that
