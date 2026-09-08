@@ -1624,4 +1624,200 @@ export class Db {
     ]);
     return (results[1].meta.changes || 0) > 0;
   }
+
+  // ---- Intake: what a new person said about the search they want, waiting
+  // for a run to turn it into config. See ../migrations/0011_intake.sql.
+
+  /**
+   * This person's outstanding or finished intake, or null if they never
+   * submitted one. `answers` comes back parsed - it is JSON in the column
+   * because the shape of the form is allowed to change without a migration,
+   * and every caller wants the object rather than the string.
+   */
+  async getIntake() {
+    const row = await this.d1
+      .prepare("SELECT * FROM intake WHERE user_id = ?")
+      .bind(this.userId)
+      .first();
+    if (!row) return null;
+    const { results } = await this.d1
+      .prepare("SELECT id, filename, bytes, uploaded_at FROM intake_files WHERE user_id = ? ORDER BY id")
+      .bind(this.userId)
+      .all();
+    return {
+      submitted_at: row.submitted_at,
+      answers: parseAnswers(row.answers),
+      status: row.status,
+      status_note: row.status_note,
+      completed_at: row.completed_at,
+      files: results || [],
+    };
+  }
+
+  /**
+   * Records an intake, replacing any previous one. Replacing rather than
+   * refusing on purpose: between submitting and the overnight run there is a
+   * whole evening in which someone remembers a company they meant to name,
+   * and the alternative is asking the operator to clear a row for them.
+   *
+   * A completed intake is not replaced - see the caller in routes/intake.js,
+   * which refuses that case. Once a run has built someone a folder and a
+   * schedule, this form is no longer how their search changes; their config
+   * is, and their tracks exist to be edited.
+   *
+   * @param {Object} answers
+   */
+  async setIntake(answers) {
+    await this.d1
+      .prepare(
+        `INSERT INTO intake (user_id, submitted_at, answers, status, status_note, completed_at)
+         VALUES (?, ?, ?, 'pending', '', '')
+         ON CONFLICT(user_id) DO UPDATE SET
+           submitted_at = excluded.submitted_at,
+           answers = excluded.answers,
+           status = 'pending',
+           status_note = '',
+           completed_at = ''`
+      )
+      .bind(this.userId, new Date().toISOString(), JSON.stringify(answers))
+      .run();
+  }
+
+  /**
+   * Stores an uploaded document against this person, replacing any earlier
+   * upload of the same filename. Someone who notices they attached last
+   * year's resume re-attaches this year's under the same name, and expects
+   * one file afterwards rather than two for the run to choose between.
+   *
+   * @param {{filename: string, contentType: string, bytes: number, body: string}} file
+   * @returns {Promise<number>} the stored file's id
+   */
+  async addIntakeFile(file) {
+    await this.d1
+      .prepare("DELETE FROM intake_files WHERE user_id = ? AND filename = ?")
+      .bind(this.userId, file.filename)
+      .run();
+    const result = await this.d1
+      .prepare(
+        `INSERT INTO intake_files (user_id, filename, content_type, bytes, body, uploaded_at)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .bind(this.userId, file.filename, file.contentType || "", file.bytes, file.body, new Date().toISOString())
+      .run();
+    return result.meta.last_row_id;
+  }
+
+  /** @param {number} id @returns {Promise<boolean>} whether it was theirs to remove */
+  async deleteIntakeFile(id) {
+    const result = await this.d1
+      .prepare("DELETE FROM intake_files WHERE id = ? AND user_id = ?")
+      .bind(id, this.userId)
+      .run();
+    return (result.meta.changes || 0) > 0;
+  }
+
+  /**
+   * Marks the intake finished and destroys the uploads in the same batch.
+   *
+   * The delete is not cleanup that could be left for later. A resume is the
+   * most personal thing this deployment stores, it is here only to cross from
+   * a browser to the machine that will run the search, and once that machine
+   * has written it to disk a copy in D1 is a second place it lives for no
+   * reason at all. Putting it in the same batch as the status change means
+   * there is no state where the intake is done and the file is still sitting
+   * here.
+   *
+   * A 'failed' intake keeps its files: it will be tried again, and it will
+   * need them.
+   *
+   * @param {string} status 'done' or 'failed'
+   * @param {string} note
+   */
+  async completeIntake(status, note) {
+    const statements = [
+      this.d1
+        .prepare("UPDATE intake SET status = ?, status_note = ?, completed_at = ? WHERE user_id = ?")
+        .bind(status, (note || "").slice(0, 500), new Date().toISOString(), this.userId),
+    ];
+    if (status === "done") {
+      statements.push(this.d1.prepare("DELETE FROM intake_files WHERE user_id = ?").bind(this.userId));
+    }
+    await this.d1.batch(statements);
+  }
+
+  // ---- The two reads the onboarding run makes, and the only queries in this
+  // file that are not scoped to one person.
+  //
+  // They are static for that reason: an instance method would carry a
+  // `this.userId` it deliberately ignored, which is exactly the kind of method
+  // that later grows a filter someone assumes was always there. Both are
+  // reachable only with the ADMIN_TOKEN (see routes/intake.js) - no session
+  // token reaches either, because a queue of people waiting to be set up is
+  // the operator's, not any one person's.
+
+  /**
+   * Every intake waiting on a run, oldest first, with the account it belongs
+   * to and what was attached. File bodies are not included: a queue listing
+   * that inlined three base64 resumes would be megabytes to answer "is there
+   * anything to do tonight?"
+   *
+   * @param {D1Database} d1
+   * @returns {Promise<Object[]>}
+   */
+  static async pendingIntakes(d1) {
+    const { results } = await d1
+      .prepare(
+        `SELECT i.user_id, u.name AS user_name, i.submitted_at, i.answers, i.status, i.status_note
+         FROM intake i JOIN users u ON u.id = i.user_id
+         WHERE i.status IN ('pending', 'failed')
+         ORDER BY i.submitted_at`
+      )
+      .all();
+    const out = [];
+    for (const row of results || []) {
+      const files = await d1
+        .prepare("SELECT id, filename, content_type, bytes FROM intake_files WHERE user_id = ? ORDER BY id")
+        .bind(row.user_id)
+        .all();
+      out.push({
+        user: { id: row.user_id, name: row.user_name },
+        submitted_at: row.submitted_at,
+        status: row.status,
+        status_note: row.status_note,
+        answers: parseAnswers(row.answers),
+        files: files.results || [],
+      });
+    }
+    return out;
+  }
+
+  /**
+   * One uploaded document, body and all. Fetched per file rather than with the
+   * queue above, so a run downloads only what it is about to write to disk.
+   *
+   * @param {D1Database} d1
+   * @param {number} id
+   * @returns {Promise<Object|null>}
+   */
+  static async intakeFile(d1, id) {
+    const row = await d1.prepare("SELECT * FROM intake_files WHERE id = ?").bind(id).first();
+    return row || null;
+  }
+}
+
+/**
+ * The `answers` column, as an object. A row this file wrote cannot fail to
+ * parse, so the catch is not really error handling - it is a promise that the
+ * page asking "has my setup happened yet?" gets an answer either way, rather
+ * than a 500 over a column it wasn't asking about.
+ *
+ * @param {string} raw
+ * @returns {Object}
+ */
+function parseAnswers(raw) {
+  try {
+    return JSON.parse(raw) || {};
+  } catch {
+    return {};
+  }
 }

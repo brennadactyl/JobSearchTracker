@@ -1073,5 +1073,216 @@ const twice = await req("POST", "/api/purge", { admin: true, body: { user: "Ada"
 check("purging again is a no-op, not an error",
   twice.status === 200 && twice.json.purged.leads === 0, twice.text.slice(0, 120));
 
+
+// ---------------------------------------------------------------------------
+// Self-service onboarding: an invite, a signup, and an intake queue.
+//
+// Two properties carry the weight here, and both would be quiet failures.
+//
+// First, an invite must not be able to touch an account that already exists.
+// It is the weakest credential this API issues - it travels through a chat
+// message to someone who has no account yet - and the route it opens sits
+// beside one (POST /api/users) that deliberately doubles as a password reset.
+// If signup ever reached that path, anyone holding a link could type the
+// operator's own name and take the deployment. That is checked below by
+// signing up as an existing user and then proving their original password
+// still works.
+//
+// Second, the intake queue is the one listing in this API that spans users, so
+// it is the one place the scoping story in db.js is not doing the work for
+// free. A session token must not reach it at all.
+//
+// Signup is create-only, so these fixtures cannot be reused the way the rest
+// of the suite reuses Ada and Bo - hence the per-run suffix.
+console.log("\n== invites ==");
+const RUN = Date.now().toString(36);
+const mintInvite = async (note = "verify-local") =>
+  (await req("POST", "/api/invites", { admin: true, body: { note } })).json.code;
+
+check("minting an invite needs the admin token",
+  (await req("POST", "/api/invites", { body: { note: "no" } })).status === 401);
+check("a session token is not the admin token here",
+  (await req("POST", "/api/invites", { token: A_TOK, body: { note: "no" } })).status === 401);
+check("the invite ledger needs the admin token",
+  (await req("GET", "/api/invites")).status === 401);
+
+const minted = await req("POST", "/api/invites", { admin: true, body: { note: "for verify-local" } });
+check("minting returns a code and an expiry",
+  minted.status === 201 && typeof minted.json.code === "string" && minted.json.code.length >= 40 &&
+  new Date(minted.json.expires_at) > new Date(), JSON.stringify(minted.json));
+check("an absurd `days` is clamped rather than honoured",
+  new Date((await req("POST", "/api/invites", { admin: true, body: { days: 99999 } })).json.expires_at) <
+  new Date(Date.now() + 31 * 86400000));
+
+check("an unknown code reads as invalid, without saying anything else",
+  (await req("GET", "/api/invite/not-a-real-code")).json.valid === false);
+check("a fresh code reads as valid", (await req("GET", `/api/invite/${minted.json.code}`)).json.valid === true);
+
+console.log("\n== signup ==");
+check("signup without a code is refused",
+  (await req("POST", "/api/signup", { body: { name: `x${RUN}`, password: "a-long-password-x" } })).status === 403);
+check("signup with a made-up code is refused",
+  (await req("POST", "/api/signup", { body: { code: "nope", name: `x${RUN}`, password: "a-long-password-x" } })).status === 403);
+
+const shortPw = await req("POST", "/api/signup", { body: { code: minted.json.code, name: `Cy ${RUN}`, password: "short" } });
+check("signup enforces the same 12-character password rule as provisioning", shortPw.status === 400);
+check("a refused signup does not spend the invite",
+  (await req("GET", `/api/invite/${minted.json.code}`)).json.valid === true);
+
+const signup = await req("POST", "/api/signup", {
+  body: { code: minted.json.code, name: `Cy ${RUN}`, password: "cy-long-password-1" } });
+check("signup creates the account and signs them straight in",
+  signup.status === 201 && !!signup.json.token && signup.json.user.name === `Cy ${RUN}` &&
+  /^[0-9a-f-]{36}$/.test(signup.json.user.id), JSON.stringify(signup.json));
+const NEW_TOK = signup.json.token;
+check("the token signup returned really is theirs",
+  (await req("GET", "/api/me", { token: NEW_TOK })).json.id === signup.json.user.id);
+
+check("the code is spent afterwards",
+  (await req("GET", `/api/invite/${minted.json.code}`)).json.valid === false);
+// 403, the same answer an expired or made-up code gets: by the time a second
+// person tries, the validity check has already rejected it and the claim - the
+// only thing that can answer 409 - is never reached. That 409 is for the pair
+// of signups that arrive together and both read the invite as unused.
+check("a second signup on the same code is refused",
+  (await req("POST", "/api/signup", { body: { code: minted.json.code, name: `Dee ${RUN}`, password: "dee-long-password" } })).status === 403);
+
+// The one that matters. An invite creates accounts; it must not be able to
+// reset one. If this ever fails, a link sent over chat is a way to take over
+// any account on the deployment by name.
+const takeover = await mintInvite("takeover attempt");
+const attempt = await req("POST", "/api/signup", { body: { code: takeover, name: "Ada", password: "attacker-password-1" } });
+check("signup refuses a name that already exists", attempt.status === 409, attempt.text.slice(0, 120));
+check("and Ada's own password still works - signup is not a reset",
+  (await req("POST", "/api/login", { body: { name: "Ada", password: "ada-new-password-1" } })).status === 200);
+check("the collision left the invite usable, so nobody has to ask for a new link",
+  (await req("GET", `/api/invite/${takeover}`)).json.valid === true);
+check("case-insensitive too: 'ada' is the same taken name",
+  (await req("POST", "/api/signup", { body: { code: takeover, name: "ada", password: "attacker-password-1" } })).status === 409);
+
+const ledger = await req("GET", "/api/invites", { admin: true });
+check("the ledger reports which account an invite produced",
+  ledger.json.invites.some((i) => i.used_by === signup.json.user.id && i.used_by_name === `Cy ${RUN}`));
+check("the ledger never returns a code",
+  ledger.json.invites.every((i) => !("code" in i) && !("id" in i)));
+
+console.log("\n== minting a search token for someone else ==");
+check("minting needs the admin token", (await req("POST", "/api/tokens", { body: { user: "Ada" } })).status === 401);
+check("an unknown user is a 404", (await req("POST", "/api/tokens", { admin: true, body: { user: "Nobody" } })).status === 404);
+const minTok = await req("POST", "/api/tokens", { admin: true, body: { user: `Cy ${RUN}` } });
+check("minting returns a working token for that person",
+  minTok.status === 201 &&
+  (await req("GET", "/api/me", { token: minTok.json.token })).json.id === signup.json.user.id);
+check("minting a token does not disturb their password",
+  (await req("POST", "/api/login", { body: { name: `Cy ${RUN}`, password: "cy-long-password-1" } })).status === 200);
+
+console.log("\n== intake ==");
+check("a brand-new account has no intake, which is what shows them the form",
+  (await req("GET", "/api/intake", { token: NEW_TOK })).json.intake === null);
+check("an intake with no usable track is refused",
+  (await req("POST", "/api/intake", { token: NEW_TOK, body: { tracks: [{ label: "Engineering" }] } })).status === 400);
+check("so is one with no tracks at all",
+  (await req("POST", "/api/intake", { token: NEW_TOK, body: { display_title: "hi" } })).status === 400);
+
+const submitted = await req("POST", "/api/intake", { token: NEW_TOK, body: {
+  display_title: "Cy's Search", geo_scope: "US only", priority_locations: "Seattle, or remote US",
+  tracks: [{ label: "Engineering", role_search_line: "Senior backend", target_companies: "Acme, Globex" }] } });
+check("a usable intake is accepted", submitted.status === 201 && submitted.json.status === "pending");
+const ownIntake = await req("GET", "/api/intake", { token: NEW_TOK });
+check("they can read their own answers back",
+  ownIntake.json.intake.status === "pending" && ownIntake.json.intake.answers.tracks[0].label === "Engineering" &&
+  ownIntake.json.intake.answers.display_title === "Cy's Search");
+
+await req("POST", "/api/intake", { token: NEW_TOK, body: {
+  tracks: [{ label: "Engineering", role_search_line: "Staff backend, distributed systems" }], notes: "revised" } });
+const revised = await req("GET", "/api/intake", { token: NEW_TOK });
+check("re-submitting while pending replaces rather than duplicating",
+  revised.json.intake.answers.notes === "revised" &&
+  revised.json.intake.answers.tracks[0].role_search_line === "Staff backend, distributed systems");
+
+const b64 = (s) => Buffer.from(s, "utf8").toString("base64");
+const up = await req("POST", "/api/intake/files", { token: NEW_TOK, body: {
+  filename: "cy-resume.pdf", contentType: "application/pdf", body: b64("Cy - Senior Backend Engineer") } });
+check("a document can be attached", up.status === 201 && up.json.filename === "cy-resume.pdf" && up.json.bytes > 0);
+check("it shows up on their own intake",
+  (await req("GET", "/api/intake", { token: NEW_TOK })).json.intake.files.some((f) => f.id === up.json.id));
+
+// The filename becomes a path on the operator's machine, written by an
+// unattended run - so it is rebuilt from the basename rather than trusted.
+const escaped = await req("POST", "/api/intake/files", { token: NEW_TOK, body: {
+  filename: "../../../etc/cron.d/payload.txt", body: b64("x") } });
+check("a filename carrying a path is reduced to its basename",
+  escaped.status === 201 && escaped.json.filename === "payload.txt", JSON.stringify(escaped.json));
+check("an extension a run could not read is refused",
+  (await req("POST", "/api/intake/files", { token: NEW_TOK, body: { filename: "payload.ps1", body: b64("x") } })).status === 400);
+check("so is a name with no extension at all",
+  (await req("POST", "/api/intake/files", { token: NEW_TOK, body: { filename: "resume", body: b64("x") } })).status === 400);
+check("a body that isn't base64 is refused rather than stored to fail later",
+  (await req("POST", "/api/intake/files", { token: NEW_TOK, body: { filename: "cv.txt", body: "!!!not base64!!!" } })).status === 400);
+// "QUFB" is base64 for "AAA", so this is a valid encoding of 720,000 bytes.
+check("a file over the size cap is refused",
+  (await req("POST", "/api/intake/files", { token: NEW_TOK, body: { filename: "big.pdf", body: "QUFB".repeat(240000) } })).status === 413);
+
+console.log("\n== intake stays inside its own account ==");
+check("another user's intake is not visible on their own GET",
+  (await req("GET", "/api/intake", { token: B_TOK })).json.intake === null);
+check("another user cannot delete C's attachment by id",
+  (await req("POST", "/api/intake/files/delete", { token: B_TOK, body: { id: up.json.id } })).status === 404);
+check("and it is still there afterwards",
+  (await req("GET", "/api/intake", { token: NEW_TOK })).json.intake.files.some((f) => f.id === up.json.id));
+check("the operator's queue is not reachable with a session token",
+  (await req("GET", "/api/intake/pending", { token: NEW_TOK })).status === 401);
+check("nor is an attachment body",
+  (await req("GET", `/api/intake/file/${up.json.id}`, { token: NEW_TOK })).status === 401);
+check("nor is closing an intake out",
+  (await req("POST", "/api/intake/complete", { token: NEW_TOK, body: { user: `Cy ${RUN}`, status: "done" } })).status === 401);
+
+console.log("\n== the onboarding run's side of it ==");
+const queue = await req("GET", "/api/intake/pending", { admin: true });
+const queued = queue.json.pending.find((p) => p.user.name === `Cy ${RUN}`);
+check("the queue carries the person, their answers and what they attached",
+  !!queued && queued.user.id === signup.json.user.id &&
+  queued.answers.tracks[0].role_search_line === "Staff backend, distributed systems" &&
+  queued.files.some((f) => f.filename === "cy-resume.pdf"), JSON.stringify(queued || null).slice(0, 200));
+check("the queue does not inline file bodies",
+  queued.files.every((f) => !("body" in f)));
+
+const fetched = await req("GET", `/api/intake/file/${up.json.id}`, { admin: true });
+check("a run can fetch one attachment's bytes",
+  fetched.status === 200 && Buffer.from(fetched.json.body, "base64").toString("utf8") === "Cy - Senior Backend Engineer");
+check("an attachment id that doesn't exist is a 404",
+  (await req("GET", "/api/intake/file/99999999", { admin: true })).status === 404);
+
+check("a status other than done/failed is refused",
+  (await req("POST", "/api/intake/complete", { admin: true, body: { user: `Cy ${RUN}`, status: "maybe" } })).status === 400);
+check("closing out an unknown user is a 404",
+  (await req("POST", "/api/intake/complete", { admin: true, body: { user: "Nobody At All", status: "done" } })).status === 404);
+check("closing out someone with nothing waiting is a 404",
+  (await req("POST", "/api/intake/complete", { admin: true, body: { user: "Bo", status: "done" } })).status === 404);
+
+// A failure keeps the uploads, because the retry will need them - and says why
+// in words the person reads on their own page.
+await req("POST", "/api/intake/complete", { admin: true, body: {
+  user: `Cy ${RUN}`, status: "failed", note: "couldn't read the resume - paste the text instead" } });
+const failedRun = await req("GET", "/api/intake", { token: NEW_TOK });
+check("a failed setup tells them what went wrong",
+  failedRun.json.intake.status === "failed" && failedRun.json.intake.status_note.includes("paste the text"));
+check("and keeps their documents for the retry", failedRun.json.intake.files.length > 0);
+check("a failed intake stays in the queue",
+  (await req("GET", "/api/intake/pending", { admin: true })).json.pending.some((p) => p.user.name === `Cy ${RUN}`));
+
+await req("POST", "/api/intake/complete", { admin: true, body: { user: `Cy ${RUN}`, status: "done" } });
+const done = await req("GET", "/api/intake", { token: NEW_TOK });
+check("a finished setup is marked done", done.json.intake.status === "done" && !!done.json.intake.completed_at);
+// The resume was only ever here to cross from a browser to the machine that
+// runs the search. That trip is over.
+check("and the uploaded documents are deleted from the database", done.json.intake.files.length === 0);
+check("a finished person drops out of the queue",
+  !(await req("GET", "/api/intake/pending", { admin: true })).json.pending.some((p) => p.user.name === `Cy ${RUN}`));
+check("and cannot re-run setup through the form",
+  (await req("POST", "/api/intake", { token: NEW_TOK, body: { tracks: [{ label: "X", role_search_line: "Y" }] } })).status === 409);
+check("nor attach anything else to it",
+  (await req("POST", "/api/intake/files", { token: NEW_TOK, body: { filename: "late.txt", body: b64("x") } })).status === 409);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

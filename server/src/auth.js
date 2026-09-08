@@ -4,7 +4,9 @@
  * call the four functions at the bottom.
  *
  * The model: a person has a name and a password (users), and holds zero or
- * more bearer tokens (sessions). Passwords are only ever seen by POST
+ * more bearer tokens (sessions). An invite (invites) is the third credential
+ * here and the weakest: it is held by someone who has no account yet, travels
+ * through a chat message, and buys exactly one call to POST /api/signup. Passwords are only ever seen by POST
  * /api/login and POST /api/users - every other request carries a token, which
  * is a random 32 bytes with no relationship to the password at all. That's
  * what lets the scheduled searches keep a long-lived credential on disk
@@ -107,18 +109,28 @@ export async function verifyPassword(password, user) {
   return timingSafeEqual(hash, user.password_hash);
 }
 
-/** @returns {string} a new bearer token - 32 random bytes, base64url */
-export function newSessionToken() {
+/**
+ * A new opaque credential - 32 random bytes, base64url. Both kinds of bearer
+ * string this API hands out come from here: the session token a browser or a
+ * scheduled search carries, and the invite code that buys one signup. They are
+ * the same thing structurally (unguessable, meaningless, stored only as a
+ * hash), so they are minted the same way rather than by two generators that
+ * could drift to different lengths.
+ * @returns {string}
+ */
+export function newOpaqueToken() {
   return toBase64Url(crypto.getRandomValues(new Uint8Array(TOKEN_BYTES)));
 }
 
 /**
- * What actually goes in `sessions.id`. The token itself is never stored: 32
+ * What actually goes in `sessions.id` - and in `invites.id`. The credential
+ * itself is never stored, in either table: 32
  * random bytes need no salt or stretching to be unguessable, but storing them
  * as-is would mean a `d1 export`, a backup file, or the audit query in the
  * README each hand over working credentials for every signed-in device. A
  * plain SHA-256 costs one hash per request and makes the stored row useless
- * to anyone who reads it.
+ * to anyone who reads it. An unused invite code is the same kind of secret as
+ * a live session - it creates an account - so it gets the same treatment.
  * @param {string} token
  * @returns {Promise<string>}
  */
@@ -171,7 +183,7 @@ export async function getUserByName(d1, name) {
  * @returns {Promise<string>} the new token
  */
 export async function createSession(d1, userId, label) {
-  const token = newSessionToken();
+  const token = newOpaqueToken();
   await d1
     .prepare("INSERT INTO sessions (id, user_id, created_at, label) VALUES (?, ?, ?, ?)")
     .bind(await hashToken(token), userId, new Date().toISOString(), (label || "browser").slice(0, 60))
@@ -216,4 +228,157 @@ export async function upsertUser(d1, name, password) {
     .bind(id, name, hash, salt, iterations, new Date().toISOString().slice(0, 10))
     .run();
   return { id, name, created: true };
+}
+
+/**
+ * Creates a user, and refuses if that name is taken. The other half of
+ * upsertUser above, deliberately split from it rather than added as a flag.
+ *
+ * upsertUser doubles as password reset, which is right for the route that
+ * holds the ADMIN_TOKEN and wrong for every other caller: an invite code
+ * travels through a chat message, and if signup went through upsertUser then
+ * anyone holding one could take over an existing account by typing that
+ * person's name and a password of their choosing. The refusal is the whole
+ * point of the function, so it is the function, not an argument someone can
+ * forget to pass.
+ *
+ * The pre-check and the catch are both needed. `users.name` is UNIQUE COLLATE
+ * NOCASE, so the database is the real guard against two accounts differing
+ * only in case; the lookup first is what turns the common case - a name
+ * someone else already picked - into a clean answer rather than a constraint
+ * error to interpret.
+ *
+ * @param {D1Database} d1
+ * @param {string} name
+ * @param {string} password
+ * @returns {Promise<{id: string, name: string}|null>} null if the name is taken
+ */
+export async function createUser(d1, name, password) {
+  if (await getUserByName(d1, name)) return null;
+  const { hash, salt, iterations } = await hashPassword(password);
+  const id = crypto.randomUUID();
+  try {
+    await d1
+      .prepare(
+        `INSERT INTO users (id, name, password_hash, password_salt, iterations, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .bind(id, name, hash, salt, iterations, new Date().toISOString().slice(0, 10))
+      .run();
+  } catch {
+    // Lost a race with another signup for the same name. Same answer as the
+    // pre-check gives, so the caller has one case to handle, not two.
+    return null;
+  }
+  return { id, name };
+}
+
+// 14 days. Long enough that a link sent on a Friday still works after someone
+// gets back to it the following weekend, short enough that a code sitting in a
+// year-old chat thread is not a live way into this deployment.
+const INVITE_DAYS = 14;
+
+/**
+ * Mints an invite. Returns the code exactly once - it is never stored, only
+ * its hash - so the caller either sends it now or mints another.
+ *
+ * @param {D1Database} d1
+ * @param {string} note the operator's own words about who this is for
+ * @param {number} [days]
+ * @returns {Promise<{code: string, expires_at: string}>}
+ */
+export async function createInvite(d1, note, days = INVITE_DAYS) {
+  const code = newOpaqueToken();
+  const now = new Date();
+  const expires = new Date(now.getTime() + days * 86400000).toISOString();
+  await d1
+    .prepare("INSERT INTO invites (id, note, created_at, expires_at) VALUES (?, ?, ?, ?)")
+    .bind(await hashToken(code), (note || "").slice(0, 200), now.toISOString(), expires)
+    .run();
+  return { code, expires_at: expires };
+}
+
+/**
+ * Why an invite can't be used, or "" if it can. One function so the check
+ * before the form is drawn and the check at signup can never disagree - which
+ * is the failure that would matter here: a page that offers a signup form for
+ * a dead code, and only says so after someone has chosen a password.
+ *
+ * @param {D1Database} d1
+ * @param {string} code
+ * @returns {Promise<{row: Object|null, reason: string}>}
+ */
+export async function checkInvite(d1, code) {
+  if (!code) return { row: null, reason: "no invite code" };
+  const row = await d1.prepare("SELECT * FROM invites WHERE id = ?").bind(await hashToken(code)).first();
+  if (!row) return { row: null, reason: "this invite link isn't valid" };
+  if (row.used_at) return { row, reason: "this invite has already been used" };
+  if (row.expires_at < new Date().toISOString()) return { row, reason: "this invite link has expired" };
+  return { row, reason: "" };
+}
+
+/**
+ * Takes the invite out of circulation, and reports whether this caller is the
+ * one who got it. The `WHERE used_at = ''` is what makes that true: two
+ * signups arriving together both read an unused row above, and exactly one of
+ * them changes it here.
+ *
+ * @param {D1Database} d1
+ * @param {string} code
+ * @returns {Promise<boolean>} false if someone else claimed it first
+ */
+export async function claimInvite(d1, code) {
+  const result = await d1
+    .prepare("UPDATE invites SET used_at = ? WHERE id = ? AND used_at = ''")
+    .bind(new Date().toISOString(), await hashToken(code))
+    .run();
+  return result.meta.changes === 1;
+}
+
+/**
+ * Puts a claimed invite back, for the one case that happens in practice: the
+ * claim succeeded and then the account couldn't be created because the name
+ * was taken. Burning someone's only invite over a name collision would mean
+ * going back to the operator for a new link - which is the errand this whole
+ * feature exists to remove.
+ *
+ * @param {D1Database} d1
+ * @param {string} code
+ */
+export async function releaseInvite(d1, code) {
+  await d1.prepare("UPDATE invites SET used_at = '' WHERE id = ?").bind(await hashToken(code)).run();
+}
+
+/**
+ * Records which account an invite produced. Separate from the claim because
+ * the claim has to happen before the user exists to name.
+ *
+ * @param {D1Database} d1
+ * @param {string} code
+ * @param {string} userId
+ */
+export async function recordInviteUse(d1, code, userId) {
+  await d1.prepare("UPDATE invites SET used_by = ? WHERE id = ?").bind(userId, await hashToken(code)).run();
+}
+
+/**
+ * Every invite, newest first, with the account each one produced. This is how
+ * the operator answers "has Sam signed up yet, and what is their user id?" -
+ * and that id is the next thing they need, since it names the folder their
+ * search data lives in.
+ *
+ * Never returns a code, because it cannot: the codes were never stored.
+ *
+ * @param {D1Database} d1
+ * @returns {Promise<Object[]>}
+ */
+export async function listInvites(d1) {
+  const { results } = await d1
+    .prepare(
+      `SELECT i.note, i.created_at, i.expires_at, i.used_at, i.used_by, u.name AS used_by_name
+       FROM invites i LEFT JOIN users u ON u.id = i.used_by
+       ORDER BY i.created_at DESC`
+    )
+    .all();
+  return results || [];
 }

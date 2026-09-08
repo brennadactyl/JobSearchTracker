@@ -17,7 +17,14 @@
  * version. Persistence: ../db.js. Schema: ../../migrations/.
  */
 
-import { handleGetMe, handleLogin, handleLogout, handleUpsertUser } from "./accounts.js";
+import {
+  handleGetMe,
+  handleLogin,
+  handleLogout,
+  handleMintToken,
+  handleSignup,
+  handleUpsertUser,
+} from "./accounts.js";
 import { handlePurgeSearch } from "./admin.js";
 import {
   handleDeleteApplication,
@@ -29,6 +36,16 @@ import {
 import { handleGetConfig, handleSetConfig } from "./config.js";
 import { handleGetCoverage, handleRecordSweeps } from "./coverage.js";
 import { handleGetData } from "./data.js";
+import {
+  handleCompleteIntake,
+  handleDeleteIntakeFile,
+  handleGetIntake,
+  handleGetIntakeFile,
+  handleGetIntakeQueue,
+  handleSubmitIntake,
+  handleUploadIntakeFile,
+} from "./intake.js";
+import { handleCheckInvite, handleCreateInvite, handleListInvites } from "./invites.js";
 import { handleDelistUrls, handleMarkVerified } from "./delisting.js";
 import { handleAddLeads, handleDeleteLeads, handleSetLeadStatus } from "./leads.js";
 import { handleGetAutofillPrompt, handleGetPrompt } from "./prompt.js";
@@ -37,18 +54,40 @@ import { handleAddScreened, handleGetDedup } from "./screened.js";
 import { handleUpdate } from "./update.js";
 
 /**
- * The routes that run before anyone is known. Three of them, and no more:
- * exchanging a password for a token, provisioning a user with the admin
- * secret, and purging a retired search with the same secret. The last two
- * name their subject in the body rather than being the caller, which is why a
- * session would be the wrong credential for them - and sitting here means a
- * session token is not even a candidate credential.
+ * The routes that run before anyone is known, in two kinds.
+ *
+ * **No credential yet.** Exchanging a password for a token, checking whether
+ * an invite link is still good, and spending one to create an account. The
+ * last two are the self-service half of onboarding: whoever holds the link has
+ * no session because they have no account, which is the entire point.
+ *
+ * **The operator, holding the ADMIN_TOKEN secret.** Provisioning or resetting
+ * a user, minting a user's long-lived search token, the invite ledger, the
+ * intake queue and its attachments, closing an intake out, and purging a
+ * retired search. Every one of them names its subject in the body or the path
+ * rather than being the caller, which is why a session would be the wrong
+ * credential - and sitting here means a session token is not even a candidate
+ * credential for any of them. Each checks the secret through validate.js's
+ * notAdmin as its first statement.
+ *
+ * Nothing else belongs in this list. A route that has a caller goes below.
  *
  * @type {Array<[string, string|RegExp, Function]>}
  */
 export const PUBLIC_ROUTES = [
   ["POST", "/api/login", handleLogin],
+  ["POST", "/api/signup", handleSignup],
+  ["GET", /^\/api\/invite\/([^/]+)$/, handleCheckInvite],
   ["POST", "/api/users", handleUpsertUser],
+  ["POST", "/api/tokens", handleMintToken],
+  ["POST", "/api/invites", handleCreateInvite],
+  ["GET", "/api/invites", handleListInvites],
+  // The onboarding run's three. `/api/intake/pending` is a fixed path and the
+  // session route `/api/intake` is a different one, so neither can shadow the
+  // other however this list is ordered.
+  ["GET", "/api/intake/pending", handleGetIntakeQueue],
+  ["GET", /^\/api\/intake\/file\/(\d+)$/, handleGetIntakeFile],
+  ["POST", "/api/intake/complete", handleCompleteIntake],
   ["POST", "/api/purge", handlePurgeSearch],
 ];
 
@@ -72,6 +111,13 @@ export const SESSION_ROUTES = [
   ["GET", "/api/me", handleGetMe],
   ["GET", "/api/data", handleGetData],
   ["GET", "/api/config", handleGetConfig],
+  // Setting up your own search: what you want, and the documents it should be
+  // built from. See ./intake.js for why this is a queue rather than a form
+  // that writes config directly.
+  ["GET", "/api/intake", handleGetIntake],
+  ["POST", "/api/intake", handleSubmitIntake],
+  ["POST", "/api/intake/files", handleUploadIntakeFile],
+  ["POST", "/api/intake/files/delete", handleDeleteIntakeFile],
   ["POST", "/api/config", handleSetConfig],
   ["POST", "/api/leads", handleAddLeads],
   ["POST", "/api/runs", handleRecordRun],
