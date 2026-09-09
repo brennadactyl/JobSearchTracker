@@ -14,5 +14,12 @@ compatibility_date = "2025-01-01"
 # publishes literally everything under `directory` with no exceptions, so
 # README.md/package.json/wrangler.toml/.wrangler (which briefly held an
 # account-identifying file) must live outside it, not be filtered out of it.
+#
+# The inverse of that is the sharper edge, and it cost a live site once: it
+# publishes *only* what's there. A deploy replaces the live file list, so a
+# file missing from this directory is deleted from the deployment rather than
+# left alone - and the one required file a healthy-looking checkout can be
+# missing is the gitignored `local-config.js`, which a git worktree never has.
+# `npm run deploy` guards against exactly that; see ./predeploy-check.mjs.
 [assets]
 directory = "./public"

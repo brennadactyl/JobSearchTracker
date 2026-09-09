@@ -3,6 +3,7 @@
   "private": true,
   "description": "Tracker webpage (Cloudflare Pages, static, no build step). Talks to ../server/'s API cross-origin. See README.md.",
   "scripts": {
+    "predeploy": "node predeploy-check.mjs",
     "deploy": "wrangler deploy"
   },
   "devDependencies": {

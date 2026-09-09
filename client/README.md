@@ -116,10 +116,26 @@ step 6 until your config is posted.
 merge/fast-forward `main` and push first, then deploy from a checkout that's
 actually on `main`.
 
+A worktree is the dangerous one, and it's worth knowing exactly why rather
+than taking the rule on trust. `[assets]` publishes *exactly* what's in
+`public/`, so a deploy replaces the live file list rather than merging into
+it - anything up there that isn't on disk here comes down. Worktrees never
+carry gitignored files, so a fresh one has no `local-config.js` at all, and
+nothing about it looks wrong: `git status` is clean and the deploy reports
+success while it quietly takes the API URL off the live site and leaves every
+visitor at "This deployment has no API URL configured". This is not
+hypothetical - it happened on 2026-09-08 and the sign-in page was down for a
+few hours before anyone noticed.
+
 ```bat
 cd client
-wrangler deploy
+npm run deploy
 ```
+
+`npm run deploy`, not a bare `wrangler deploy`: it runs `predeploy-check.mjs`
+first, which refuses the deploy when `local-config.js` is missing rather than
+letting it succeed into an unusable site. A bare `wrangler deploy` still works
+and is still fine from a checkout on `main` - it just has nothing watching it.
 
 A client-only change (styling, a new field, a UI fix) never needs a server
 redeploy. A change that depends on a new API field/route does need the
