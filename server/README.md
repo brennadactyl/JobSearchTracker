@@ -148,7 +148,7 @@ who know each other, not a service. Accounts are created by whoever operates
 the deployment, using the `ADMIN_TOKEN` secret.
 
 **Changing a password is not an operator job, though.** Anyone signed in can
-change their own from the tracker page (the "Password" button in the header),
+change their own from the tracker page (click "Signed in as ..." in the header),
 which posts `/api/password` with their current password alongside their
 session. That route is the only one that sets a password without the admin
 secret, and it is deliberately narrow - see [Changing your own
