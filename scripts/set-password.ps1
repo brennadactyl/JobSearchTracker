@@ -19,8 +19,8 @@
   ---- This is the reset path, not the change path.
 
   Someone who knows their current password and simply wants a different one
-  does it themselves on the tracker page (the "Password" button; POST
-  /api/password). That needs no admin secret, no terminal and no repo, which
+  does it themselves on the tracker page (click "Signed in as ..." in the
+  header; POST /api/password). That needs no admin secret, no terminal and no repo, which
   is why it is the right route for the ordinary case - handing out a
   credential that can rewrite any account's password, to someone who only
   wanted to change their own, is not.

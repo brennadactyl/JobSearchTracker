@@ -64,7 +64,13 @@ h1,h2,h3{font-family:"Bricolage Grotesque","IBM Plex Sans",sans-serif;margin:0;l
 .hdr-right{display:flex;align-items:center;gap:12px}
 #themeToggle{font-size:15px;line-height:1;padding:6px 9px}
 .stamp{font-size:12px;color:var(--ink3);display:flex;align-items:center;gap:9px}
-.who{font-size:12px;color:var(--ink3)}
+.who{appearance:none;border:0;background:none;padding:0;font:inherit;
+  font-size:12px;color:var(--ink3);cursor:pointer;border-radius:4px}
+.who:hover{color:var(--ink2);text-decoration:underline}
+.who:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+/* Nothing to sign in as, nothing to click - and an empty button still has a
+   focus stop and a hit area without this. */
+.who:empty{display:none}
 .dot{width:6px;height:6px;border-radius:50%;background:var(--good);flex:none}
 .dot.off{background:var(--ink3)}
 .dot.bad{background:var(--crit)}
@@ -429,8 +435,7 @@ try{
       </div>
       <div class="hdr-right">
         <div class="stamp"><span class="dot" id="savedot"></span><span id="savetext">Loading</span></div>
-        <span class="who" id="whoami"></span>
-        <button class="btn ghost" id="changePw" type="button" title="Change your password">Password</button>
+        <button class="who" id="whoami" type="button" title="Account details"></button>
         <button class="btn ghost" id="logout" type="button" title="Sign out of this browser">Log out</button>
         <button class="btn ghost" id="themeToggle" type="button" aria-label="Switch to dark theme" title="Switch to dark theme">🌙</button>
       </div>
@@ -1749,7 +1754,7 @@ document.addEventListener("click",function(e){
   if(e.target.id==="tokenSubmit"){submitToken();return;}
   if(e.target.id==="logout"){logout();return;}
   if(e.target.closest("#themeToggle")){toggleTheme();return;}
-  if(e.target.closest("#changePw")){openPwModal();return;}
+  if(e.target.closest("#whoami")){openPwModal();return;}
   if(e.target.id==="pwCancel"){closePwModal();return;}
   if(e.target.id==="pwSave"){submitPwChange();return;}
   // The overlay itself, not the card on top of it - same dismiss-on-backdrop
